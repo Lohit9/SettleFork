@@ -13,6 +13,7 @@ import {
   updateMappingTargetField,
   type CreateFieldMappingCombinationType,
 } from '@/lib/actions/mappings-for-redesign'
+import { acknowledgeField } from '@/lib/actions/field-acknowledgments'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // useMappingListMutations — orchestration hook for the Mapping list view.
@@ -109,6 +110,27 @@ export interface MappingListMutations {
   rejectUnmappedRow: (args: {
     pendingKey: string
     target: { targetFieldId: string } | { sourceFieldId: string }
+  }) => Promise<MutationResult>
+
+  /**
+   * feat/mapping-row-uniformity — approve (acknowledge) an
+   * unmapped-source row. Mirrors `rejectUnmappedRow`'s shape and
+   * optimistic-update treatment (`run` wrapper, pending-key
+   * tracking, toast + router.refresh on success). Wraps the
+   * `acknowledgeField(projectId, sourceFieldId, 'source', '')`
+   * server action — UPSERTs into `source_field_acknowledgments`
+   * defaulting `decision='acknowledged'` (status flips to 'approved'
+   * → green dot). Row stays visible because explicit user decisions
+   * are worth surfacing in the audit trail.
+   *
+   * Source-side approve is the mirror of source-side reject (which
+   * already lived on `rejectUnmappedRow` via `setUnmappedRowRejected`).
+   * Target-side approve continues to flow through `approveTfm` with
+   * the `unmapped::<targetFieldId>` sentinel — no change.
+   */
+  approveUnmappedSource: (args: {
+    pendingKey: string
+    sourceFieldId: string
   }) => Promise<MutationResult>
 
   /**
@@ -264,6 +286,34 @@ export function useMappingListMutations(
     [projectId, run],
   )
 
+  // feat/mapping-row-uniformity — symmetric source-side approve.
+  // `acknowledgeField` throws on error; the inline wrapper translates
+  // to the `{success, error?}` shape the `run` helper expects so
+  // toasts + pending-key bookkeeping behave the same as the reject
+  // path.
+  const approveUnmappedSource = useCallback(
+    (input: { pendingKey: string; sourceFieldId: string }) =>
+      run(
+        input.pendingKey,
+        async () => {
+          try {
+            await acknowledgeField(projectId, input.sourceFieldId, 'source', '')
+            return { success: true }
+          } catch (err) {
+            return {
+              success: false,
+              error:
+                err instanceof Error
+                  ? err.message
+                  : 'Acknowledge failed. Please retry.',
+            }
+          }
+        },
+        'Source acknowledged',
+      ),
+    [projectId, run],
+  )
+
   const editMappingSourcesMut = useCallback(
     (input: {
       tfmId: string
@@ -291,6 +341,7 @@ export function useMappingListMutations(
     swapMappingTarget,
     createFromUnmapped,
     rejectUnmappedRow,
+    approveUnmappedSource,
     editMappingSources: editMappingSourcesMut,
   }
 }

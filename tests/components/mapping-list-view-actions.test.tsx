@@ -209,6 +209,7 @@ function makeMutations(): MappingListMutations & {
   swapMappingTarget: ReturnType<typeof vi.fn>
   createFromUnmapped: ReturnType<typeof vi.fn>
   rejectUnmappedRow: ReturnType<typeof vi.fn>
+  approveUnmappedSource: ReturnType<typeof vi.fn>
   editMappingSources: ReturnType<typeof vi.fn>
 } {
   const success = { success: true }
@@ -220,6 +221,7 @@ function makeMutations(): MappingListMutations & {
     swapMappingTarget: vi.fn().mockResolvedValue(success),
     createFromUnmapped: vi.fn().mockResolvedValue(success),
     rejectUnmappedRow: vi.fn().mockResolvedValue(success),
+    approveUnmappedSource: vi.fn().mockResolvedValue(success),
     editMappingSources: vi.fn().mockResolvedValue(success),
   }
 }
@@ -772,5 +774,315 @@ describe('MappingListView — headers + fixed sort', () => {
     expect(rows[0].getAttribute('data-row-id')).toBe('tfm-mapped')
     expect(rows[1].getAttribute('data-row-id')).toBe('unmapped-source::sf-orphan')
     expect(rows[2].getAttribute('data-row-id')).toBe('unmapped::tf-9')
+  })
+})
+
+// ─── feat/mapping-row-uniformity — unmapped-source affordances ────────────
+
+describe('MappingListView — unmapped-source affordance uniformity (feat/mapping-row-uniformity)', () => {
+  function makeOrphanSourceField(
+    overrides: Partial<SourceFieldWithState> = {},
+  ): SourceFieldWithState {
+    return {
+      id: 'sf-orphan',
+      name: 'BOM_QUANTITY',
+      dataType: 'NUMBER',
+      ordinalPosition: 1,
+      sourceTable: { id: 'st-bom', name: 'BOM_MASTERS' },
+      mappingStatus: 'unmapped',
+      sampleValues: [],
+      isAcknowledged: false,
+      isRejected: false,
+      ...overrides,
+    }
+  }
+
+  it('renders the approve / reject / edit hover cluster on unmapped-source rows', () => {
+    // Pre-uniformity these rows rendered no action affordances. Post
+    // feat/mapping-row-uniformity they match every other row kind.
+    const result = makeResult([], [makeOrphanSourceField()])
+    render(
+      <MappingListView
+        filteredResult={result}
+        mutations={makeMutations()}
+        onOpenDrawer={vi.fn()}
+      />,
+    )
+    const row = findRow('unmapped-source::sf-orphan')
+    expect(
+      within(row).getByTestId('flat-row-action-approve'),
+    ).toBeInTheDocument()
+    expect(
+      within(row).getByTestId('flat-row-action-reject'),
+    ).toBeInTheDocument()
+    expect(
+      within(row).getByTestId('flat-row-action-edit'),
+    ).toBeInTheDocument()
+  })
+
+  it('clicking Approve on an unmapped-source row calls mutations.approveUnmappedSource({pendingKey, sourceFieldId})', async () => {
+    const mutations = makeMutations()
+    const result = makeResult([], [makeOrphanSourceField()])
+    render(
+      <MappingListView
+        filteredResult={result}
+        mutations={mutations}
+        onOpenDrawer={vi.fn()}
+      />,
+    )
+    const row = findRow('unmapped-source::sf-orphan')
+    fireEvent.click(within(row).getByTestId('flat-row-action-approve'))
+    expect(mutations.approveUnmappedSource).toHaveBeenCalledWith({
+      pendingKey: 'unmapped-source::sf-orphan',
+      sourceFieldId: 'sf-orphan',
+    })
+  })
+
+  it('clicking Reject on an unmapped-source row calls mutations.rejectUnmappedRow with the source-side payload', async () => {
+    const mutations = makeMutations()
+    const result = makeResult([], [makeOrphanSourceField()])
+    render(
+      <MappingListView
+        filteredResult={result}
+        mutations={mutations}
+        onOpenDrawer={vi.fn()}
+      />,
+    )
+    const row = findRow('unmapped-source::sf-orphan')
+    fireEvent.click(within(row).getByTestId('flat-row-action-reject'))
+    expect(mutations.rejectUnmappedRow).toHaveBeenCalledWith({
+      pendingKey: 'unmapped-source::sf-orphan',
+      target: { sourceFieldId: 'sf-orphan' },
+    })
+  })
+
+  it('clicking Edit on an unmapped-source row opens the drawer keyed on the source-side row id', () => {
+    const onOpenDrawer = vi.fn()
+    const result = makeResult([], [makeOrphanSourceField()])
+    render(
+      <MappingListView
+        filteredResult={result}
+        mutations={makeMutations()}
+        onOpenDrawer={onOpenDrawer}
+      />,
+    )
+    const row = findRow('unmapped-source::sf-orphan')
+    fireEvent.click(within(row).getByTestId('flat-row-action-edit'))
+    expect(onOpenDrawer).toHaveBeenCalledWith(
+      'unmapped-source::sf-orphan',
+      null,
+    )
+  })
+
+  it('clicking the row body on an unmapped-source row also opens the drawer (same flow as Edit)', () => {
+    const onOpenDrawer = vi.fn()
+    const result = makeResult([], [makeOrphanSourceField()])
+    render(
+      <MappingListView
+        filteredResult={result}
+        mutations={makeMutations()}
+        onOpenDrawer={onOpenDrawer}
+      />,
+    )
+    fireEvent.click(findRow('unmapped-source::sf-orphan'))
+    expect(onOpenDrawer).toHaveBeenCalledWith(
+      'unmapped-source::sf-orphan',
+      null,
+    )
+  })
+
+  it('Approve button is omitted on already-acknowledged source rows (status="approved")', () => {
+    // Source-side acks render the row with status='approved' (per
+    // flatten — decision='acknowledged' → 'approved'); the approve
+    // affordance should drop just like on already-approved TFM rows.
+    const sourceField = makeOrphanSourceField({ id: 'sf-acked' })
+    const result = makeResult([], [sourceField])
+    // Add an ack to set the row's status to 'approved'.
+    result.sourceFieldAcknowledgments = [
+      {
+        id: 'ack-1',
+        sourceFieldId: 'sf-acked',
+        reason: 'Legacy column',
+        decision: 'acknowledged',
+      },
+    ]
+    render(
+      <MappingListView
+        filteredResult={result}
+        mutations={makeMutations()}
+        onOpenDrawer={vi.fn()}
+      />,
+    )
+    const row = findRow('ack::source::ack-1')
+    expect(
+      within(row).queryByTestId('flat-row-action-approve'),
+    ).toBeNull()
+    expect(
+      within(row).getByTestId('flat-row-action-reject'),
+    ).toBeInTheDocument()
+  })
+})
+
+// ─── feat/mapping-row-uniformity — slate dot regression guard ─────────────
+
+describe('MappingListView — needs-review dot color uniformity (feat/mapping-row-uniformity)', () => {
+  // feat/mapping-row-uniformity dropped the 'unmapped' display-status
+  // bucket that previously remapped unmapped-target / unmapped-source
+  // rows with status='needs_review' onto a gray-400 ring-less dot.
+  // Every needs-review row — regardless of kind — should now render
+  // the same slate-400 + ring-2 ring-slate-400/25 dot that the header
+  // `Needs Review N` indicator uses.
+
+  it('needs-review unmapped-target row renders the slate-400 dot with a ring', () => {
+    const result = makeResult([makeUnmappedTarget()])
+    render(
+      <MappingListView
+        filteredResult={result}
+        mutations={makeMutations()}
+        onOpenDrawer={vi.fn()}
+      />,
+    )
+    const row = findRow('unmapped::tf-9')
+    const dot = within(row).getByTestId('flat-status-dot')
+    expect(dot.getAttribute('data-status')).toBe('needs_review')
+    expect(dot.className).toContain('bg-slate-400')
+    expect(dot.className).toContain('ring-2')
+    // Regression guard: the retired 'unmapped' bucket used `bg-gray-400`
+    // without a ring. Neither token should appear on a needs-review row.
+    expect(dot.className).not.toContain('bg-gray-400')
+  })
+
+  it('needs-review unmapped-source row renders the slate-400 dot with a ring', () => {
+    const sf: SourceFieldWithState = {
+      id: 'sf-orphan',
+      name: 'BOM_QUANTITY',
+      dataType: 'NUMBER',
+      ordinalPosition: 1,
+      sourceTable: { id: 'st-bom', name: 'BOM_MASTERS' },
+      mappingStatus: 'unmapped',
+      sampleValues: [],
+      isAcknowledged: false,
+      isRejected: false,
+    }
+    const result = makeResult([], [sf])
+    render(
+      <MappingListView
+        filteredResult={result}
+        mutations={makeMutations()}
+        onOpenDrawer={vi.fn()}
+      />,
+    )
+    const row = findRow('unmapped-source::sf-orphan')
+    const dot = within(row).getByTestId('flat-status-dot')
+    expect(dot.getAttribute('data-status')).toBe('needs_review')
+    expect(dot.className).toContain('bg-slate-400')
+    expect(dot.className).toContain('ring-2')
+    expect(dot.className).not.toContain('bg-gray-400')
+  })
+})
+
+describe('MappingListView — responsive column priority + typography (feat/mapping-row-responsive-typography)', () => {
+  // Mockup alignment: table names render AS-IS (no uppercase), one step
+  // smaller and lighter than the field chip. Responsive contract: table
+  // names truncate FIRST under width pressure; the field-name chip is the
+  // most important data on the row and yields width LAST. Implemented
+  // with asymmetric flex-shrink — table-name spans get `shrink-[9999]`,
+  // field-chip wrappers keep the default `flex-shrink:1` via `min-w-0`.
+
+  function renderSingleSourceRow() {
+    const result = makeResult([makeSingleSourceMapped()])
+    render(
+      <MappingListView
+        filteredResult={result}
+        mutations={makeMutations()}
+        onOpenDrawer={vi.fn()}
+      />,
+    )
+    return findRow('tfm-1')
+  }
+
+  it('source + target table names render as-is, not uppercased', () => {
+    const row = renderSingleSourceRow()
+    const sourceTable = within(row).getByTestId('flat-cell-source-table')
+    const targetTable = within(row).getByTestId('flat-cell-target-table')
+
+    // No CSS uppercase transform — names render with original casing.
+    expect(sourceTable.className).not.toContain('uppercase')
+    expect(targetTable.className).not.toContain('uppercase')
+    expect(sourceTable.className).not.toContain('tracking-wide')
+    expect(targetTable.className).not.toContain('tracking-wide')
+  })
+
+  it('table names are lighter + smaller than the field chip', () => {
+    const row = renderSingleSourceRow()
+    const sourceTable = within(row).getByTestId('flat-cell-source-table')
+    const targetTable = within(row).getByTestId('flat-cell-target-table')
+
+    // Lighter weight than the chip (chip is font-medium).
+    expect(sourceTable.className).toContain('font-normal')
+    expect(targetTable.className).toContain('font-normal')
+    expect(sourceTable.className).not.toContain('font-medium')
+    expect(targetTable.className).not.toContain('font-medium')
+
+    // Sub-chip scale.
+    expect(sourceTable.className).toContain('text-[11px]')
+    expect(targetTable.className).toContain('text-[11px]')
+  })
+
+  it('table names yield width first — high flex-shrink + truncate', () => {
+    const row = renderSingleSourceRow()
+    const sourceTable = within(row).getByTestId('flat-cell-source-table')
+    const targetTable = within(row).getByTestId('flat-cell-target-table')
+
+    for (const span of [sourceTable, targetTable]) {
+      // Regression guard: `shrink-0` would pin the table name full-width
+      // and force the chip to collapse first — the inverted-priority bug.
+      expect(span.className).not.toContain('shrink-0')
+      // Collapses ahead of the chip and clips with an ellipsis.
+      expect(span.className).toContain('shrink-[9999]')
+      expect(span.className).toContain('min-w-0')
+      expect(span.className).toContain('truncate')
+    }
+  })
+
+  it('field-name chip wrapper shrinks last and keeps the monospace pill', () => {
+    const row = renderSingleSourceRow()
+    const sourceField = within(row).getByTestId('flat-cell-source-field')
+    const targetField = within(row).getByTestId('flat-cell-target-field')
+
+    for (const wrapper of [sourceField, targetField]) {
+      // `min-w-0` keeps the default flex-shrink:1 — the chip CAN shrink,
+      // but only after table names have collapsed (shrink-[9999]).
+      expect(wrapper.className).toContain('min-w-0')
+      // No `shrink-0` — a hard pin would force horizontal overflow
+      // instead of graceful last-resort chip truncation.
+      expect(wrapper.className).not.toContain('shrink-0')
+    }
+
+    // Chip itself keeps the bordered monospace pill aesthetic and is
+    // allowed to truncate (no hard min-width pinning it open).
+    const chip = within(row).getByText('CUST_ID')
+    expect(chip.className).toContain('font-mono')
+    expect(chip.className).toContain('truncate')
+    expect(chip.className).toContain('max-w-full')
+  })
+
+  it('multi-source sub-row table name matches the as-is typography', () => {
+    const result = makeResult([makeMultiSourceMapped()])
+    render(
+      <MappingListView
+        filteredResult={result}
+        mutations={makeMutations()}
+        onOpenDrawer={vi.fn()}
+      />,
+    )
+    const row = findRow('tfm-multi')
+    fireEvent.click(within(row).getByTestId('flat-multi-source-pill'))
+
+    const subTable = screen.getByTestId('flat-subrow-source-table')
+    expect(subTable.className).not.toContain('uppercase')
+    expect(subTable.className).toContain('font-normal')
+    expect(subTable.className).toContain('text-[11px]')
+    expect(subTable.className).toContain('shrink-[9999]')
   })
 })

@@ -759,8 +759,11 @@ describe('MappingRedesignContent — Gap 7 drawer URL sync', () => {
   it('opens the drawer on mount when ?drawer=<rowId> is in the URL', () => {
     renderRedesign('drawer=r-accounts-1')
     expect(screen.getByTestId('mapping-drawer')).toBeInTheDocument()
-    const title = screen.getByTestId('mapping-drawer-title')
-    expect(title.textContent).toBe('account_id')
+    // feat/mapping-drawer-header-redesign — title testid is now
+    // `mapping-drawer-header-title`; field name is rendered inside the
+    // target-side span within the title.
+    const title = screen.getByTestId('mapping-drawer-header-title')
+    expect(title.textContent).toContain('account_id')
   })
 
   it('does NOT render the drawer when ?drawer is absent from the URL', () => {

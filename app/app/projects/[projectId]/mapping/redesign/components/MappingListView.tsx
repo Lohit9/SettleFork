@@ -77,32 +77,28 @@ function FieldNameChip({
   )
 }
 
-// Display status — derives a 4-bucket label/color (the canonical 3
-// status buckets plus an "Unmapped" 4th for unaddressed rows). The
-// flat view paints only a dot (sixth polish pass — pill text dropped);
-// the cell's `title` attribute carries the label, so the user still
-// gets the status name on hover.
-type DisplayStatus =
-  | 'approved'
-  | 'needs_review'
-  | 'rejected'
-  | 'unmapped'
+// Display status — three canonical buckets shared with the
+// MappingSummaryStrip header chips. Linear-style polish: 8px fill + a
+// 2px ring at 25% opacity for every hued state. The ring reads as a
+// soft halo around the dot.
+//
+// feat/mapping-row-uniformity — the prior 4th `'unmapped'` bucket
+// (gray-400, no ring) was retired here. It remapped unmapped-target /
+// unmapped-source rows whose `status === 'needs_review'` onto a
+// different gray + ring-less visual, causing the row dot to drift
+// from the header `Needs Review N` indicator's slate-400 + ring
+// treatment for rows of those kinds. Every needs-review row now
+// renders the same slate dot regardless of kind — the dot reflects
+// the row's APPROVAL STATE, not whether a source is present.
+type DisplayStatus = 'approved' | 'needs_review' | 'rejected'
 
 function deriveDisplayStatus(row: FlatRow): DisplayStatus {
-  if (row.kind === 'unmapped-target' || row.kind === 'unmapped-source') {
-    if (row.status === 'needs_review') return 'unmapped'
-  }
   return row.status
 }
 
-// Linear-style polish (feat/mapping-list-toggle-and-columns refinement
-// pass): 8px fill + a 2px ring at 25% opacity for the hued states. The
-// ring reads as a soft halo around the dot. Neutral unmapped renders
-// without a ring; rejected now uses a distinct red fill so it reads as
-// a third decision state rather than another neutral bucket.
 const STATUS_DOT_CONFIG: Record<
   DisplayStatus,
-  { label: string; fill: string; ring: string | null }
+  { label: string; fill: string; ring: string }
 > = {
   approved: {
     label: 'Approved',
@@ -110,9 +106,10 @@ const STATUS_DOT_CONFIG: Record<
     ring: 'ring-2 ring-emerald-500/25',
   },
   needs_review: {
-    // Same token as the header "Needs Review N" indicator in
-    // MappingSummaryStrip.tsx — keep aligned so the row dot and the
-    // header dot read as the same status signal. (Refinement #2 lock.)
+    // Source-of-truth alignment with the header `Needs Review N`
+    // indicator in MappingSummaryStrip.tsx — keep both surfaces on the
+    // same token so the dot reads as one status signal across the
+    // page chrome.
     label: 'Needs review',
     fill: 'bg-slate-400',
     ring: 'ring-2 ring-slate-400/25',
@@ -121,11 +118,6 @@ const STATUS_DOT_CONFIG: Record<
     label: 'Rejected',
     fill: 'bg-red-500',
     ring: 'ring-2 ring-red-500/25',
-  },
-  unmapped: {
-    label: 'Unmapped',
-    fill: 'bg-gray-400',
-    ring: null,
   },
 }
 
@@ -888,20 +880,35 @@ function FlatRowView({
       }
     }
     // unmapped-source
-    // feat/mapping-list-toggle-and-columns refinement pass: unmapped
-    // source rows are now informational only — no Approve, no
-    // Reject, no Edit. Interactive assignment lives elsewhere; the
-    // flat view's role for these rows is to surface the schema gap
-    // at the bottom of the list. The `rejectUnmappedRow` action
-    // remains wired in the hook for future use; this branch just
-    // doesn't surface it.
+    // feat/mapping-row-uniformity — source-side rows now surface the
+    // full hover cluster matching every other row kind. Approve
+    // acknowledges the source field will not be migrated (UPSERTs
+    // `source_field_acknowledgments` with `decision='acknowledged'`);
+    // reject sets the same row's `decision='rejected'`. Edit opens
+    // the drawer mounted on a source-only `SourceFieldDrawerRow`
+    // projection. Already-acknowledged / already-rejected rows omit
+    // the corresponding action so the user can't double-fire (the
+    // row's `status` is the projected acknowledgment state, set by
+    // `flattenRowsForListView`).
     return {
-      onApprove: undefined,
-      approveTooltip: 'Nothing to approve — no mapping',
-      onReject: undefined,
-      rejectTooltip: undefined,
-      onEdit: undefined,
-      editTooltip: undefined,
+      onApprove: alreadyApproved
+        ? undefined
+        : () =>
+            void mutations.approveUnmappedSource({
+              pendingKey: row.id,
+              sourceFieldId: row.sourceField.id,
+            }),
+      approveTooltip: 'Acknowledge unmapped source',
+      onReject: alreadyRejected
+        ? undefined
+        : () =>
+            void mutations.rejectUnmappedRow({
+              pendingKey: row.id,
+              target: { sourceFieldId: row.sourceField.id },
+            }),
+      rejectTooltip: 'Mark as rejected',
+      onEdit: () => onRowBodyClick(row),
+      editTooltip: 'Open source field in drawer',
     }
   }, [mutations, onRowBodyClick, row])
 
@@ -961,7 +968,7 @@ function FlatRowView({
             <span
               data-testid="flat-cell-source-table"
               title={sourceTableName}
-              className="shrink-0 truncate text-[10px] font-medium uppercase tracking-wide text-slate-500"
+              className="min-w-0 shrink-[9999] truncate text-[11px] font-normal text-slate-500"
             >
               {sourceTableName}
             </span>
@@ -1027,6 +1034,17 @@ function FlatRowView({
                 —
               </button>
             ) : (
+              // Final fallback reached when `sourceFieldName` is falsy
+              // for a kind that has no explicit branch above —
+              // typically an `unmapped-source` row whose
+              // `sourceField.name` is the empty string. The wire type
+              // `SourceFieldWithState.name: string` is non-nullable but
+              // the empty-string case can land here when a `fields`
+              // row was seeded / ingested without a name. UI degrades
+              // gracefully to em-dash; data fix is server-side
+              // (worktree A scope). Pinned by feat/mapping-row-uniformity
+              // audit — see investigation notes for the ENGINEERING BOM
+              // MASTERS example.
               <span className="text-gray-300">—</span>
             )}
           </span>
@@ -1085,7 +1103,7 @@ function FlatRowView({
             <span
               data-testid="flat-cell-target-table"
               title={targetTable}
-              className="shrink-0 truncate text-[10px] font-medium uppercase tracking-wide text-slate-500"
+              className="min-w-0 shrink-[9999] truncate text-[11px] font-normal text-slate-500"
             >
               {targetTable}
             </span>
@@ -1244,7 +1262,7 @@ function FlatRowView({
                 <span
                   data-testid="flat-subrow-source-table"
                   title={src.sourceTable.name}
-                  className="shrink-0 truncate text-[10px] font-medium uppercase tracking-wide text-slate-500"
+                  className="min-w-0 shrink-[9999] truncate text-[11px] font-normal text-slate-500"
                 >
                   {src.sourceTable.name}
                 </span>
