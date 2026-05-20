@@ -801,24 +801,22 @@ export function MappingDrawer({
       )}
       style={{ width: `${MAPPING_DRAWER_WIDTH_PX}px` }}
     >
+      {/* feat/mapping-drawer-header-redesign — compact header (MAPPING
+          label + title row + confidence line + close). Editing
+          affordances retired here moved to the flat view
+          (primary-source swap, target swap, create-from-unmapped) or
+          to the drawer body's SOURCE column (non-primary source
+          swap, per-source remove, add source). See `DrawerHeader.tsx`
+          file-top comment for the relocation map. The
+          `onSwapSource` / `onEditSources` / `onSwapTarget` /
+          `onUnmapMapping` / `onCreateMapping` / `onNavigateTarget`
+          props on `MappingDrawerProps` stay so commit 2 can thread
+          them into `MappedBody`'s `MappingSourceTargetGrid`. */}
       <DrawerHeader
         row={effectiveRow}
         titleId={titleId}
         onClose={maybeRequestClose}
-        onSwapTarget={onSwapTarget}
-        onSwapSource={onSwapSource}
-        onEditSources={onEditSources}
-        onUnmapMapping={onUnmapMapping}
-        onCreateMapping={onCreateMapping}
-        onNavigateTarget={onNavigateTarget}
-        availableTargetFields={availableTargetFields}
-        availableSourceFields={availableSourceFields}
       />
-      {/* Sub-tab strip — sits between header and body for now (commit 1).
-          The follow-up header redesign PR will fold this strip into the
-          new compact header so title + confidence + tabs read as one
-          chrome unit; until then the existing FROM/TO stack stays.
-          Reverses Gap-7 ADR — see file-top comment. */}
       <DrawerTabStrip activeTab={activeTab} onTabChange={setActiveTab} />
       <DrawerBody
         row={effectiveRow}
