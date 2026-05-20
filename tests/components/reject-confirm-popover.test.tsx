@@ -27,9 +27,10 @@ import { RejectConfirmPopover } from '@/app/app/projects/[projectId]/mapping/red
 interface HarnessProps {
   onConfirm: () => void
   onCancel: () => void
+  consequence?: { fieldName: string; text: string }
 }
 
-function Harness({ onConfirm, onCancel }: HarnessProps) {
+function Harness({ onConfirm, onCancel, consequence }: HarnessProps) {
   const anchorRef = useRef<HTMLButtonElement | null>(null)
   return (
     <div>
@@ -40,6 +41,7 @@ function Harness({ onConfirm, onCancel }: HarnessProps) {
         anchorRef={anchorRef}
         onConfirm={onConfirm}
         onCancel={onCancel}
+        consequence={consequence}
       />
     </div>
   )
@@ -179,6 +181,39 @@ describe('RejectConfirmPopover — confirm + cancel button wiring', () => {
     )
     expect(onConfirm).toHaveBeenCalledTimes(1)
     expect(onCancel).not.toHaveBeenCalled()
+  })
+})
+
+describe('RejectConfirmPopover — consequence line (feat/dashboard-cleanup-reject-confirm)', () => {
+  // The consequence line is opt-in: terse callers (FieldMappingRow
+  // inline ✗, per-source remove) pass no `consequence` and keep the
+  // title-only popover. The flat-view row-hover ✗ supplies it.
+  it('omits the consequence line when no consequence prop is given', async () => {
+    render(<Harness onConfirm={vi.fn()} onCancel={vi.fn()} />)
+    await screen.findByTestId('reject-confirm-popover')
+    expect(
+      screen.queryByTestId('reject-confirm-popover-consequence'),
+    ).toBeNull()
+  })
+
+  it('renders the consequence line with the field name in monospace', async () => {
+    render(
+      <Harness
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+        consequence={{
+          fieldName: 'Item_Number',
+          text: 'will become unmapped.',
+        }}
+      />,
+    )
+    const line = await screen.findByTestId(
+      'reject-confirm-popover-consequence',
+    )
+    expect(line).toHaveTextContent('Item_Number will become unmapped.')
+    // Field name is a monospace chip — visual parity with the drawer's
+    // reject-confirm dialog body.
+    expect(line.querySelector('.font-mono')?.textContent).toBe('Item_Number')
   })
 })
 
