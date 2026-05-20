@@ -23,6 +23,15 @@ vi.mock('@/lib/actions/mappings-for-redesign', () => ({
   approveFieldMapping: vi.fn(),
   rejectFieldMapping: vi.fn(),
   resetMappingStatus: vi.fn(),
+  setUnmappedRowRejected: vi.fn(),
+}))
+
+// MappingDrawer also imports `@/lib/actions/field-acknowledgments` for
+// the source-field-only drawer footer — a `'use server'` module that
+// pulls in `server-only`, disallowed in jsdom. Mock it too.
+vi.mock('@/lib/actions/field-acknowledgments', () => ({
+  acknowledgeField: vi.fn(),
+  removeAcknowledgment: vi.fn(),
 }))
 
 vi.mock('next/navigation', () => ({

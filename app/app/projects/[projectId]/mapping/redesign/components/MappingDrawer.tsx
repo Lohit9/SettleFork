@@ -49,7 +49,12 @@ import {
   approveFieldMapping,
   rejectFieldMapping,
   resetMappingStatus,
+  setUnmappedRowRejected,
 } from '@/lib/actions/mappings-for-redesign'
+import {
+  acknowledgeField,
+  removeAcknowledgment,
+} from '@/lib/actions/field-acknowledgments'
 import {
   classifyRowConfidence,
   formatConfidencePercent,
@@ -801,6 +806,8 @@ export function MappingDrawer({
           availableTargetFields={availableTargetFields}
           activeTab={activeTab}
           onTabChange={setActiveTab}
+          projectId={projectId}
+          onActionComplete={onActionComplete}
         />
       </aside>
     )
@@ -1014,6 +1021,8 @@ function SourceFieldDrawerStub({
   availableTargetFields,
   activeTab,
   onTabChange,
+  projectId,
+  onActionComplete,
 }: {
   row: SourceFieldDrawerRow
   titleId: string
@@ -1029,6 +1038,17 @@ function SourceFieldDrawerStub({
   availableTargetFields?: readonly TargetFieldRef[]
   activeTab: DrawerTab
   onTabChange: (next: DrawerTab) => void
+  /** Required by the footer's Approve / Reject / Un-approve server actions. */
+  projectId?: string
+  /**
+   * Footer action callback — shared with the MappingRow drawer. The
+   * parent (`MappingContent`) refreshes data and, for 'reject' / 'reset',
+   * closes the drawer + clears the URL.
+   */
+  onActionComplete?: (
+    action: 'approve' | 'reject' | 'reset',
+    rowId: string,
+  ) => void
 }) {
   const sf = row.sourceField
 
@@ -1052,6 +1072,101 @@ function SourceFieldDrawerStub({
     sf.confidence !== null && sf.confidence !== undefined
       ? formatConfidencePercent(sf.confidence)
       : null
+
+  // ── Footer (Approve / Reject / Un-approve) ──────────────────────────
+  //
+  // Parity with the unmapped-target drawer footer: needs_review shows
+  // [Reject][Approve]; an acknowledged source (`isAcknowledged`) shows
+  // [Un-approve] only. A `decision='rejected'` source renders as
+  // needs_review under the unified Reject = reset semantic (#157/#158),
+  // so `isAcknowledged` alone discriminates the two footer states.
+  //
+  // The drawer calls the server actions directly (mirroring the
+  // MappingRow handlers `handleApprove` / `handleRejectConfirm`), then
+  // reports via `onActionComplete` so the parent refreshes and — for
+  // reject / un-approve — closes the drawer.
+  const footerStatus: 'approved' | 'needs_review' = sf.isAcknowledged
+    ? 'approved'
+    : 'needs_review'
+  const [isApprovePending, startApproveTransition] = useTransition()
+  const [isRejecting, setIsRejecting] = useState(false)
+  const [isUnapproving, setIsUnapproving] = useState(false)
+  const [footerError, setFooterError] = useState<string | null>(null)
+
+  const handleApproveSource = useCallback(() => {
+    if (!projectId) return
+    setFooterError(null)
+    startApproveTransition(async () => {
+      try {
+        await acknowledgeField(projectId, sf.id, 'source', '')
+        onActionComplete?.('approve', row.id)
+      } catch (err) {
+        setFooterError(GENERIC_APPROVE_ERROR)
+        if (typeof console !== 'undefined') {
+          console.error('[SourceFieldDrawerStub] acknowledgeField threw:', err)
+        }
+      }
+    })
+  }, [projectId, sf.id, row.id, onActionComplete])
+
+  const handleRejectSource = useCallback(async () => {
+    if (!projectId) return
+    setFooterError(null)
+    setIsRejecting(true)
+    try {
+      const result = await setUnmappedRowRejected({
+        projectId,
+        sourceFieldId: sf.id,
+      })
+      if (!result.success) {
+        setIsRejecting(false)
+        setFooterError(GENERIC_REJECT_ERROR)
+        if (typeof console !== 'undefined') {
+          console.error(
+            '[SourceFieldDrawerStub] setUnmappedRowRejected failed:',
+            result,
+          )
+        }
+        return
+      }
+      // Success — parent closes the drawer + refreshes. Leave
+      // `isRejecting` set; the drawer is about to unmount (mirrors
+      // `handleRejectConfirm`).
+      onActionComplete?.('reject', row.id)
+    } catch (err) {
+      setIsRejecting(false)
+      setFooterError(GENERIC_REJECT_ERROR)
+      if (typeof console !== 'undefined') {
+        console.error(
+          '[SourceFieldDrawerStub] setUnmappedRowRejected threw:',
+          err,
+        )
+      }
+    }
+  }, [projectId, sf.id, row.id, onActionComplete])
+
+  const handleUnapproveSource = useCallback(async () => {
+    if (!projectId) return
+    setFooterError(null)
+    setIsUnapproving(true)
+    try {
+      // `removeAcknowledgment` is the side-agnostic un-acknowledge API;
+      // it resolves the source side and DELETEs the ack row. Resolves to
+      // void / throws on failure.
+      await removeAcknowledgment(projectId, sf.id)
+      // Success — parent closes the drawer + refreshes (the 'reset' arm).
+      onActionComplete?.('reset', row.id)
+    } catch (err) {
+      setIsUnapproving(false)
+      setFooterError(GENERIC_UNAPPROVE_ERROR)
+      if (typeof console !== 'undefined') {
+        console.error(
+          '[SourceFieldDrawerStub] removeAcknowledgment threw:',
+          err,
+        )
+      }
+    }
+  }, [projectId, sf.id, row.id, onActionComplete])
 
   return (
     <>
@@ -1217,6 +1332,34 @@ function SourceFieldDrawerStub({
           />
         ) : null}
       </div>
+      <footer
+        data-testid="mapping-drawer-source-stub-footer"
+        className="sticky bottom-0 z-10 border-t border-slate-200 bg-white px-5 py-3"
+      >
+        {footerError ? (
+          <div
+            role="alert"
+            data-testid="mapping-drawer-source-stub-error"
+            className="mb-3 flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800"
+          >
+            <AlertCircle
+              aria-hidden="true"
+              className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-red-500"
+            />
+            <span className="leading-snug">{footerError}</span>
+          </div>
+        ) : null}
+        <UnmappedFooterButtons
+          status={footerStatus}
+          isApprovePending={isApprovePending}
+          isRejecting={isRejecting}
+          optimisticallyApproved={false}
+          onApprove={handleApproveSource}
+          onRejectClick={handleRejectSource}
+          isUnapproving={isUnapproving}
+          onUnapproveClick={handleUnapproveSource}
+        />
+      </footer>
     </>
   )
 }
