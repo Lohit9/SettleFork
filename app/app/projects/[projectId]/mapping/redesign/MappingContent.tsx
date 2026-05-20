@@ -2012,7 +2012,6 @@ function MappingContentLoaded({
             onFiltersChange={handleFiltersChange}
             targetTables={data.targetTables}
             sourceTables={data.sourceTables}
-            rejectedCount={data.counts.rejected}
             highConfidenceCount={highConfidenceCount}
             onApproveHighConfidenceClick={handleApproveHighConfidenceClick}
           />

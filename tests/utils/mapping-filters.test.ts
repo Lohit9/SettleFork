@@ -210,12 +210,12 @@ function buildRows(): MappingRow[] {
         targetTable: { id: tableA.id, name: tableA.name },
       }),
     }),
-    // Canonical rejected-status fixture: a `kind:'unmapped'` row with
-    // `status:'rejected'`. Under Reject = reset this is the only shape a
-    // rejected row takes — the redesign's flat-view unmapped-target
-    // reject writes `target_field_coverage.status='rejected'`, which the
-    // translator surfaces as an unmapped row. (In tableB, so tableA
-    // keeps zero rejected rows — see the identity-filter test below.)
+    // Legacy heritage `status:'rejected'` fixture. Reject = reset
+    // (PR #157/#158) means no current reject path produces a rejected
+    // row, but pre-existing heritage rows still carry the status at the
+    // `FlatRowStatus` level — the filter pipeline must still pass them
+    // through under the 'all' filter (see the "'all' surfaces legacy
+    // rejected rows" test below). In tableB, so tableA keeps zero.
     ack({
       id: 'ack-customers-1',
       status: 'rejected',
@@ -332,16 +332,11 @@ describe('filterRows — status filter', () => {
     expect(out).toHaveLength(1)
   })
 
-  it('narrows to rejected only', () => {
-    const out = filterRows(buildRows(), {
-      ...DEFAULT_FILTER_STATE,
-      status: 'rejected',
-    })
-    expect(out.every((r) => r.status === 'rejected')).toBe(true)
-    expect(out).toHaveLength(1)
-  })
-
-  it('"all" INCLUDES rejected (per §9 Q6 resolution)', () => {
+  // 'rejected' was retired as a status-filter option with Reject = reset
+  // (PR #157/#158). There is no "narrows to rejected" test — the option
+  // no longer exists. Legacy heritage rejected rows still flow through
+  // under 'all', verified below.
+  it('"all" still surfaces legacy status=rejected rows', () => {
     const rows = buildRows()
     const out = filterRows(rows, DEFAULT_FILTER_STATE)
     expect(out.some((r) => r.status === 'rejected')).toBe(true)
@@ -832,14 +827,14 @@ describe('isGroupHiddenByIdentityFilters', () => {
     expect(isGroupHiddenByIdentityFilters(tableB.id, state, rows)).toBe(true)
   })
 
-  it('Target-matching group stays visible even when Status narrows its rows to zero (identity-only)', () => {
+  it('Target-matching group stays visible regardless of the Status filter (identity-only)', () => {
     // Status isn't part of the identity decision. A matching Target stays
     // visible regardless of status; the post-status empty-state is rendered
     // inside the group header by the caller.
     const state: MappingFilterState = {
       ...DEFAULT_FILTER_STATE,
       target: tableA.id,
-      status: 'rejected', // fixture has 0 rejected rows in tableA
+      status: 'approved',
     }
     expect(isGroupHiddenByIdentityFilters(tableA.id, state, rows)).toBe(false)
   })
