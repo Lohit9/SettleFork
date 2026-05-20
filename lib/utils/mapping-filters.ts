@@ -195,12 +195,23 @@ function rowReferencesSourceTable(row: MappingRow, sourceTableId: string): boole
 
 // ─── Flat-row filter pipeline (feat/mapping-filter-bugs-ordering) ────────────
 //
-// `filterRows` above operates on the wire `MappingRow[]`. The flat list
-// view ALSO renders client-derived `unmapped-source` rows (synthesised by
-// `flattenRowsForListView` from `sourceFields` / acks) — those never pass
-// through `filterRows`, so source/target/status filters silently ignored
-// them. `filterFlatRows` closes that gap: it filters the canonical
-// `FlatRow[]` projection with full per-kind coverage.
+// ⚠️ ARCHITECTURAL RULE — operate on the flat projection, not the wire.
+//
+// `flattenRowsForListView` is the CANONICAL four-kind row projection
+// (mapped / value-assignment / unmapped-target / unmapped-source). The
+// `unmapped-source` rows exist ONLY in that projection — they are
+// synthesised client-side from `sourceFields` / acks and never appear in
+// the wire `MappingRow[]`. Therefore ANY row-aware operation — filtering,
+// counting, status aggregation, etc. — MUST run against the flattened
+// `FlatRow[]`, never the raw `MappingRow[]`, or it will silently skip the
+// source-side rows.
+//
+// This is the SECOND instance of that gap: the first was the summary-
+// strip counter bug (PR #151), this is the filter bug. `filterRows`
+// (above) operates on `MappingRow[]` and is kept ONLY for the target-led
+// view, which has no source-side rows. `filterFlatRows` is the correct
+// surface for the flat list view. Reach for the flat projection first;
+// don't let a third instance land.
 //
 // Per-axis coverage:
 //   • target table id → mapped / value-assignment / unmapped-target
