@@ -237,6 +237,44 @@ async function setCoverageStatus(
 }
 
 /**
+ * Neutralize a target field's `target_field_coverage` row as part of a
+ * Reject = reset. Reject's unified end state is a neutral `needs_review`
+ * (grey) row with NO preserved AI commentary, so this helper:
+ *   • sets `status='needs_review'`, `status_set_by='user'`
+ *   • clears `ai_reasoning` to null (drops the Path D coverage narrative
+ *     that `buildUnmappedRow` would otherwise surface as the row's
+ *     `aiReasoning`)
+ *
+ * UPDATE-only by design — unlike `setCoverageStatus`, this never INSERTs.
+ * When no coverage row exists the target already reads as `needs_review`
+ * via `buildUnmappedRow`'s orphan fallback, so there is nothing to
+ * neutralize; synthesizing a row would only add a redundant `gap` record.
+ *
+ * Deliberately preserves the rest of the row — `coverage_status`,
+ * `confidence`, `default_value_recommendation`, and the user-authored
+ * `default_value_decided` / `default_decided_by`. Deleting the row would
+ * destroy that Path D analysis and the user's default-value decision,
+ * neither of which is the AI mapping proposal being rejected.
+ */
+async function neutralizeCoverageForReject(
+  projectId: string,
+  targetFieldId: string,
+): Promise<{ success: boolean; error?: string }> {
+  const { error } = await supabaseAdmin
+    .from('target_field_coverage')
+    .update({
+      status: 'needs_review',
+      status_set_by: 'user',
+      ai_reasoning: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('project_id', projectId)
+    .eq('target_field_id', targetFieldId)
+  if (error) return { success: false, error: error.message }
+  return { success: true }
+}
+
+/**
  * Shared auth + permission gate for the no-source approve/reject paths.
  * Mirrors the inline check used by `createFieldMapping` (auth → role →
  * maintenance-mode) so the surface stays uniform across redesign-side
@@ -425,12 +463,16 @@ export async function approveFieldMapping(
 }
 
 /**
- * Reject a TFM under founder-amended semantics: the row is DELETEd
- * outright and the target field thereafter renders as Rule 6 (unmapped).
+ * Reject a row under the unified Reject = reset semantic: the AI's
+ * proposal is removed and the target field returns to a neutral
+ * `needs_review` (grey) row with NO preserved AI commentary. There is
+ * no distinct persisted `rejected` state — reject does not leave a
+ * placeholder TFM or a `coverage.status='rejected'` row behind.
  *
  * Flow:
- *   1. Reject `unmapped::` sentinel (no TFM to delete).
- *   2. Decode to confirm we have a tfm-primary id.
+ *   1. `unmapped::` sentinel (no-source / unmapped-target row) — no TFM
+ *      to delete; neutralize the `target_field_coverage` row instead.
+ *   2. Decode to confirm we have a tfm-primary / tfm-contributor id.
  *   3. Query the TFM for project_id, target field name, primary source
  *      name, and `is_acknowledged` BEFORE attempting the delete. We
  *      need the names to populate the `mapping_rejected` activity log
@@ -439,13 +481,15 @@ export async function approveFieldMapping(
  *   4. If the TFM is acknowledged, refuse with VALIDATION (defensive
  *      alongside the UI's disabled-state matrix; see decision 7).
  *   5. If the TFM is missing (race condition: another caller deleted
- *      between us reading and us writing), log a thin
- *      `mapping_rejected` event with placeholder names and return
+ *      between us reading and us writing), return
  *      `{ success: true, alreadyDeleted: true }`.
  *   6. Otherwise delegate to the legacy `deleteFieldMapping` (which
  *      handles permission, guardWrites, transform reset, FK-cascade,
- *      and TM coverage recompute) and emit `mapping_rejected` with
- *      the legacy-format payload `Mapping rejected: <src> → <tgt>`.
+ *      and TM coverage recompute), neutralize any stale coverage row
+ *      via `neutralizeCoverageForReject`, emit an `ai_edit_history`
+ *      entry for the `mapped → needs_review` transition, and emit
+ *      `mapping_rejected` with the legacy-format payload
+ *      `Mapping rejected: <src> → <tgt>`.
  *
  * The legacy `deleteFieldMapping` does NOT itself emit an activity
  * log entry, so the wrapper carries that responsibility. Reusing the
@@ -462,9 +506,10 @@ export async function rejectFieldMapping(
     data: { user },
   } = await supabase.auth.getUser()
 
-  // PR α₀ — no-source reject writes target_field_coverage.status='rejected'
-  // independent of any TFM. Mirrors the approve branch in
-  // `approveFieldMapping`; the synthetic id format is `unmapped::<uuid>`.
+  // No-source (unmapped-target) reject. Reject = reset: the row returns
+  // to a neutral `needs_review` and drops any preserved AI commentary
+  // rather than persisting a distinct `rejected` state. Independent of
+  // any TFM; the synthetic id format is `unmapped::<uuid>`.
   if (rowId.startsWith(UNMAPPED_ID_PREFIX)) {
     const targetFieldId = rowId.slice(UNMAPPED_ID_PREFIX.length)
     if (!UUID_REGEX.test(targetFieldId)) {
@@ -489,10 +534,9 @@ export async function rejectFieldMapping(
       }
     }
 
-    const writeResult = await setCoverageStatus(
+    const writeResult = await neutralizeCoverageForReject(
       ownership.projectId,
       targetFieldId,
-      'rejected',
     )
     if (!writeResult.success) {
       return {
@@ -532,7 +576,7 @@ export async function rejectFieldMapping(
   const { data: tfmLookup } = await supabaseAdmin
     .from('target_field_mappings')
     .select(
-      `id, project_id, target_field_id, is_acknowledged, confidence, ai_reasoning, transformation_intent, needs_transformation,
+      `id, project_id, target_field_id, is_acknowledged,
        fields:target_field_id(name)`,
     )
     .eq('id', decoded.tfmId)
@@ -541,10 +585,6 @@ export async function rejectFieldMapping(
       project_id: string
       target_field_id: string
       is_acknowledged: boolean
-      confidence: number | null
-      ai_reasoning: string | null
-      transformation_intent: string | null
-      needs_transformation: boolean | null
       fields: { name: string } | null
     }>()
 
@@ -592,71 +632,44 @@ export async function rejectFieldMapping(
     }
   }
 
-  // PR \u03b1\u2080 \u2014 write target_field_coverage.status='rejected' so the row
-  // surfaces as rejected (not synthesized 'needs_review') on next read.
-  // The translator's resolution priority post-PR-\u03b3: no TFM \u2192
-  // coverage.status. Without this write, the row would default back to
-  // 'needs_review' the moment the deleteFieldMapping cascade clears the
-  // TFM, and the user's reject click would not stick.
+  // Reject = reset: the deleted mapping's target field returns to a
+  // neutral `needs_review` (grey) row with NO preserved AI commentary.
+  // `deleteFieldMapping` already removed the TFM (and its mapping_sources
+  // via FK cascade), so the only residue that could still render the row
+  // as decided is a stale `target_field_coverage` row \u2014 e.g. a prior
+  // `status='approved'` left behind by a drawer-side approve, which would
+  // otherwise leak through as a green row on next read. Neutralize it.
   //
   // Best-effort: a failure here does NOT roll back the TFM delete (which
-  // already committed) \u2014 the user gets a "Mapping rejected" success but
-  // the row may transiently render 'needs_review' until the next user
-  // action lands a coverage row. The activity log below will still
-  // reflect the rejection intent; the user can re-click reject if the
-  // visual state lags.
-  const coverageWrite = await setCoverageStatus(
+  // already committed). The activity log below still reflects the
+  // rejection intent; the user can re-click reject if the visual state
+  // lags.
+  const coverageWrite = await neutralizeCoverageForReject(
     tfmLookup.project_id,
     tfmLookup.target_field_id,
-    'rejected',
   )
   if (!coverageWrite.success) {
     console.warn(
-      '[rejectFieldMapping] coverage status write failed (TFM delete already committed):',
+      '[rejectFieldMapping] coverage neutralization failed (TFM delete already committed):',
       coverageWrite.error,
     )
   }
 
-  // Preserve row-level metadata on the resulting no-source row. Reject
-  // deletes the mapped TFM, but the drawer still needs confidence,
-  // explanation, and transformation guidance after refresh.
-  const { data: preservedTfm, error: preserveMetadataError } = await supabaseAdmin
-    .from('target_field_mappings')
-    .upsert(
-      {
-        project_id: tfmLookup.project_id,
-        target_field_id: tfmLookup.target_field_id,
-        is_acknowledged: true,
-        acknowledgment_reason: 'Rejected by user',
-        status: 'rejected',
-        combination_type: null,
-        combination_sql: null,
-        confidence: tfmLookup.confidence,
-        ai_reasoning: tfmLookup.ai_reasoning,
-        transformation_intent: tfmLookup.transformation_intent,
-        needs_transformation: tfmLookup.needs_transformation,
-      },
-      { onConflict: 'project_id,target_field_id' },
-    )
-    .select('id')
-    .single<{ id: string }>()
-  if (preserveMetadataError) {
-    console.warn(
-      '[rejectFieldMapping] rejected-row metadata preservation failed:',
-      preserveMetadataError.message,
-    )
-  } else if (preservedTfm) {
-    void logAIEdit({
-      projectId: tfmLookup.project_id,
-      actorId: user?.id ?? tfmLookup.project_id,
-      entityType: 'target_field_mapping',
-      entityId: preservedTfm.id,
-      fieldPath: 'status',
-      oldValue: 'mapped',
-      newValue: 'rejected',
-      editKind: 'human_modified',
-    })
-  }
+  // Audit the lifecycle transition against the snapshotted (now-deleted)
+  // TFM id. Reject no longer persists a replacement rejected-status TFM,
+  // so this edit-history entry is emitted directly against the original
+  // TFM identity \u2014 the conceptual transition is the row leaving its
+  // mapped state and returning to needs_review.
+  void logAIEdit({
+    projectId: tfmLookup.project_id,
+    actorId: user?.id ?? tfmLookup.project_id,
+    entityType: 'target_field_mapping',
+    entityId: tfmLookup.id,
+    fieldPath: 'status',
+    oldValue: 'mapped',
+    newValue: 'needs_review',
+    editKind: 'human_modified',
+  })
 
   // Log AFTER successful delete so a failed delete doesn't leave a
   // dangling rejection event. Format matches legacy reject branch
@@ -5016,20 +5029,22 @@ export type SetUnmappedRowRejectedResult =
     }
 
 /**
- * Reject an unmapped flat-view row. Exactly one of `targetFieldId` /
- * `sourceFieldId` must be supplied:
+ * Reject an unmapped flat-view row under the Reject = reset semantic.
+ * Exactly one of `targetFieldId` / `sourceFieldId` must be supplied:
  *
- *   • Target branch — writes `target_field_coverage.status='rejected'`
- *     via `setCoverageStatus`. Refuses if a live TFM already covers
- *     the target (the user reached the wrong affordance).
+ *   • Target branch — neutralizes the `target_field_coverage` row via
+ *     `neutralizeCoverageForReject` (status → needs_review, ai_reasoning
+ *     → null), identical to the drawer-side `rejectFieldMapping`
+ *     unmapped-target path. Refuses if a live TFM already covers the
+ *     target (the user reached the wrong affordance).
  *   • Source branch — UPSERTs into `source_field_acknowledgments` with
  *     `decision='rejected'` and `reason=''`. Recomputes affected TMs.
  *
  * Activity-log emitters:
  *   • Target — `mapping_rejected` with `no_source: true` (parity with
  *     the existing rejectFieldMapping unmapped-target branch).
- *   • Source — `source_field_rejected` (new action_type added in this
- *     PR; Q4 resolution).
+ *   • Source — `source_field_rejected` (dedicated action_type for the
+ *     flat-view source-side reject).
  */
 export async function setUnmappedRowRejected(input: {
   projectId: string
@@ -5135,10 +5150,15 @@ export async function setUnmappedRowRejected(input: {
       }
     }
 
-    const writeResult = await setCoverageStatus(
+    // Reject = reset: the flat-view ✗ on an unmapped-target row
+    // neutralizes the coverage row (status → needs_review, ai_reasoning
+    // → null) — identical to the drawer-side `rejectFieldMapping`
+    // unmapped-target path. Both reject entry points now land the same
+    // neutral grey end state; the flat view no longer produces a
+    // distinct `coverage.status='rejected'` (red) row.
+    const writeResult = await neutralizeCoverageForReject(
       projectId,
       targetFieldId,
-      'rejected',
     )
     if (!writeResult.success) {
       return {

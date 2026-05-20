@@ -520,9 +520,18 @@ describe('[flat-view] setUnmappedRowRejected — target branch', () => {
     expect(REJECT_BODY).toMatch(/Use Reject on the mapped row instead/)
   })
 
-  it('writes via setCoverageStatus(projectId, targetFieldId, "rejected")', () => {
+  it('neutralizes the coverage row via neutralizeCoverageForReject (Reject = reset)', () => {
+    // Both reject entry points now land the same neutral grey end state:
+    // the flat-view ✗ neutralizes the coverage row (status →
+    // needs_review, ai_reasoning → null) exactly like the drawer-side
+    // rejectFieldMapping unmapped-target branch — no distinct
+    // `coverage.status='rejected'` (red) row from the flat view.
     expect(REJECT_BODY).toMatch(
-      /setCoverageStatus\(\s*projectId\s*,\s*targetFieldId\s*,\s*['"]rejected['"]/,
+      /neutralizeCoverageForReject\(\s*projectId\s*,\s*targetFieldId\s*,?\s*\)/,
+    )
+    // The branch must NOT persist a `rejected` coverage status.
+    expect(REJECT_BODY).not.toMatch(
+      /setCoverageStatus\([^)]*['"]rejected['"]/,
     )
   })
 
@@ -581,6 +590,22 @@ describe('[flat-view] read translator changes', () => {
   })
 
   it('emits SourceFieldWithState.isRejected from the rejected set', () => {
-    expect(ENGINE_SRC).toMatch(/isRejected:\s*rejectedSourceFieldIds\.has/)
+    // The verdict is bound to a local `const isRejected` so the same
+    // value can both populate the wire field and gate the static-
+    // rationale suppression below.
+    expect(ENGINE_SRC).toMatch(
+      /const isRejected = rejectedSourceFieldIds\.has\(field\.id\)/,
+    )
+    expect(ENGINE_SRC).toMatch(/\n\s*isRejected,/)
+  })
+
+  it('suppresses aiReasoning + confidence for rejected source fields (Reject = reset)', () => {
+    // A rejected source field carries no preserved AI commentary — the
+    // static-config rationale lookup is skipped when isRejected is true.
+    expect(ENGINE_SRC).toMatch(
+      /const rationale = isRejected\s*\n?\s*\?\s*undefined\s*\n?\s*:\s*staticSourceRationale\.get\(field\.id\)/,
+    )
+    expect(ENGINE_SRC).toMatch(/aiReasoning:\s*rationale\?\.explanation\s*\?\?\s*null/)
+    expect(ENGINE_SRC).toMatch(/confidence:\s*rationale\?\.confidence\s*\?\?\s*null/)
   })
 })

@@ -739,6 +739,60 @@ describe('assembleMappingsForRedesign — discriminator cases', () => {
     })
   })
 
+  // ─── Reject = reset — rejected source fields carry no AI commentary ─────
+  //
+  // A `source_field_acknowledgments` row with `decision='rejected'`
+  // suppresses the static-config rationale on the read path: the rejected
+  // source field surfaces with `aiReasoning: null` AND `confidence: null`
+  // regardless of what `staticSourceRationale` holds for it. An
+  // `acknowledged` decision does NOT suppress — only rejection does.
+
+  it('case 13k: a rejected source ack suppresses both aiReasoning and confidence', () => {
+    const rejectedAck: RawSourceAckRow = {
+      id: 'ack-rej',
+      source_field_id: F_S_FIRST.id,
+      reason: '',
+      decision: 'rejected',
+    }
+    const out = assembleMappingsForRedesign(
+      baseInput({
+        sourceAcks: [rejectedAck],
+        staticSourceRationale: new Map([
+          [
+            F_S_FIRST.id,
+            { explanation: 'Static config still has rationale here.', confidence: 91 },
+          ],
+        ]),
+      }),
+    )
+    const first = out.sourceFields.find((f) => f.id === F_S_FIRST.id)!
+    expect(first.isRejected).toBe(true)
+    // Suppressed despite the staticSourceRationale entry above.
+    expect(first.aiReasoning).toBeNull()
+    expect(first.confidence).toBeNull()
+  })
+
+  it('case 13k.2: an acknowledged source ack does NOT suppress the rationale', () => {
+    const acknowledgedAck: RawSourceAckRow = {
+      id: 'ack-acked',
+      source_field_id: F_S_FIRST.id,
+      reason: 'reviewed',
+      decision: 'acknowledged',
+    }
+    const out = assembleMappingsForRedesign(
+      baseInput({
+        sourceAcks: [acknowledgedAck],
+        staticSourceRationale: new Map([
+          [F_S_FIRST.id, { explanation: 'Rationale survives acknowledgment.', confidence: 64 }],
+        ]),
+      }),
+    )
+    const first = out.sourceFields.find((f) => f.id === F_S_FIRST.id)!
+    expect(first.isRejected).toBe(false)
+    expect(first.aiReasoning).toBe('Rationale survives acknowledgment.')
+    expect(first.confidence).toBe(64)
+  })
+
   // ─── Refinement #5a — transformationNeeded wire field ──────────────────
   //
   // `MappingRowBase.transformationNeeded` projects from

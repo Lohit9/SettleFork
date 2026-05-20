@@ -136,13 +136,15 @@ describe('[mappings-for-redesign actions] rejectFieldMapping', () => {
     '\n}\n',
   ) + '\n}\n' // re-attach the closing brace eaten by sliceBetween
 
-  it("routes 'unmapped::' rows to the no-source coverage write path (PR α₀)", () => {
-    // PR α₀ extended reject to accept the synthetic `unmapped::<uuid>`
-    // id format. The action writes target_field_coverage.status='rejected'
-    // — same coverage helper as the approve branch, different status.
+  it("routes 'unmapped::' rows to the no-source coverage neutralize path", () => {
+    // The synthetic `unmapped::<uuid>` id format has no TFM to delete.
+    // Under Reject = reset the branch neutralizes the coverage row
+    // (status → needs_review, ai_reasoning → null) rather than
+    // persisting a distinct `rejected` state.
     expect(body).toMatch(/rowId\.startsWith\(UNMAPPED_ID_PREFIX\)/)
-    expect(body).toContain("setCoverageStatus(")
-    expect(body).toMatch(/['"]rejected['"]/)
+    expect(body).toContain('neutralizeCoverageForReject(')
+    // Reject = reset — the wrapper never persists a `rejected` literal.
+    expect(body).not.toMatch(/['"]rejected['"]/)
   })
 
   it('rejects ids that do not decode to a tfm-primary or tfm-contributor', () => {
@@ -219,22 +221,41 @@ describe('[mappings-for-redesign actions] rejectFieldMapping', () => {
     expect(SRC).toMatch(/alreadyDeleted\?:\s*boolean/)
   })
 
-  it('post-delete write target_field_coverage.status=rejected (PR α₀ — keeps the row read as rejected)', () => {
-    // PR α₀: after a successful TFM delete, the wrapper UPSERTs a
-    // coverage row with status='rejected'. Without this write, the
-    // read translator's resolution-priority falls back to a
-    // synthesized 'needs_review' on next read (no TFM, no coverage
-    // row, orphan target_only case) — and the user's reject click
-    // would not stick.
+  it('post-delete neutralizes the target_field_coverage row (Reject = reset)', () => {
+    // After a successful TFM delete, the wrapper neutralizes any stale
+    // coverage row so a prior `status='approved'` cannot leak through
+    // as a green row on next read. Neutralize ≠ a `rejected` write —
+    // the row returns to `needs_review` with no preserved AI commentary.
     const deleteIdx = body.indexOf('deleteFieldMapping(')
-    const coverageWriteIdx = body.indexOf('setCoverageStatus(', deleteIdx)
+    const coverageWriteIdx = body.indexOf(
+      'neutralizeCoverageForReject(',
+      deleteIdx,
+    )
     expect(coverageWriteIdx).toBeGreaterThan(deleteIdx)
-    // The write uses the TFM lookup's project_id + target_field_id and
-    // 'rejected' as the third arg.
-    const coverageBody = body.slice(coverageWriteIdx, coverageWriteIdx + 500)
+    // The neutralize call keys on the TFM lookup's identity snapshot.
+    const coverageBody = body.slice(coverageWriteIdx, coverageWriteIdx + 200)
     expect(coverageBody).toContain('tfmLookup.project_id')
     expect(coverageBody).toContain('tfmLookup.target_field_id')
-    expect(coverageBody).toMatch(/['"]rejected['"]/)
+  })
+
+  it('no longer upserts a replacement status=rejected TFM', () => {
+    // Reject = reset removed the placeholder-TFM upsert. The wrapper
+    // body must not re-insert a target_field_mappings row, and must
+    // not carry the old `'Rejected by user'` acknowledgment reason.
+    expect(body).not.toContain('Rejected by user')
+    expect(body).not.toMatch(/\.upsert\(/)
+  })
+
+  it('emits an ai_edit_history entry for the mapped → needs_review transition', () => {
+    // The lifecycle edit is logged against the snapshotted (now-deleted)
+    // TFM id — there is no replacement row to point at anymore.
+    const deleteIdx = body.indexOf('deleteFieldMapping(')
+    const aiEditIdx = body.indexOf('logAIEdit(', deleteIdx)
+    expect(aiEditIdx).toBeGreaterThan(deleteIdx)
+    const aiEditBody = body.slice(aiEditIdx, aiEditIdx + 400)
+    expect(aiEditBody).toContain('entityId: tfmLookup.id')
+    expect(aiEditBody).toMatch(/oldValue:\s*['"]mapped['"]/)
+    expect(aiEditBody).toMatch(/newValue:\s*['"]needs_review['"]/)
   })
 })
 
@@ -327,7 +348,7 @@ describe('[mappings-for-redesign actions] PR α₀ no-source helpers', () => {
     expect(noSourceBranch).toContain('revalidatePath(')
   })
 
-  it('reject no-source path: validates id, gates auth, writes coverage, logs activity, revalidates', () => {
+  it('reject no-source path: validates id, gates auth, neutralizes coverage, logs activity, revalidates', () => {
     const rejectBody = sliceBetween(
       SRC,
       'export async function rejectFieldMapping(',
@@ -336,8 +357,7 @@ describe('[mappings-for-redesign actions] PR α₀ no-source helpers', () => {
     expect(rejectBody).toContain('UUID_REGEX.test(')
     expect(rejectBody).toContain('resolveFieldOwnership(')
     expect(rejectBody).toContain('gateNoSourceWrite(')
-    expect(rejectBody).toContain("setCoverageStatus(")
-    expect(rejectBody).toMatch(/['"]rejected['"]/)
+    expect(rejectBody).toContain('neutralizeCoverageForReject(')
     expect(rejectBody).toContain("logActivity(")
     expect(rejectBody).toContain("'mapping_rejected'")
     expect(rejectBody).toContain('revalidatePath(')
@@ -357,6 +377,93 @@ describe('[mappings-for-redesign actions] PR α₀ no-source helpers', () => {
     // unrecoverable.
     expect(SRC).toMatch(/Mapping approved: \[no source\]/)
     expect(SRC).toMatch(/Mapping rejected: \[no source\]/)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────
+// 4b. Reject = reset — neutralizeCoverageForReject helper
+// ─────────────────────────────────────────────────────────────────────
+
+describe('[mappings-for-redesign actions] neutralizeCoverageForReject', () => {
+  const helper = sliceBetween(
+    SRC,
+    'async function neutralizeCoverageForReject(',
+    'async function gateNoSourceWrite(',
+  )
+
+  it('is declared as a helper used by the reject paths', () => {
+    expect(SRC).toMatch(/async function neutralizeCoverageForReject\(/)
+  })
+
+  it('UPDATEs target_field_coverage and never INSERTs (UPDATE-only by design)', () => {
+    // Unlike setCoverageStatus, the reject helper does not synthesize a
+    // coverage row when none exists — an absent row already reads as
+    // needs_review via the translator's orphan fallback.
+    expect(helper).toContain("from('target_field_coverage')")
+    expect(helper).toContain('.update(')
+    expect(helper).not.toContain('.insert(')
+  })
+
+  it('resets status to needs_review with user provenance', () => {
+    expect(helper).toMatch(/status:\s*['"]needs_review['"]/)
+    expect(helper).toMatch(/status_set_by:\s*['"]user['"]/)
+  })
+
+  it('clears ai_reasoning to null (no preserved AI commentary)', () => {
+    expect(helper).toMatch(/ai_reasoning:\s*null/)
+  })
+
+  it('keys the UPDATE on (project_id, target_field_id)', () => {
+    expect(helper).toMatch(/\.eq\(\s*['"]project_id['"]/)
+    expect(helper).toMatch(/\.eq\(\s*['"]target_field_id['"]/)
+  })
+
+  it('is invoked by both the unmapped-target sentinel branch and the TFM-delete branch', () => {
+    const rejectBody =
+      sliceBetween(
+        SRC,
+        'export async function rejectFieldMapping(',
+        '\n}\n',
+      ) + '\n}\n'
+    const calls = rejectBody.match(/neutralizeCoverageForReject\(/g) ?? []
+    expect(calls.length).toBe(2)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────
+// 4c. Reject = reset — unmapped-source reject (setUnmappedRowRejected)
+// ─────────────────────────────────────────────────────────────────────
+
+describe('[mappings-for-redesign actions] unmapped-source reject', () => {
+  // Source-side reject is dispatched by `setUnmappedRowRejected` (the
+  // flat-view path), NOT by `rejectFieldMapping` — a source field has no
+  // TFM id and no `unmapped::` target sentinel to decode. The source
+  // branch is the unmapped-source half of the unified Reject = reset.
+  const sourceBranch = sliceBetween(
+    SRC,
+    '// ── Source branch',
+    '// ─── 5.5 promoteUnmappedSource',
+  )
+
+  it('upserts source_field_acknowledgments with decision=rejected', () => {
+    expect(sourceBranch).toContain("from('source_field_acknowledgments')")
+    expect(sourceBranch).toContain('.upsert(')
+    expect(sourceBranch).toMatch(/decision:\s*['"]rejected['"]/)
+  })
+
+  it('preserves no free-text reason on the rejection row', () => {
+    // Reject = reset carries no commentary — `reason` is written empty.
+    expect(sourceBranch).toMatch(/reason:\s*['"]['"]/)
+  })
+
+  it('upsert conflict target is the (project_id, source_field_id) unique key', () => {
+    expect(sourceBranch).toMatch(/onConflict:\s*['"]project_id,source_field_id['"]/)
+  })
+
+  it('emits a source_field_rejected activity-log entry', () => {
+    // A dedicated action_type — distinct from `mapping_rejected`, which
+    // is reserved for TFM-backed / no-source target rejects.
+    expect(sourceBranch).toContain("'source_field_rejected'")
   })
 })
 

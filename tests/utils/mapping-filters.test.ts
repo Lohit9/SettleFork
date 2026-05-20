@@ -196,7 +196,11 @@ function buildRows(): MappingRow[] {
         name: 'email',
         targetTable: { id: tableB.id, name: tableB.name },
       }),
-      status: 'rejected',
+      // Reject = reset deletes the TFM, so a `kind:'mapped'` row can no
+      // longer carry `status:'rejected'`. The rejected-status fixture
+      // moved to `ack-customers-1` below (a `kind:'unmapped'` row — the
+      // only row kind that still surfaces as rejected post-change).
+      status: 'approved',
     }),
     valueAssignment({
       id: 'va-accounts-1',
@@ -206,8 +210,15 @@ function buildRows(): MappingRow[] {
         targetTable: { id: tableA.id, name: tableA.name },
       }),
     }),
+    // Canonical rejected-status fixture: a `kind:'unmapped'` row with
+    // `status:'rejected'`. Under Reject = reset this is the only shape a
+    // rejected row takes — the redesign's flat-view unmapped-target
+    // reject writes `target_field_coverage.status='rejected'`, which the
+    // translator surfaces as an unmapped row. (In tableB, so tableA
+    // keeps zero rejected rows — see the identity-filter test below.)
     ack({
       id: 'ack-customers-1',
+      status: 'rejected',
       targetField: targetField({
         id: 'tf-ack',
         name: 'legacy_flag',
