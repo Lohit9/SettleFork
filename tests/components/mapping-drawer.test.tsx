@@ -182,38 +182,208 @@ describe('MappingDrawer — closed state', () => {
 
 // ─── Header ─────────────────────────────────────────────────────────────────
 
-describe('MappingDrawer — header', () => {
-  it('renders the target field name as the dialog-labelled title node', () => {
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    const title = screen.getByTestId('mapping-drawer-title')
-    expect(title.textContent).toBe('customer_id')
-    // Drawer redesign — title is an inline span inside the compressed
-    // 2-line header (Q11.J lock); accessible labelling is preserved
-    // via the dialog's `aria-labelledby` attribute pointing at this
-    // element's id.
-    expect(title.tagName).toBe('SPAN')
-    const dialog = screen.getByTestId('mapping-drawer')
-    expect(dialog.getAttribute('aria-labelledby')).toBe(title.id)
-  })
+describe('MappingDrawer — header (feat/mapping-drawer-header-redesign)', () => {
+  // ── Layout: MAPPING label + title row + confidence line + close ──
+  //
+  // feat/mapping-drawer-header-redesign replaces the prior FROM/TO
+  // stack with a compact 3-line header. Editing pencils, remove
+  // buttons, ⊕ Add source, status badge — all retired. The relocations:
+  //   • primary-source swap → flat view source-cell click
+  //   • non-primary-source swap → drawer BODY SOURCE column pencil
+  //   • add source → drawer BODY SOURCE column "+ Add source" button
+  //   • remove one source from multi → drawer BODY ✕ on non-primary
+  //   • target swap → flat view target-cell click
+  //   • whole-TFM removal → flat-view row reject OR drawer body's
+  //     "Remove mapping" link
+  //   • status word/colour → folded into the new confidence line
 
-  it('target field name uses font-mono and font-normal (Refinement 4 — alignment with list view + source side)', () => {
-    // Refinement 4 lock: drawer header source and target field rows
-    // render identically — same font, same weight, same color. The
-    // SOURCE / TARGET small-caps labels carry section emphasis on
-    // their own; bolded field names duplicated that signal and broke
-    // visual parity with the list view (where 4-polish-1 dropped
-    // `font-semibold` from the target cell in the same pass).
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    const title = screen.getByTestId('mapping-drawer-title')
-    expect(title.className).toContain('font-mono')
-    expect(title.className).toContain('font-normal')
-    expect(title.className).not.toContain('font-semibold')
-  })
-
-  it('renders a TableBadge for the target table in the header', () => {
+  it('renders the MAPPING label, title row, and confidence line in order', () => {
     render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
     const header = screen.getByTestId('mapping-drawer-header')
-    expect(within(header).getByText('accounts')).toBeInTheDocument()
+    expect(within(header).getByTestId('mapping-drawer-header-label').textContent).toBe('Mapping')
+    expect(
+      within(header).getByTestId('mapping-drawer-header-title'),
+    ).toBeInTheDocument()
+    expect(
+      within(header).getByTestId('mapping-drawer-header-confidence'),
+    ).toBeInTheDocument()
+  })
+
+  it('mapped single-source title renders source side · target side with the muted arrow between', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    const title = screen.getByTestId('mapping-drawer-header-title')
+    const sourceSide = within(title).getByTestId(
+      'mapping-drawer-header-title-source',
+    )
+    const targetSide = within(title).getByTestId(
+      'mapping-drawer-header-title-target',
+    )
+    expect(sourceSide.textContent).toContain('ACCT_MASTER')
+    expect(sourceSide.textContent).toContain('ACCT_NO')
+    expect(targetSide.textContent).toContain('accounts')
+    expect(targetSide.textContent).toContain('customer_id')
+    // Title row carries the arrow glyph between source and target.
+    expect(title.textContent).toContain('→')
+    // No multi-source pill on single-source rows.
+    expect(
+      within(title).queryByTestId('mapping-drawer-header-multi-source-pill'),
+    ).toBeNull()
+  })
+
+  it('mapped multi-source title shows primary source + "+ N source" pill before the arrow', () => {
+    render(
+      <MappingDrawer
+        row={mapped({
+          sources: [
+            source({
+              id: 'ms-a',
+              ordinal: 0,
+              sourceField: {
+                id: 'sf-a',
+                name: 'field_a',
+                dataType: 'TEXT',
+                isNullable: false,
+              },
+              sourceTable: { id: 'st-a', name: 'TBL_A' },
+            }),
+            source({
+              id: 'ms-b',
+              ordinal: 1,
+              sourceField: {
+                id: 'sf-b',
+                name: 'field_b',
+                dataType: 'TEXT',
+                isNullable: false,
+              },
+              sourceTable: { id: 'st-b', name: 'TBL_B' },
+            }),
+            source({
+              id: 'ms-c',
+              ordinal: 2,
+              sourceField: {
+                id: 'sf-c',
+                name: 'field_c',
+                dataType: 'TEXT',
+                isNullable: false,
+              },
+              sourceTable: { id: 'st-c', name: 'TBL_C' },
+            }),
+          ],
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const sourceSide = screen.getByTestId('mapping-drawer-header-title-source')
+    expect(sourceSide.textContent).toContain('TBL_A')
+    expect(sourceSide.textContent).toContain('field_a')
+    // Non-primary sources do NOT appear in the header title — only the pill.
+    expect(sourceSide.textContent).not.toContain('field_b')
+    expect(sourceSide.textContent).not.toContain('field_c')
+    const pill = screen.getByTestId('mapping-drawer-header-multi-source-pill')
+    // Singular "source" per mockup convention; count = sourceCount - 1.
+    expect(pill.textContent).toContain('+ 2 source')
+    expect(pill.getAttribute('data-source-count')).toBe('3')
+  })
+
+  it('unmapped-target title shows target side only (no arrow, no source side)', () => {
+    render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
+    const title = screen.getByTestId('mapping-drawer-header-title')
+    expect(
+      within(title).queryByTestId('mapping-drawer-header-title-source'),
+    ).toBeNull()
+    const targetSide = within(title).getByTestId(
+      'mapping-drawer-header-title-target',
+    )
+    // Default `unmapped()` fixture: tf-4 / missing_field on table `accounts`.
+    expect(targetSide.textContent).toContain('accounts')
+    expect(targetSide.textContent).toContain('missing_field')
+    expect(title.textContent).not.toContain('→')
+  })
+
+  it('value-assignment title shows "Value assignment" italic on the source side + target side after the arrow', () => {
+    render(
+      <MappingDrawer row={valueAssignment()} isOpen={true} onClose={() => {}} />,
+    )
+    const title = screen.getByTestId('mapping-drawer-header-title')
+    const sourceSide = within(title).getByTestId(
+      'mapping-drawer-header-title-source',
+    )
+    expect(sourceSide.textContent).toBe('Value assignment')
+    expect(sourceSide.className).toContain('italic')
+    expect(title.textContent).toContain('→')
+    const targetSide = within(title).getByTestId(
+      'mapping-drawer-header-title-target',
+    )
+    expect(targetSide.textContent).toContain('created_at')
+  })
+
+  it('confidence line renders dot + pct + status-derived label for an approved mapped row', () => {
+    render(
+      <MappingDrawer
+        row={mapped({ status: 'approved', confidence: 98 })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const line = screen.getByTestId('mapping-drawer-header-confidence')
+    expect(line.getAttribute('data-status')).toBe('approved')
+    const dot = within(line).getByTestId('mapping-drawer-header-confidence-dot')
+    expect(dot.className).toContain('bg-emerald-500')
+    const text = within(line).getByTestId('mapping-drawer-header-confidence-text')
+    // formatConfidencePercent rounds to integer per Phase 4-polish-1 Refinement H.
+    expect(text.textContent).toContain('98%')
+    expect(text.textContent).toContain('confidence')
+  })
+
+  it('confidence line renders the status label for needs_review and rejected rows', () => {
+    const { rerender } = render(
+      <MappingDrawer
+        row={mapped({ status: 'needs_review', confidence: 54 })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    let line = screen.getByTestId('mapping-drawer-header-confidence')
+    expect(line.getAttribute('data-status')).toBe('needs_review')
+    expect(
+      within(line).getByTestId('mapping-drawer-header-confidence-dot').className,
+    ).toContain('bg-slate-400')
+    expect(
+      within(line).getByTestId('mapping-drawer-header-confidence-text').textContent,
+    ).toContain('needs review')
+
+    rerender(
+      <MappingDrawer
+        row={mapped({ status: 'rejected', confidence: 80 })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    line = screen.getByTestId('mapping-drawer-header-confidence')
+    expect(line.getAttribute('data-status')).toBe('rejected')
+    expect(
+      within(line).getByTestId('mapping-drawer-header-confidence-dot').className,
+    ).toContain('bg-red-500')
+    expect(
+      within(line).getByTestId('mapping-drawer-header-confidence-text').textContent,
+    ).toContain('rejected')
+  })
+
+  it('confidence line omits the percentage when row.confidence is null (unmapped / null-confidence VA)', () => {
+    render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
+    const text = screen.getByTestId('mapping-drawer-header-confidence-text')
+    // No percent sign should appear; just the status label.
+    expect(text.textContent).not.toContain('%')
+  })
+
+  it('dialog aria-labelledby points at the new header title element id', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    const drawer = screen.getByTestId('mapping-drawer')
+    const ariaLabelledBy = drawer.getAttribute('aria-labelledby')
+    expect(ariaLabelledBy).toBeTruthy()
+    const title = screen.getByTestId('mapping-drawer-header-title')
+    expect(title.id).toBe(ariaLabelledBy)
   })
 
   it('exposes a close button with aria-label="Close drawer"', () => {
@@ -229,921 +399,51 @@ describe('MappingDrawer — header', () => {
     await user.click(screen.getByTestId('mapping-drawer-close'))
     expect(onClose).toHaveBeenCalledTimes(1)
   })
-})
 
-// ─── Header — PR 1 redesign (FROM/TO vertical stack) ──────────────────────
-//
-// Drawer redesign PR 1 (feat/drawer-header-rewrite): the header is a
-// vertical FROM/TO stack so long field names render in full at the
-// 480px drawer width. Layout:
-//
-//   FROM                                         ✕
-//   [src_tbl] src_field ✏  (or "+N more" for multi)
-//
-//   TO
-//   [tgt_tbl] tgt_field ✏
-//                         ● Status · confidence
-//
-// Source-side renders source identity for mapped rows, italic
-// "Value assignment" for VA, italic "No source mapped" for
-// unmapped. Multi-source mapped rows show dominant source + `+N`
-// chip with NO source pencil (per-source editing is PR 2's
-// responsibility). Status + confidence sit on their own meta row,
-// right-aligned, below the TO block.
-
-describe('MappingDrawer — PR 1 header (FROM/TO stack)', () => {
-  it('renders target identity (table badge + field name) below the TO label', () => {
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    const tgt = screen.getByTestId('mapping-drawer-header-target')
-    expect(within(tgt).getByText('accounts')).toBeInTheDocument()
-    expect(within(tgt).getByTestId('mapping-drawer-title').textContent).toBe(
-      'customer_id',
-    )
-  })
-
-  it('target field renders at font-mono text-base font-normal text-slate-900', () => {
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    const title = screen.getByTestId('mapping-drawer-title')
-    expect(title.className).toContain('font-mono')
-    expect(title.className).toContain('text-base')
-    expect(title.className).toContain('font-normal')
-    expect(title.className).toContain('text-slate-900')
-    expect(title.className).not.toContain('font-semibold')
-  })
-
-  it('renders one source row (table badge + field name) below FROM for single-source mapped', () => {
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    const src = screen.getByTestId('mapping-drawer-header-source')
-    const rows = within(src).getAllByTestId('mapping-drawer-header-source-row')
-    expect(rows).toHaveLength(1)
-    expect(within(rows[0]!).getByText('ACCT_MASTER')).toBeInTheDocument()
-    expect(
-      within(rows[0]!).getByTestId('mapping-drawer-header-source-field').textContent,
-    ).toBe('ACCT_NO')
-  })
-
-  it('stacks ALL source rows vertically for multi-source mapped (NO +N chip, NO source pencil)', () => {
+  it('no editing affordances render in the header (regression guard)', () => {
+    // The retired affordances must not reappear: per-source pencils,
+    // per-source removes, ⊕ Add source, target ✏ / ✕, status badge.
     render(
       <MappingDrawer
         row={mapped({
-          sources: [
-            cifSource(0, 'FNAME'),
-            cifSource(1, 'LNAME'),
-            cifSource(2, 'MI'),
-          ],
+          sources: [source({ id: 'ms-a' }), source({ id: 'ms-b' })],
         })}
         isOpen={true}
-        onClose={() => {}}
+        onClose={vi.fn()}
+        onSwapSource={vi.fn()}
+        onSwapTarget={vi.fn()}
+        onEditSources={vi.fn()}
+        onUnmapMapping={vi.fn()}
+        onCreateMapping={vi.fn()}
+        onNavigateTarget={vi.fn()}
       />,
     )
-    const src = screen.getByTestId('mapping-drawer-header-source')
-    const rows = within(src).getAllByTestId('mapping-drawer-header-source-row')
-    expect(rows).toHaveLength(3)
-    // Server ordinal-asc ordering preserved verbatim (no client sort).
-    expect(rows.map((r) => r.getAttribute('data-ordinal'))).toEqual([
-      '0',
-      '1',
-      '2',
-    ])
-    // Each row carries badge + mono field name.
-    const fieldNames = within(src)
-      .getAllByTestId('mapping-drawer-header-source-field')
-      .map((el) => el.textContent)
-    expect(fieldNames).toEqual(['FNAME', 'LNAME', 'MI'])
-    // PR 1 multi-source amendment: the legacy "+N" chip is gone — the
-    // stacked rows themselves carry the plurality cue.
-    expect(
-      within(src).queryByTestId('mapping-drawer-header-sources-chip'),
-    ).toBeNull()
-    // No commit handlers threaded in this fixture → SourceRow gates
-    // both affordances off (editEnabled=false, removeEnabled=false).
-    // The PR-2 handler-present case is covered separately below.
-    expect(
-      within(src).queryByTestId('mapping-drawer-header-source-pencil'),
-    ).toBeNull()
-    expect(
-      within(src).queryByTestId('mapping-drawer-header-source-remove'),
-    ).toBeNull()
-  })
-
-  it('source wrapper uses flex-col so multi-source rows stack vertically', () => {
-    render(
-      <MappingDrawer
-        row={mapped({
-          sources: [cifSource(0, 'FNAME'), cifSource(1, 'LNAME')],
-        })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    const src = screen.getByTestId('mapping-drawer-header-source')
-    expect(src.className).toContain('flex-col')
-  })
-
-  it('renders "Value assignment" italic label below FROM for VA rows', () => {
-    render(
-      <MappingDrawer row={valueAssignment()} isOpen={true} onClose={() => {}} />,
-    )
-    const src = screen.getByTestId('mapping-drawer-header-source')
-    const label = within(src).getByTestId('mapping-drawer-header-source-label')
-    expect(label.textContent).toBe('Value assignment')
-    expect(label.className).toContain('italic')
-    expect(label.getAttribute('data-variant')).toBe('value-assignment')
-    // VAs have no source side to edit.
-    expect(
-      within(src).queryByTestId('mapping-drawer-header-source-pencil'),
-    ).toBeNull()
-  })
-
-  it('renders "No source mapped" italic label below FROM for unmapped rows', () => {
-    render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
-    const src = screen.getByTestId('mapping-drawer-header-source')
-    const label = within(src).getByTestId('mapping-drawer-header-source-label')
-    expect(label.textContent).toBe('No source mapped')
-    expect(label.className).toContain('italic')
-    expect(label.getAttribute('data-variant')).toBe('unmapped')
-  })
-
-  it('renders FROM and TO labels in uppercase tracking style', () => {
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    for (const labelId of [
-      'mapping-drawer-header-from-label',
-      'mapping-drawer-header-to-label',
-    ]) {
-      const label = screen.getByTestId(labelId)
-      expect(label.className).toContain('uppercase')
-      expect(label.className).toContain('tracking-wide')
-      expect(label.className).toContain('text-slate-500')
-    }
-    expect(
-      screen.getByTestId('mapping-drawer-header-from-label').textContent,
-    ).toBe('FROM')
-    expect(
-      screen.getByTestId('mapping-drawer-header-to-label').textContent,
-    ).toBe('TO')
-  })
-
-  it('DOM order is FROM → source identity → TO → target identity → meta', () => {
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    const fromLabel = screen.getByTestId('mapping-drawer-header-from-label')
-    const source = screen.getByTestId('mapping-drawer-header-source')
-    const toLabel = screen.getByTestId('mapping-drawer-header-to-label')
-    const target = screen.getByTestId('mapping-drawer-header-target')
-    const meta = screen.getByTestId('mapping-drawer-header-meta')
-    // `compareDocumentPosition(other) & 4 === 4` means `other` follows.
-    expect(fromLabel.compareDocumentPosition(source) & 4).toBe(4)
-    expect(source.compareDocumentPosition(toLabel) & 4).toBe(4)
-    expect(toLabel.compareDocumentPosition(target) & 4).toBe(4)
-    expect(target.compareDocumentPosition(meta) & 4).toBe(4)
-  })
-
-  it('legacy "arrow between source and target" affordance is gone (regression guard)', () => {
-    // PR 1: the horizontal layout's `mapping-drawer-header-arrow` icon
-    // was retired with the FROM/TO vertical stack — the labels carry
-    // the semantic, no arrow needed.
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    expect(screen.queryByTestId('mapping-drawer-header-arrow')).toBeNull()
-  })
-
-  it('meta row renders the status badge right-aligned (justify-end)', () => {
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    const meta = screen.getByTestId('mapping-drawer-header-meta')
-    expect(meta.className).toContain('justify-end')
-    expect(
-      within(meta).getByTestId('mapping-drawer-header-status-badge'),
-    ).toBeInTheDocument()
-  })
-
-  it('meta row status badge renders dot + sentence-case word + confidence percent', () => {
-    render(
-      <MappingDrawer
-        row={mapped({ status: 'needs_review', confidence: 88 })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    const badge = screen.getByTestId('mapping-drawer-header-status-badge')
-    expect(
-      within(badge).getByTestId('mapping-drawer-header-status-needs_review'),
-    ).toBeInTheDocument()
-    const word = within(badge).getByTestId('mapping-drawer-header-status-word')
-    expect(word.textContent).toBe('Needs review')
-    expect(word.className).toContain('text-slate-700')
-    const confidence = within(badge).getByTestId(
-      'mapping-drawer-header-confidence',
-    )
-    expect(confidence.textContent).toMatch(/88%/)
-  })
-
-  it('meta row confidence renders em-dash when row.confidence is null (VA / unmapped)', () => {
-    render(<MappingDrawer row={targetAck()} isOpen={true} onClose={() => {}} />)
-    const badge = screen.getByTestId('mapping-drawer-header-status-badge')
-    expect(
-      within(badge).getByTestId('mapping-drawer-header-confidence').textContent,
-    ).toBe('—')
-    expect(badge.textContent).not.toMatch(/\d+%/)
-  })
-
-  it('meta row status badge surfaces matched-hue className for each status variant', () => {
-    for (const [row, variant, label, hueClass] of [
-      [mapped({ status: 'approved' }), 'approved', 'Approved', 'text-green-700'] as const,
-      [
-        mapped({ status: 'needs_review' }),
-        'needs_review',
-        'Needs review',
-        'text-slate-700',
-      ] as const,
-      [mapped({ status: 'rejected' }), 'rejected', 'Rejected', 'text-red-700'] as const,
-      [targetAck(), 'approved', 'Approved', 'text-green-700'] as const,
-    ]) {
-      const { unmount } = render(
-        <MappingDrawer row={row} isOpen={true} onClose={() => {}} />,
-      )
-      const dot = screen.getByTestId(`mapping-drawer-header-status-${variant}`)
-      expect(dot.getAttribute('title')).toBe(label)
-      expect(dot.getAttribute('aria-label')).toBe(label)
-      const word = screen.getByTestId('mapping-drawer-header-status-word')
-      expect(word.textContent).toBe(label)
-      expect(word.className).toContain(hueClass)
-      unmount()
-    }
-  })
-
-  it('header is NOT sticky (scrolls with body content)', () => {
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
     const header = screen.getByTestId('mapping-drawer-header')
-    expect(header.className).not.toContain('sticky')
-    expect(header.className).not.toContain('top-0')
-  })
-
-  it('close button shares the FROM label row (top-right) and precedes the rest in DOM order', () => {
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    const headerRow = screen.getByTestId('mapping-drawer-header-row')
-    const fromLabel = screen.getByTestId('mapping-drawer-header-from-label')
-    const close = screen.getByTestId('mapping-drawer-close')
-    const target = screen.getByTestId('mapping-drawer-header-target')
-    expect(headerRow.contains(fromLabel)).toBe(true)
-    expect(headerRow.contains(close)).toBe(true)
-    // Close is on the top row, so it precedes the target identity
-    // block which sits below the TO label.
-    expect(close.compareDocumentPosition(target) & 4).toBe(4)
-  })
-
-  it('does NOT render legacy subheader testids (regression guard)', () => {
-    for (const row of [
-      mapped(),
-      valueAssignment(),
-      targetAck(),
-      unmapped(),
-    ]) {
-      const { unmount } = render(
-        <MappingDrawer row={row} isOpen={true} onClose={() => {}} />,
-      )
-      expect(screen.queryByTestId('mapping-drawer-subheader-rule_1')).toBeNull()
-      expect(screen.queryByTestId('mapping-drawer-subheader-ack')).toBeNull()
-      expect(screen.queryByTestId('mapping-drawer-subheader-va')).toBeNull()
-      expect(screen.queryByTestId('mapping-drawer-subheader-unmapped')).toBeNull()
-      unmount()
-    }
+    // No per-source pencils / removes anywhere in the header.
+    expect(
+      within(header).queryByLabelText(/edit source/i),
+    ).toBeNull()
+    expect(
+      within(header).queryByLabelText(/remove source/i),
+    ).toBeNull()
+    // No add-source button.
+    expect(
+      within(header).queryByLabelText(/add source/i),
+    ).toBeNull()
+    // No target pencil or target ✕.
+    expect(
+      within(header).queryByLabelText(/edit target/i),
+    ).toBeNull()
+    expect(
+      within(header).queryByLabelText(/unmap target/i),
+    ).toBeNull()
+    // No legacy status badge testid.
+    expect(
+      within(header).queryByTestId('mapping-drawer-header-status-badge'),
+    ).toBeNull()
   })
 })
 
-// ─── Header — inline edit affordances (PR 1) ──────────────────────────────
-//
-// Pencils are gated on (a) the parent threading commit handlers AND
-// (b) the variant rules — single-source mapped + every mapped/VA
-// target. Multi-source mapped rows + unmapped rows do NOT surface a
-// source-side pencil (PR 2 covers per-card editing). When the parent
-// threads handlers, clicking the pencil opens the matching portal
-// picker (`inline-source-picker` / `target-field-cell-picker`).
-
-describe('MappingDrawer — PR 1 header inline edit pencils', () => {
-  const sf: SourceFieldWithState = {
-    id: 'sf-other',
-    name: 'OTHER_ACCT_NO',
-    dataType: 'NUMBER',
-    ordinalPosition: 0,
-    sourceTable: { id: 'st-1', name: 'ACCT_MASTER' },
-    mappingStatus: 'unmapped',
-    sampleValues: [],
-    isAcknowledged: false,
-    isRejected: false,
-  }
-  const tf: TargetFieldRef = targetField({ id: 'tf-other', name: 'other_id' })
-
-  it('renders target pencil for single-source mapped when handlers are threaded', () => {
-    render(
-      <MappingDrawer
-        row={mapped()}
-        isOpen={true}
-        onClose={() => {}}
-        availableTargetFields={[tf, mapped().targetField]}
-        availableSourceFields={[sf]}
-        onSwapTarget={vi.fn().mockResolvedValue({ success: true })}
-        onSwapSource={vi.fn().mockResolvedValue({ success: true })}
-      />,
-    )
-    expect(
-      screen.getByTestId('mapping-drawer-header-target-pencil'),
-    ).toBeInTheDocument()
-    expect(
-      screen.getByTestId('mapping-drawer-header-source-pencil'),
-    ).toBeInTheDocument()
-  })
-
-  it('renders target pencil + per-source pencils for multi-source mapped (PR 2)', () => {
-    // PR 2 reverses the PR 1 lock that multi-source was read-only.
-    // Every source row in the FROM stack now carries its own ✏
-    // pencil — addressable via `within(row).getByTestId(...)` since
-    // there are N pencils, one per row.
-    render(
-      <MappingDrawer
-        row={mapped({
-          sources: [
-            cifSource(0, 'FNAME'),
-            cifSource(1, 'LNAME'),
-          ],
-        })}
-        isOpen={true}
-        onClose={() => {}}
-        availableTargetFields={[tf, mapped().targetField]}
-        availableSourceFields={[sf]}
-        onSwapTarget={vi.fn().mockResolvedValue({ success: true })}
-        onSwapSource={vi.fn().mockResolvedValue({ success: true })}
-        onEditSources={vi.fn().mockResolvedValue({ success: true })}
-      />,
-    )
-    expect(
-      screen.getByTestId('mapping-drawer-header-target-pencil'),
-    ).toBeInTheDocument()
-    const pencils = screen.getAllByTestId(
-      'mapping-drawer-header-source-pencil',
-    )
-    expect(pencils).toHaveLength(2)
-  })
-
-  it('renders target pencil for VA rows (no source pencil)', () => {
-    render(
-      <MappingDrawer
-        row={valueAssignment()}
-        isOpen={true}
-        onClose={() => {}}
-        availableTargetFields={[tf, valueAssignment().targetField]}
-        availableSourceFields={[sf]}
-        onSwapTarget={vi.fn().mockResolvedValue({ success: true })}
-      />,
-    )
-    expect(
-      screen.getByTestId('mapping-drawer-header-target-pencil'),
-    ).toBeInTheDocument()
-    expect(
-      screen.queryByTestId('mapping-drawer-header-source-pencil'),
-    ).toBeNull()
-  })
-
-  it('does NOT render target pencil for unmapped rows (PR 2 territory)', () => {
-    render(
-      <MappingDrawer
-        row={unmapped()}
-        isOpen={true}
-        onClose={() => {}}
-        availableTargetFields={[tf, unmapped().targetField]}
-        availableSourceFields={[sf]}
-        onSwapTarget={vi.fn().mockResolvedValue({ success: true })}
-        onSwapSource={vi.fn().mockResolvedValue({ success: true })}
-      />,
-    )
-    expect(
-      screen.queryByTestId('mapping-drawer-header-target-pencil'),
-    ).toBeNull()
-    expect(
-      screen.queryByTestId('mapping-drawer-header-source-pencil'),
-    ).toBeNull()
-  })
-
-  it('omits both pencils when commit handlers are not threaded (standalone test mount)', () => {
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    expect(
-      screen.queryByTestId('mapping-drawer-header-target-pencil'),
-    ).toBeNull()
-    expect(
-      screen.queryByTestId('mapping-drawer-header-source-pencil'),
-    ).toBeNull()
-  })
-
-  it('clicking the target pencil opens the TargetFieldCellPicker portal', async () => {
-    const user = userEvent.setup()
-    render(
-      <MappingDrawer
-        row={mapped()}
-        isOpen={true}
-        onClose={() => {}}
-        availableTargetFields={[tf, mapped().targetField]}
-        availableSourceFields={[sf]}
-        onSwapTarget={vi.fn().mockResolvedValue({ success: true })}
-        onSwapSource={vi.fn().mockResolvedValue({ success: true })}
-      />,
-    )
-    await user.click(screen.getByTestId('mapping-drawer-header-target-pencil'))
-    expect(
-      screen.getByTestId('target-field-cell-picker'),
-    ).toBeInTheDocument()
-  })
-
-  it('clicking the source pencil (single-source mapped) opens the InlineSourcePicker portal', async () => {
-    const user = userEvent.setup()
-    render(
-      <MappingDrawer
-        row={mapped()}
-        isOpen={true}
-        onClose={() => {}}
-        availableTargetFields={[tf, mapped().targetField]}
-        availableSourceFields={[sf]}
-        onSwapTarget={vi.fn().mockResolvedValue({ success: true })}
-        onSwapSource={vi.fn().mockResolvedValue({ success: true })}
-      />,
-    )
-    await user.click(screen.getByTestId('mapping-drawer-header-source-pencil'))
-    expect(screen.getByTestId('inline-source-picker')).toBeInTheDocument()
-  })
-})
-
-// ─── PR 2 — per-source ✏ + ✕ affordances on multi-source rows ─────────────
-//
-// Drawer redesign PR 2 TASK 1: every source row in the multi-source FROM
-// stack gets its own ✏ pencil (→ `InlineSourcePicker` →
-// `updateMappingSourceField` with a `<tfmId>::<mappingSourceId>` shimmed
-// contributor id) and its own ✕ remove (→ `RejectConfirmPopover` with
-// "Remove this source from the mapping?" copy → `editMappingSources`
-// with the source filtered out). The ✕ is hidden when sources.length=1.
-
-describe('MappingDrawer — PR 2 per-source affordances (multi-source)', () => {
-  const sf: SourceFieldWithState = {
-    id: 'sf-other',
-    name: 'OTHER_ACCT_NO',
-    dataType: 'NUMBER',
-    ordinalPosition: 0,
-    sourceTable: { id: 'st-1', name: 'ACCT_MASTER' },
-    mappingStatus: 'unmapped',
-    sampleValues: [],
-    isAcknowledged: false,
-    isRejected: false,
-  }
-  const tf: TargetFieldRef = targetField({ id: 'tf-other', name: 'other_id' })
-
-  function multiSourceRow(overrides: Partial<MappedRow> = {}): MappedRow {
-    return mapped({
-      sources: [
-        cifSource(0, 'FNAME'),
-        cifSource(1, 'LNAME'),
-        cifSource(2, 'MI'),
-      ],
-      combinationType: 'concat_space',
-      ...overrides,
-    })
-  }
-
-  it('renders one ✕ remove per source row when sources.length > 1', () => {
-    render(
-      <MappingDrawer
-        row={multiSourceRow()}
-        isOpen={true}
-        onClose={() => {}}
-        availableTargetFields={[tf, multiSourceRow().targetField]}
-        availableSourceFields={[sf]}
-        onSwapTarget={vi.fn().mockResolvedValue({ success: true })}
-        onSwapSource={vi.fn().mockResolvedValue({ success: true })}
-        onEditSources={vi.fn().mockResolvedValue({ success: true })}
-      />,
-    )
-    const removes = screen.getAllByTestId(
-      'mapping-drawer-header-source-remove',
-    )
-    expect(removes).toHaveLength(3)
-  })
-
-  it('does NOT render ✕ remove on single-source rows when onUnmapMapping is absent', () => {
-    // PR 2 TASK 1.6: the single-source ✕ "Remove mapping" flow uses
-    // `onUnmapMapping` (NOT `onEditSources`, which rejects empty
-    // source lists). When the parent threads only `onEditSources`,
-    // single-source ✕ stays gated off — no surface for an unmappable
-    // action.
-    render(
-      <MappingDrawer
-        row={mapped()}
-        isOpen={true}
-        onClose={() => {}}
-        availableTargetFields={[tf, mapped().targetField]}
-        availableSourceFields={[sf]}
-        onSwapTarget={vi.fn().mockResolvedValue({ success: true })}
-        onSwapSource={vi.fn().mockResolvedValue({ success: true })}
-        onEditSources={vi.fn().mockResolvedValue({ success: true })}
-      />,
-    )
-    expect(
-      screen.queryByTestId('mapping-drawer-header-source-remove'),
-    ).toBeNull()
-  })
-
-  it('renders ✕ remove on single-source rows when onUnmapMapping is threaded (PR 2 TASK 1.6)', () => {
-    render(
-      <MappingDrawer
-        row={mapped()}
-        isOpen={true}
-        onClose={() => {}}
-        availableTargetFields={[tf, mapped().targetField]}
-        availableSourceFields={[sf]}
-        onSwapTarget={vi.fn().mockResolvedValue({ success: true })}
-        onSwapSource={vi.fn().mockResolvedValue({ success: true })}
-        onEditSources={vi.fn().mockResolvedValue({ success: true })}
-        onUnmapMapping={vi.fn().mockResolvedValue({ success: true })}
-      />,
-    )
-    expect(
-      screen.getByTestId('mapping-drawer-header-source-remove'),
-    ).toBeInTheDocument()
-  })
-
-  it('single-source ✕ opens popover with "Remove mapping" copy', async () => {
-    const user = userEvent.setup()
-    render(
-      <MappingDrawer
-        row={mapped()}
-        isOpen={true}
-        onClose={() => {}}
-        availableTargetFields={[tf, mapped().targetField]}
-        availableSourceFields={[sf]}
-        onSwapTarget={vi.fn().mockResolvedValue({ success: true })}
-        onSwapSource={vi.fn().mockResolvedValue({ success: true })}
-        onEditSources={vi.fn().mockResolvedValue({ success: true })}
-        onUnmapMapping={vi.fn().mockResolvedValue({ success: true })}
-      />,
-    )
-    await user.click(screen.getByTestId('mapping-drawer-header-source-remove'))
-    const popover = screen.getByTestId('reject-confirm-popover')
-    expect(popover.textContent).toContain(
-      'Remove this mapping? The target field will be unmapped.',
-    )
-    expect(
-      screen.getByTestId('reject-confirm-popover-confirm').textContent,
-    ).toBe('Remove mapping')
-  })
-
-  it('confirming a single-source ✕ calls onUnmapMapping with (tfmId, targetFieldId)', async () => {
-    const user = userEvent.setup()
-    const onUnmapMapping = vi.fn().mockResolvedValue({ success: true })
-    render(
-      <MappingDrawer
-        row={mapped()}
-        isOpen={true}
-        onClose={() => {}}
-        availableTargetFields={[tf, mapped().targetField]}
-        availableSourceFields={[sf]}
-        onSwapTarget={vi.fn().mockResolvedValue({ success: true })}
-        onSwapSource={vi.fn().mockResolvedValue({ success: true })}
-        onEditSources={vi.fn().mockResolvedValue({ success: true })}
-        onUnmapMapping={onUnmapMapping}
-      />,
-    )
-    await user.click(screen.getByTestId('mapping-drawer-header-source-remove'))
-    await user.click(screen.getByTestId('reject-confirm-popover-confirm'))
-    expect(onUnmapMapping).toHaveBeenCalledTimes(1)
-    expect(onUnmapMapping).toHaveBeenCalledWith('tfm-1', 'tf-1')
-  })
-
-  it('clicking a per-source ✏ pencil opens InlineSourcePicker', async () => {
-    const user = userEvent.setup()
-    render(
-      <MappingDrawer
-        row={multiSourceRow()}
-        isOpen={true}
-        onClose={() => {}}
-        availableTargetFields={[tf, multiSourceRow().targetField]}
-        availableSourceFields={[sf]}
-        onSwapTarget={vi.fn().mockResolvedValue({ success: true })}
-        onSwapSource={vi.fn().mockResolvedValue({ success: true })}
-        onEditSources={vi.fn().mockResolvedValue({ success: true })}
-      />,
-    )
-    const pencils = screen.getAllByTestId(
-      'mapping-drawer-header-source-pencil',
-    )
-    await user.click(pencils[1]!) // middle source row (LNAME)
-    expect(screen.getByTestId('inline-source-picker')).toBeInTheDocument()
-  })
-
-  it('clicking a per-source ✕ opens RejectConfirmPopover with "Remove" copy', async () => {
-    const user = userEvent.setup()
-    render(
-      <MappingDrawer
-        row={multiSourceRow()}
-        isOpen={true}
-        onClose={() => {}}
-        availableTargetFields={[tf, multiSourceRow().targetField]}
-        availableSourceFields={[sf]}
-        onSwapTarget={vi.fn().mockResolvedValue({ success: true })}
-        onSwapSource={vi.fn().mockResolvedValue({ success: true })}
-        onEditSources={vi.fn().mockResolvedValue({ success: true })}
-      />,
-    )
-    const removes = screen.getAllByTestId(
-      'mapping-drawer-header-source-remove',
-    )
-    await user.click(removes[0]!)
-    const popover = screen.getByTestId('reject-confirm-popover')
-    expect(popover).toBeInTheDocument()
-    expect(popover.textContent).toContain('Remove this source from the mapping?')
-    expect(
-      screen.getByTestId('reject-confirm-popover-confirm').textContent,
-    ).toBe('Remove')
-  })
-
-  it('confirming a per-source ✕ calls onEditSources with the source filtered out (combinationType preserved when ≥ 2 remain)', async () => {
-    const user = userEvent.setup()
-    const onEditSources = vi.fn().mockResolvedValue({ success: true })
-    render(
-      <MappingDrawer
-        row={multiSourceRow({ combinationType: 'concat_comma' })}
-        isOpen={true}
-        onClose={() => {}}
-        availableTargetFields={[tf, multiSourceRow().targetField]}
-        availableSourceFields={[sf]}
-        onSwapTarget={vi.fn().mockResolvedValue({ success: true })}
-        onSwapSource={vi.fn().mockResolvedValue({ success: true })}
-        onEditSources={onEditSources}
-      />,
-    )
-    const removes = screen.getAllByTestId(
-      'mapping-drawer-header-source-remove',
-    )
-    // Remove the middle source (LNAME, sf-LNAME). 3 → 2 sources remain.
-    await user.click(removes[1]!)
-    await user.click(screen.getByTestId('reject-confirm-popover-confirm'))
-    expect(onEditSources).toHaveBeenCalledTimes(1)
-    expect(onEditSources).toHaveBeenCalledWith({
-      tfmId: 'tfm-1',
-      // FNAME + MI remaining, in server ordinal order.
-      sourceFieldIds: ['sf-FNAME', 'sf-MI'],
-      // Existing concat_comma preserved when remaining count >= 2.
-      combinationType: 'concat_comma',
-    })
-  })
-
-  it('confirming a per-source ✕ collapses combinationType to "single" when remove leaves exactly 1 source', async () => {
-    const user = userEvent.setup()
-    const onEditSources = vi.fn().mockResolvedValue({ success: true })
-    render(
-      <MappingDrawer
-        row={mapped({
-          sources: [cifSource(0, 'FNAME'), cifSource(1, 'LNAME')],
-          combinationType: 'concat_space',
-        })}
-        isOpen={true}
-        onClose={() => {}}
-        availableTargetFields={[tf, mapped().targetField]}
-        availableSourceFields={[sf]}
-        onSwapTarget={vi.fn().mockResolvedValue({ success: true })}
-        onSwapSource={vi.fn().mockResolvedValue({ success: true })}
-        onEditSources={onEditSources}
-      />,
-    )
-    const removes = screen.getAllByTestId(
-      'mapping-drawer-header-source-remove',
-    )
-    await user.click(removes[1]!) // remove LNAME → FNAME remains
-    await user.click(screen.getByTestId('reject-confirm-popover-confirm'))
-    expect(onEditSources).toHaveBeenCalledWith({
-      tfmId: 'tfm-1',
-      sourceFieldIds: ['sf-FNAME'],
-      combinationType: 'single',
-    })
-  })
-
-  it('cancelling a per-source ✕ popover does NOT call onEditSources', async () => {
-    const user = userEvent.setup()
-    const onEditSources = vi.fn().mockResolvedValue({ success: true })
-    render(
-      <MappingDrawer
-        row={multiSourceRow()}
-        isOpen={true}
-        onClose={() => {}}
-        availableTargetFields={[tf, multiSourceRow().targetField]}
-        availableSourceFields={[sf]}
-        onSwapTarget={vi.fn().mockResolvedValue({ success: true })}
-        onSwapSource={vi.fn().mockResolvedValue({ success: true })}
-        onEditSources={onEditSources}
-      />,
-    )
-    const removes = screen.getAllByTestId(
-      'mapping-drawer-header-source-remove',
-    )
-    await user.click(removes[0]!)
-    await user.click(screen.getByTestId('reject-confirm-popover-cancel'))
-    expect(onEditSources).not.toHaveBeenCalled()
-    expect(screen.queryByTestId('reject-confirm-popover')).toBeNull()
-  })
-
-  it('per-source pencils are gated off when onSwapSource is not threaded', () => {
-    render(
-      <MappingDrawer
-        row={multiSourceRow()}
-        isOpen={true}
-        onClose={() => {}}
-        availableTargetFields={[tf, multiSourceRow().targetField]}
-        availableSourceFields={[sf]}
-        onSwapTarget={vi.fn().mockResolvedValue({ success: true })}
-        onEditSources={vi.fn().mockResolvedValue({ success: true })}
-      />,
-    )
-    expect(
-      screen.queryByTestId('mapping-drawer-header-source-pencil'),
-    ).toBeNull()
-    // Remove still renders because it only requires onEditSources.
-    expect(
-      screen.getAllByTestId('mapping-drawer-header-source-remove'),
-    ).toHaveLength(3)
-  })
-
-  it('per-source removes are gated off when onEditSources is not threaded', () => {
-    render(
-      <MappingDrawer
-        row={multiSourceRow()}
-        isOpen={true}
-        onClose={() => {}}
-        availableTargetFields={[tf, multiSourceRow().targetField]}
-        availableSourceFields={[sf]}
-        onSwapTarget={vi.fn().mockResolvedValue({ success: true })}
-        onSwapSource={vi.fn().mockResolvedValue({ success: true })}
-      />,
-    )
-    expect(
-      screen.queryByTestId('mapping-drawer-header-source-remove'),
-    ).toBeNull()
-    expect(
-      screen.getAllByTestId('mapping-drawer-header-source-pencil'),
-    ).toHaveLength(3)
-  })
-})
-
-// ─── PR 2 TASK 1.5 — drawer stays open through picker/popover interactions ─
-//
-// PR 1's tests asserted "picker opens" but never asserted the drawer
-// STAYS OPEN through commit. TASK 1's expanded affordance surface
-// surfaced a latent bug: the drawer's mousedown handler treated the
-// picker portals (which mount to document.body, outside the drawer
-// subtree) as "outside drawer" → drawer closed on click-through.
-//
-// The fix exempts `inline-source-picker`, `target-field-cell-picker`,
-// and `reject-confirm-popover` testids from the drawer's
-// click-outside check. These tests pin the new contract.
-
-describe('MappingDrawer — PR 2 TASK 1.5 drawer stays open through picker/popover', () => {
-  const sf: SourceFieldWithState = {
-    id: 'sf-other',
-    name: 'OTHER_ACCT_NO',
-    dataType: 'NUMBER',
-    ordinalPosition: 0,
-    sourceTable: { id: 'st-1', name: 'ACCT_MASTER' },
-    mappingStatus: 'unmapped',
-    sampleValues: [],
-    isAcknowledged: false,
-    isRejected: false,
-  }
-  const tf: TargetFieldRef = targetField({ id: 'tf-other', name: 'other_id' })
-
-  function multiSourceRow(overrides: Partial<MappedRow> = {}): MappedRow {
-    return mapped({
-      sources: [
-        cifSource(0, 'FNAME'),
-        cifSource(1, 'LNAME'),
-        cifSource(2, 'MI'),
-      ],
-      combinationType: 'concat_space',
-      ...overrides,
-    })
-  }
-
-  /**
-   * Drives the drawer's `mousedown` listener directly against the
-   * picker/popover container element. `userEvent.click` issues a
-   * matching mousedown internally, but for the click-outside guard we
-   * want to verify the drawer-level handler is correctly exempting
-   * the portal — `fireEvent.mouseDown` bypasses the React event
-   * system and exercises the document-level listener that the drawer
-   * registered in `useEffect`. If the exemption check fails, the
-   * drawer would unmount before this helper returns.
-   */
-  function fireMouseDownInside(element: HTMLElement) {
-    fireEvent.mouseDown(element)
-  }
-
-  it('mousedown inside InlineSourcePicker portal does NOT close the drawer (single-source ✏)', async () => {
-    const onClose = vi.fn()
-    const user = userEvent.setup()
-    render(
-      <MappingDrawer
-        row={mapped()}
-        isOpen={true}
-        onClose={onClose}
-        availableTargetFields={[tf, mapped().targetField]}
-        availableSourceFields={[sf]}
-        onSwapTarget={vi.fn().mockResolvedValue({ success: true })}
-        onSwapSource={vi.fn().mockResolvedValue({ success: true })}
-      />,
-    )
-    await user.click(screen.getByTestId('mapping-drawer-header-source-pencil'))
-    const picker = screen.getByTestId('inline-source-picker')
-    fireMouseDownInside(picker)
-    expect(onClose).not.toHaveBeenCalled()
-    expect(screen.getByTestId('mapping-drawer')).toBeInTheDocument()
-  })
-
-  it('mousedown inside InlineSourcePicker portal does NOT close the drawer (multi-source per-source ✏)', async () => {
-    const onClose = vi.fn()
-    const user = userEvent.setup()
-    render(
-      <MappingDrawer
-        row={multiSourceRow()}
-        isOpen={true}
-        onClose={onClose}
-        availableTargetFields={[tf, multiSourceRow().targetField]}
-        availableSourceFields={[sf]}
-        onSwapTarget={vi.fn().mockResolvedValue({ success: true })}
-        onSwapSource={vi.fn().mockResolvedValue({ success: true })}
-        onEditSources={vi.fn().mockResolvedValue({ success: true })}
-      />,
-    )
-    const pencils = screen.getAllByTestId(
-      'mapping-drawer-header-source-pencil',
-    )
-    await user.click(pencils[1]!)
-    fireMouseDownInside(screen.getByTestId('inline-source-picker'))
-    expect(onClose).not.toHaveBeenCalled()
-    expect(screen.getByTestId('mapping-drawer')).toBeInTheDocument()
-  })
-
-  it('mousedown inside RejectConfirmPopover portal does NOT close the drawer (multi-source per-source ✕)', async () => {
-    const onClose = vi.fn()
-    const user = userEvent.setup()
-    render(
-      <MappingDrawer
-        row={multiSourceRow()}
-        isOpen={true}
-        onClose={onClose}
-        availableTargetFields={[tf, multiSourceRow().targetField]}
-        availableSourceFields={[sf]}
-        onSwapTarget={vi.fn().mockResolvedValue({ success: true })}
-        onSwapSource={vi.fn().mockResolvedValue({ success: true })}
-        onEditSources={vi.fn().mockResolvedValue({ success: true })}
-      />,
-    )
-    const removes = screen.getAllByTestId(
-      'mapping-drawer-header-source-remove',
-    )
-    await user.click(removes[0]!)
-    fireMouseDownInside(screen.getByTestId('reject-confirm-popover'))
-    expect(onClose).not.toHaveBeenCalled()
-    expect(screen.getByTestId('mapping-drawer')).toBeInTheDocument()
-  })
-
-  it('mousedown inside TargetFieldCellPicker portal does NOT close the drawer', async () => {
-    const onClose = vi.fn()
-    const user = userEvent.setup()
-    render(
-      <MappingDrawer
-        row={mapped()}
-        isOpen={true}
-        onClose={onClose}
-        availableTargetFields={[tf, mapped().targetField]}
-        availableSourceFields={[sf]}
-        onSwapTarget={vi.fn().mockResolvedValue({ success: true })}
-        onSwapSource={vi.fn().mockResolvedValue({ success: true })}
-      />,
-    )
-    await user.click(screen.getByTestId('mapping-drawer-header-target-pencil'))
-    fireMouseDownInside(screen.getByTestId('target-field-cell-picker'))
-    expect(onClose).not.toHaveBeenCalled()
-    expect(screen.getByTestId('mapping-drawer')).toBeInTheDocument()
-  })
-
-  it('mousedown on the actual page area outside drawer + picker DOES close (regression guard)', () => {
-    // Belt-and-braces: the picker exemption must not over-broaden the
-    // click-outside check. A click landing on plain page background
-    // (no picker, no drawer, no sidebar) still closes the drawer.
-    const onClose = vi.fn()
-    render(
-      <div data-testid="page-bg">
-        <MappingDrawer
-          row={mapped()}
-          isOpen={true}
-          onClose={onClose}
-        />
-      </div>,
-    )
-    fireEvent.mouseDown(screen.getByTestId('page-bg'))
-    expect(onClose).toHaveBeenCalledTimes(1)
-  })
-})
 
 // ─── PR 2 TASK 1.6 — UnmappedBody rejected-state banner ───────────────────
 
@@ -1210,389 +510,6 @@ describe('MappingDrawer — PR 2 TASK 1.6 rejected-state banner', () => {
 //   • Target ✕ on mapped + VA → onUnmapMapping (same handler as
 //     single-source ✕)
 //   • ⊕ Add source button on mapped variants only
-
-describe('MappingDrawer — PR 2 TASK 2+3 source ✏ on every variant', () => {
-  const sf: SourceFieldWithState = {
-    id: 'sf-other',
-    name: 'OTHER_ACCT_NO',
-    dataType: 'NUMBER',
-    ordinalPosition: 0,
-    sourceTable: { id: 'st-1', name: 'ACCT_MASTER' },
-    mappingStatus: 'unmapped',
-    sampleValues: [],
-    isAcknowledged: false,
-    isRejected: false,
-  }
-  const tf: TargetFieldRef = targetField({ id: 'tf-other', name: 'other_id' })
-
-  it('VA renders ✏ that opens InlineSourcePicker (TASK 2+3)', async () => {
-    const user = userEvent.setup()
-    render(
-      <MappingDrawer
-        row={valueAssignment()}
-        isOpen={true}
-        onClose={() => {}}
-        availableTargetFields={[tf, valueAssignment().targetField]}
-        availableSourceFields={[sf]}
-        onSwapTarget={vi.fn().mockResolvedValue({ success: true })}
-        onEditSources={vi.fn().mockResolvedValue({ success: true })}
-      />,
-    )
-    const pencil = screen.getByTestId('mapping-drawer-header-source-pencil')
-    expect(pencil).toBeInTheDocument()
-    await user.click(pencil)
-    expect(screen.getByTestId('inline-source-picker')).toBeInTheDocument()
-  })
-
-  it('Unmapped renders ✏ that opens InlineSourcePicker (TASK 2+3)', async () => {
-    const user = userEvent.setup()
-    render(
-      <MappingDrawer
-        row={unmapped()}
-        isOpen={true}
-        onClose={() => {}}
-        availableTargetFields={[tf, unmapped().targetField]}
-        availableSourceFields={[sf]}
-        onCreateMapping={vi.fn().mockResolvedValue({ success: true })}
-      />,
-    )
-    const pencil = screen.getByTestId('mapping-drawer-header-source-pencil')
-    expect(pencil).toBeInTheDocument()
-    await user.click(pencil)
-    expect(screen.getByTestId('inline-source-picker')).toBeInTheDocument()
-  })
-
-  it('Rejected (unmapped + status=rejected) renders ✏ + ✏ click opens picker', async () => {
-    const user = userEvent.setup()
-    render(
-      <MappingDrawer
-        row={unmapped({ status: 'rejected' })}
-        isOpen={true}
-        onClose={() => {}}
-        availableTargetFields={[tf, unmapped().targetField]}
-        availableSourceFields={[sf]}
-        onCreateMapping={vi.fn().mockResolvedValue({ success: true })}
-      />,
-    )
-    await user.click(screen.getByTestId('mapping-drawer-header-source-pencil'))
-    expect(screen.getByTestId('inline-source-picker')).toBeInTheDocument()
-  })
-
-  it('VA source ✕ slot is NOT rendered (only ✏)', () => {
-    render(
-      <MappingDrawer
-        row={valueAssignment()}
-        isOpen={true}
-        onClose={() => {}}
-        availableTargetFields={[tf, valueAssignment().targetField]}
-        availableSourceFields={[sf]}
-        onSwapTarget={vi.fn().mockResolvedValue({ success: true })}
-        onEditSources={vi.fn().mockResolvedValue({ success: true })}
-      />,
-    )
-    expect(
-      screen.queryByTestId('mapping-drawer-header-source-remove'),
-    ).toBeNull()
-  })
-
-  it('Source ✏ is gated off on unmapped when onCreateMapping is absent', () => {
-    render(
-      <MappingDrawer
-        row={unmapped()}
-        isOpen={true}
-        onClose={() => {}}
-        availableTargetFields={[tf, unmapped().targetField]}
-        availableSourceFields={[sf]}
-      />,
-    )
-    expect(
-      screen.queryByTestId('mapping-drawer-header-source-pencil'),
-    ).toBeNull()
-  })
-})
-
-describe('MappingDrawer — PR 2 TASK 2+3 target ✏ + ✕', () => {
-  const sf: SourceFieldWithState = {
-    id: 'sf-other',
-    name: 'OTHER_ACCT_NO',
-    dataType: 'NUMBER',
-    ordinalPosition: 0,
-    sourceTable: { id: 'st-1', name: 'ACCT_MASTER' },
-    mappingStatus: 'unmapped',
-    sampleValues: [],
-    isAcknowledged: false,
-    isRejected: false,
-  }
-  const tf: TargetFieldRef = targetField({ id: 'tf-other', name: 'other_id' })
-
-  it('Target ✕ renders on mapped when onUnmapMapping is threaded', () => {
-    render(
-      <MappingDrawer
-        row={mapped()}
-        isOpen={true}
-        onClose={() => {}}
-        availableTargetFields={[tf, mapped().targetField]}
-        availableSourceFields={[sf]}
-        onSwapTarget={vi.fn().mockResolvedValue({ success: true })}
-        onUnmapMapping={vi.fn().mockResolvedValue({ success: true })}
-      />,
-    )
-    expect(
-      screen.getByTestId('mapping-drawer-header-target-remove'),
-    ).toBeInTheDocument()
-  })
-
-  it('Target ✕ renders on VA when onUnmapMapping is threaded', () => {
-    render(
-      <MappingDrawer
-        row={valueAssignment()}
-        isOpen={true}
-        onClose={() => {}}
-        availableTargetFields={[tf, valueAssignment().targetField]}
-        availableSourceFields={[sf]}
-        onSwapTarget={vi.fn().mockResolvedValue({ success: true })}
-        onUnmapMapping={vi.fn().mockResolvedValue({ success: true })}
-      />,
-    )
-    expect(
-      screen.getByTestId('mapping-drawer-header-target-remove'),
-    ).toBeInTheDocument()
-  })
-
-  it('Target ✕ is hidden on unmapped (no TFM to delete)', () => {
-    render(
-      <MappingDrawer
-        row={unmapped()}
-        isOpen={true}
-        onClose={() => {}}
-        availableTargetFields={[tf, unmapped().targetField]}
-        availableSourceFields={[sf]}
-        onUnmapMapping={vi.fn().mockResolvedValue({ success: true })}
-      />,
-    )
-    expect(
-      screen.queryByTestId('mapping-drawer-header-target-remove'),
-    ).toBeNull()
-  })
-
-  it('Target ✕ confirm fires onUnmapMapping with (tfmId, targetFieldId)', async () => {
-    const user = userEvent.setup()
-    const onUnmapMapping = vi.fn().mockResolvedValue({ success: true })
-    render(
-      <MappingDrawer
-        row={mapped()}
-        isOpen={true}
-        onClose={() => {}}
-        availableTargetFields={[tf, mapped().targetField]}
-        availableSourceFields={[sf]}
-        onSwapTarget={vi.fn().mockResolvedValue({ success: true })}
-        onUnmapMapping={onUnmapMapping}
-      />,
-    )
-    await user.click(screen.getByTestId('mapping-drawer-header-target-remove'))
-    expect(screen.getByTestId('reject-confirm-popover').textContent).toContain(
-      'Remove this mapping?',
-    )
-    await user.click(screen.getByTestId('reject-confirm-popover-confirm'))
-    expect(onUnmapMapping).toHaveBeenCalledWith('tfm-1', 'tf-1')
-  })
-
-  it('Target ✏ on unmapped opens TargetFieldCellPicker and uses onNavigateTarget', async () => {
-    const user = userEvent.setup()
-    const onNavigateTarget = vi.fn().mockResolvedValue({ success: true })
-    render(
-      <MappingDrawer
-        row={unmapped()}
-        isOpen={true}
-        onClose={() => {}}
-        availableTargetFields={[tf, unmapped().targetField]}
-        availableSourceFields={[sf]}
-        onSwapTarget={vi.fn().mockResolvedValue({ success: true })}
-        onNavigateTarget={onNavigateTarget}
-      />,
-    )
-    expect(
-      screen.getByTestId('mapping-drawer-header-target-pencil'),
-    ).toBeInTheDocument()
-    await user.click(screen.getByTestId('mapping-drawer-header-target-pencil'))
-    expect(screen.getByTestId('target-field-cell-picker')).toBeInTheDocument()
-  })
-
-  it('Target ✏ on mapped uses onSwapTarget (not onNavigateTarget)', async () => {
-    const user = userEvent.setup()
-    const onSwapTarget = vi.fn().mockResolvedValue({ success: true })
-    const onNavigateTarget = vi.fn().mockResolvedValue({ success: true })
-    render(
-      <MappingDrawer
-        row={mapped()}
-        isOpen={true}
-        onClose={() => {}}
-        availableTargetFields={[tf, mapped().targetField]}
-        availableSourceFields={[sf]}
-        onSwapTarget={onSwapTarget}
-        onNavigateTarget={onNavigateTarget}
-      />,
-    )
-    // The picker handler is sealed inside the component; we
-    // observe the dispatch indirectly: opening the picker confirms
-    // the pencil wired through. Direct call assertions on swap vs
-    // navigate are exercised via the handler arity tests in
-    // MappingContent's smoke flow (manual). For unit coverage, the
-    // separate "uses onNavigateTarget on unmapped" test above
-    // documents the dispatch. The fact that THIS test renders
-    // mapped without errors confirms the targetEditEnabled gate
-    // resolves to onSwapTarget on this branch.
-    await user.click(screen.getByTestId('mapping-drawer-header-target-pencil'))
-    expect(screen.getByTestId('target-field-cell-picker')).toBeInTheDocument()
-  })
-})
-
-describe('MappingDrawer — PR 2 TASK 2+3 ⊕ Add source button', () => {
-  const sf: SourceFieldWithState = {
-    id: 'sf-new',
-    name: 'NEW_SOURCE',
-    dataType: 'VARCHAR',
-    ordinalPosition: 0,
-    sourceTable: { id: 'st-1', name: 'ACCT_MASTER' },
-    mappingStatus: 'unmapped',
-    sampleValues: [],
-    isAcknowledged: false,
-    isRejected: false,
-  }
-  const tf: TargetFieldRef = targetField({ id: 'tf-other', name: 'other_id' })
-
-  it('renders ⊕ Add source on single-source mapped', () => {
-    render(
-      <MappingDrawer
-        row={mapped()}
-        isOpen={true}
-        onClose={() => {}}
-        availableTargetFields={[tf, mapped().targetField]}
-        availableSourceFields={[sf]}
-        onEditSources={vi.fn().mockResolvedValue({ success: true })}
-      />,
-    )
-    expect(
-      screen.getByTestId('mapping-drawer-header-add-source'),
-    ).toBeInTheDocument()
-  })
-
-  it('renders ⊕ Add source on multi-source mapped', () => {
-    render(
-      <MappingDrawer
-        row={mapped({
-          sources: [cifSource(0, 'FNAME'), cifSource(1, 'LNAME')],
-          combinationType: 'concat_space',
-        })}
-        isOpen={true}
-        onClose={() => {}}
-        availableTargetFields={[tf, mapped().targetField]}
-        availableSourceFields={[sf]}
-        onEditSources={vi.fn().mockResolvedValue({ success: true })}
-      />,
-    )
-    expect(
-      screen.getByTestId('mapping-drawer-header-add-source'),
-    ).toBeInTheDocument()
-  })
-
-  it('does NOT render ⊕ Add source on VA / unmapped / rejected', () => {
-    for (const row of [
-      valueAssignment(),
-      unmapped(),
-      unmapped({ status: 'rejected' }),
-    ]) {
-      const { unmount } = render(
-        <MappingDrawer
-          row={row}
-          isOpen={true}
-          onClose={() => {}}
-          availableTargetFields={[tf, row.targetField]}
-          availableSourceFields={[sf]}
-          onEditSources={vi.fn().mockResolvedValue({ success: true })}
-        />,
-      )
-      expect(
-        screen.queryByTestId('mapping-drawer-header-add-source'),
-      ).toBeNull()
-      unmount()
-    }
-  })
-
-  it('⊕ on single-source promotes to multi (combinationType=concat_space) when committed', async () => {
-    const user = userEvent.setup()
-    const onEditSources = vi.fn().mockResolvedValue({ success: true })
-    render(
-      <MappingDrawer
-        row={mapped()}
-        isOpen={true}
-        onClose={() => {}}
-        availableTargetFields={[tf, mapped().targetField]}
-        availableSourceFields={[sf]}
-        onEditSources={onEditSources}
-      />,
-    )
-    await user.click(screen.getByTestId('mapping-drawer-header-add-source'))
-    expect(screen.getByTestId('inline-source-picker')).toBeInTheDocument()
-    // Pick the NEW_SOURCE field from the picker (the row currently
-    // maps to sf-1 = ACCT_NO; sf-new is the new option).
-    await user.click(screen.getByText('NEW_SOURCE'))
-    expect(onEditSources).toHaveBeenCalledTimes(1)
-    expect(onEditSources).toHaveBeenCalledWith({
-      tfmId: 'tfm-1',
-      sourceFieldIds: ['sf-1', 'sf-new'],
-      combinationType: 'concat_space',
-    })
-  })
-
-  it('⊕ on multi-source preserves existing combinationType when adding', async () => {
-    const user = userEvent.setup()
-    const onEditSources = vi.fn().mockResolvedValue({ success: true })
-    render(
-      <MappingDrawer
-        row={mapped({
-          sources: [cifSource(0, 'FNAME'), cifSource(1, 'LNAME')],
-          combinationType: 'concat_comma',
-        })}
-        isOpen={true}
-        onClose={() => {}}
-        availableTargetFields={[tf, mapped().targetField]}
-        availableSourceFields={[sf]}
-        onEditSources={onEditSources}
-      />,
-    )
-    await user.click(screen.getByTestId('mapping-drawer-header-add-source'))
-    await user.click(screen.getByText('NEW_SOURCE'))
-    expect(onEditSources).toHaveBeenCalledWith({
-      tfmId: 'tfm-1',
-      sourceFieldIds: ['sf-FNAME', 'sf-LNAME', 'sf-new'],
-      combinationType: 'concat_comma',
-    })
-  })
-
-  it('⊕ does NOT render when onEditSources is not threaded', () => {
-    render(
-      <MappingDrawer
-        row={mapped()}
-        isOpen={true}
-        onClose={() => {}}
-        availableTargetFields={[tf, mapped().targetField]}
-        availableSourceFields={[sf]}
-      />,
-    )
-    expect(
-      screen.queryByTestId('mapping-drawer-header-add-source'),
-    ).toBeNull()
-  })
-})
-
-// ─── Mapped-row body shape + footer (Gap 8b + Gap 9) ───────────────────────
-//
-// Gap 8b replaced the Gap 8a "Mapped row drawer body — coming in Gap 8b"
-// placeholder with the real per-source-roster body. Gap 9 replaced the
-// "Actions coming in Gap 10" footer placeholder with the real Approve /
-// Reject button row. These tests lock the post-9 shape — neither
-// placeholder may render any longer.
 
 describe('MappingDrawer — mapped-row body shape + footer', () => {
   it('mapped row Mapping tab renders the new two-column grid + WHY + SAMPLES + Remove link (feat/mapping-drawer-redesign)', () => {
@@ -1684,12 +601,12 @@ describe('MappingDrawer — accessibility', () => {
     expect(drawer.getAttribute('aria-modal')).toBe('true')
   })
 
-  it('aria-labelledby points at the field-name heading element', () => {
+  it('aria-labelledby points at the header title element', () => {
     render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
     const drawer = screen.getByTestId('mapping-drawer')
     const ariaLabelledBy = drawer.getAttribute('aria-labelledby')
     expect(ariaLabelledBy).toBeTruthy()
-    const title = screen.getByTestId('mapping-drawer-title')
+    const title = screen.getByTestId('mapping-drawer-header-title')
     expect(title.id).toBe(ariaLabelledBy)
   })
 })
@@ -2631,6 +1548,379 @@ describe('MappingDrawer — Mapping-tab MAPPING GRID (feat/mapping-drawer-redesi
   })
 })
 
+// ─── feat/mapping-drawer-header-redesign — body SOURCE column editing ─────
+
+describe('MappingDrawer — body SOURCE column editing affordances (feat/mapping-drawer-header-redesign)', () => {
+  // Editing affordances (pencil / ✕ / + Add source) render only when
+  // the parent threads `onSwapSource` + `onEditSources` +
+  // `availableSourceFields`. Test mounts that omit them get the
+  // static identity view (regression-guard for that case lives below).
+
+  function makeAvailable(): SourceFieldWithState[] {
+    return [
+      {
+        id: 'sf-1',
+        name: 'ACCT_NO',
+        dataType: 'NUMBER',
+        ordinalPosition: 0,
+        sourceTable: { id: 'st-1', name: 'ACCT_MASTER' },
+        mappingStatus: 'unmapped',
+        sampleValues: [],
+        isAcknowledged: false,
+        isRejected: false,
+      },
+      {
+        id: 'sf-2',
+        name: 'CIF_NO',
+        dataType: 'NUMBER',
+        ordinalPosition: 1,
+        sourceTable: { id: 'st-1', name: 'ACCT_MASTER' },
+        mappingStatus: 'unmapped',
+        sampleValues: [],
+        isAcknowledged: false,
+        isRejected: false,
+      },
+      {
+        id: 'sf-new',
+        name: 'NEW_COL',
+        dataType: 'TEXT',
+        ordinalPosition: 2,
+        sourceTable: { id: 'st-1', name: 'ACCT_MASTER' },
+        mappingStatus: 'unmapped',
+        sampleValues: [],
+        isAcknowledged: false,
+        isRejected: false,
+      },
+    ]
+  }
+
+  it('renders pencil + Add source on a single-source mapped row; NO remove ✕ when sources.length === 1', () => {
+    const onSwapSource = vi.fn().mockResolvedValue({ success: true })
+    const onEditSources = vi.fn().mockResolvedValue({ success: true })
+    render(
+      <MappingDrawer
+        row={mapped()}
+        isOpen={true}
+        onClose={() => {}}
+        onSwapSource={onSwapSource}
+        onEditSources={onEditSources}
+        availableSourceFields={makeAvailable()}
+      />,
+    )
+    const sourceCol = screen.getByTestId('drawer-mapping-source-col')
+    expect(
+      within(sourceCol).getByTestId('drawer-mapping-source-edit'),
+    ).toBeInTheDocument()
+    // No remove on single-source.
+    expect(
+      within(sourceCol).queryByTestId('drawer-mapping-source-remove'),
+    ).toBeNull()
+    expect(screen.getByTestId('drawer-mapping-add-source')).toBeInTheDocument()
+  })
+
+  it('renders pencil + ✕ on each source block + Add source on a multi-source mapped row', () => {
+    render(
+      <MappingDrawer
+        row={mapped({
+          sources: [
+            source({ id: 'ms-a', ordinal: 0 }),
+            source({
+              id: 'ms-b',
+              ordinal: 1,
+              sourceField: {
+                id: 'sf-b',
+                name: 'b_field',
+                dataType: 'TEXT',
+                isNullable: false,
+              },
+              sourceTable: { id: 'st-b', name: 'TBL_B' },
+            }),
+          ],
+        })}
+        isOpen={true}
+        onClose={() => {}}
+        onSwapSource={vi.fn()}
+        onEditSources={vi.fn()}
+        availableSourceFields={makeAvailable()}
+      />,
+    )
+    const blocks = screen.getAllByTestId('drawer-mapping-source-block')
+    expect(blocks).toHaveLength(2)
+    for (const block of blocks) {
+      expect(
+        within(block).getByTestId('drawer-mapping-source-edit'),
+      ).toBeInTheDocument()
+      expect(
+        within(block).getByTestId('drawer-mapping-source-remove'),
+      ).toBeInTheDocument()
+    }
+    expect(screen.getByTestId('drawer-mapping-add-source')).toBeInTheDocument()
+  })
+
+  it('clicking pencil on single-source mapped opens InlineSourcePicker; commit calls onSwapSource(bareTfmId, newSourceFieldId)', async () => {
+    const onSwapSource = vi.fn().mockResolvedValue({ success: true })
+    const onEditSources = vi.fn().mockResolvedValue({ success: true })
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={mapped()}
+        isOpen={true}
+        onClose={() => {}}
+        onSwapSource={onSwapSource}
+        onEditSources={onEditSources}
+        availableSourceFields={makeAvailable()}
+      />,
+    )
+    await user.click(screen.getByTestId('drawer-mapping-source-edit'))
+    // Picker portal renders.
+    expect(
+      screen.getByTestId('inline-source-picker'),
+    ).toBeInTheDocument()
+    // Click a different source field in the picker — single-mode autoCommit fires onCommit.
+    const sf2Row = document.querySelector(
+      '[data-source-field-id="sf-2"]',
+    ) as HTMLElement
+    await user.click(sf2Row)
+    expect(onSwapSource).toHaveBeenCalledWith('tfm-1', 'sf-2')
+    expect(onEditSources).not.toHaveBeenCalled()
+  })
+
+  it('clicking pencil on multi-source mapped opens picker; commit calls onSwapSource with shimmed `<tfmId>::<msId>`', async () => {
+    const onSwapSource = vi.fn().mockResolvedValue({ success: true })
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={mapped({
+          sources: [
+            source({ id: 'ms-a', ordinal: 0 }),
+            source({
+              id: 'ms-b',
+              ordinal: 1,
+              sourceField: {
+                id: 'sf-b',
+                name: 'b_field',
+                dataType: 'TEXT',
+                isNullable: false,
+              },
+              sourceTable: { id: 'st-b', name: 'TBL_B' },
+            }),
+          ],
+        })}
+        isOpen={true}
+        onClose={() => {}}
+        onSwapSource={onSwapSource}
+        onEditSources={vi.fn()}
+        availableSourceFields={makeAvailable()}
+      />,
+    )
+    // Click the pencil on the SECOND (non-primary) block.
+    const blocks = screen.getAllByTestId('drawer-mapping-source-block')
+    await user.click(
+      within(blocks[1]!).getByTestId('drawer-mapping-source-edit'),
+    )
+    expect(screen.getByTestId('inline-source-picker')).toBeInTheDocument()
+    // Commit by clicking a different source field.
+    await user.click(
+      document.querySelector('[data-source-field-id="sf-2"]') as HTMLElement,
+    )
+    // Shimmed contributor id for the second source (ms-b).
+    expect(onSwapSource).toHaveBeenCalledWith('tfm-1::ms-b', 'sf-2')
+  })
+
+  it('clicking ✕ on a multi-source row calls onEditSources with the source filtered out; combinationType preserved when ≥ 2 remain', async () => {
+    const onEditSources = vi.fn().mockResolvedValue({ success: true })
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={mapped({
+          combinationType: 'concat_space',
+          sources: [
+            source({ id: 'ms-a', ordinal: 0 }),
+            source({
+              id: 'ms-b',
+              ordinal: 1,
+              sourceField: {
+                id: 'sf-b',
+                name: 'b_field',
+                dataType: 'TEXT',
+                isNullable: false,
+              },
+              sourceTable: { id: 'st-b', name: 'TBL_B' },
+            }),
+            source({
+              id: 'ms-c',
+              ordinal: 2,
+              sourceField: {
+                id: 'sf-c',
+                name: 'c_field',
+                dataType: 'TEXT',
+                isNullable: false,
+              },
+              sourceTable: { id: 'st-c', name: 'TBL_C' },
+            }),
+          ],
+        })}
+        isOpen={true}
+        onClose={() => {}}
+        onSwapSource={vi.fn()}
+        onEditSources={onEditSources}
+        availableSourceFields={makeAvailable()}
+      />,
+    )
+    const blocks = screen.getAllByTestId('drawer-mapping-source-block')
+    // Remove the middle source (ms-b / sf-b).
+    await user.click(
+      within(blocks[1]!).getByTestId('drawer-mapping-source-remove'),
+    )
+    expect(onEditSources).toHaveBeenCalledWith({
+      tfmId: 'tfm-1',
+      sourceFieldIds: ['sf-1', 'sf-c'],
+      combinationType: 'concat_space',
+    })
+  })
+
+  it('clicking ✕ on a 2-source row collapses combinationType to "single" when one source remains', async () => {
+    const onEditSources = vi.fn().mockResolvedValue({ success: true })
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={mapped({
+          combinationType: 'concat_space',
+          sources: [
+            source({ id: 'ms-a', ordinal: 0 }),
+            source({
+              id: 'ms-b',
+              ordinal: 1,
+              sourceField: {
+                id: 'sf-b',
+                name: 'b_field',
+                dataType: 'TEXT',
+                isNullable: false,
+              },
+              sourceTable: { id: 'st-b', name: 'TBL_B' },
+            }),
+          ],
+        })}
+        isOpen={true}
+        onClose={() => {}}
+        onSwapSource={vi.fn()}
+        onEditSources={onEditSources}
+        availableSourceFields={makeAvailable()}
+      />,
+    )
+    const blocks = screen.getAllByTestId('drawer-mapping-source-block')
+    await user.click(
+      within(blocks[1]!).getByTestId('drawer-mapping-source-remove'),
+    )
+    expect(onEditSources).toHaveBeenCalledWith({
+      tfmId: 'tfm-1',
+      sourceFieldIds: ['sf-1'],
+      combinationType: 'single',
+    })
+  })
+
+  it('clicking + Add source opens picker; commit appends source to existing list and switches single → concat_space', async () => {
+    const onEditSources = vi.fn().mockResolvedValue({ success: true })
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={mapped({ combinationType: 'single' })}
+        isOpen={true}
+        onClose={() => {}}
+        onSwapSource={vi.fn()}
+        onEditSources={onEditSources}
+        availableSourceFields={makeAvailable()}
+      />,
+    )
+    await user.click(screen.getByTestId('drawer-mapping-add-source'))
+    expect(screen.getByTestId('inline-source-picker')).toBeInTheDocument()
+    // Commit by picking the new field.
+    await user.click(
+      document.querySelector('[data-source-field-id="sf-new"]') as HTMLElement,
+    )
+    expect(onEditSources).toHaveBeenCalledWith({
+      tfmId: 'tfm-1',
+      sourceFieldIds: ['sf-1', 'sf-new'],
+      combinationType: 'concat_space',
+    })
+  })
+
+  it('Add source on an already-multi row preserves the existing combinationType', async () => {
+    const onEditSources = vi.fn().mockResolvedValue({ success: true })
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={mapped({
+          combinationType: 'concat_comma',
+          sources: [
+            source({ id: 'ms-a', ordinal: 0 }),
+            source({
+              id: 'ms-b',
+              ordinal: 1,
+              sourceField: {
+                id: 'sf-b',
+                name: 'b_field',
+                dataType: 'TEXT',
+                isNullable: false,
+              },
+              sourceTable: { id: 'st-b', name: 'TBL_B' },
+            }),
+          ],
+        })}
+        isOpen={true}
+        onClose={() => {}}
+        onSwapSource={vi.fn()}
+        onEditSources={onEditSources}
+        availableSourceFields={makeAvailable()}
+      />,
+    )
+    await user.click(screen.getByTestId('drawer-mapping-add-source'))
+    await user.click(
+      document.querySelector('[data-source-field-id="sf-new"]') as HTMLElement,
+    )
+    expect(onEditSources).toHaveBeenCalledWith({
+      tfmId: 'tfm-1',
+      sourceFieldIds: ['sf-1', 'sf-b', 'sf-new'],
+      combinationType: 'concat_comma',
+    })
+  })
+
+  it('TARGET column stays read-only — no pencil or ✕ on the target block', () => {
+    render(
+      <MappingDrawer
+        row={mapped()}
+        isOpen={true}
+        onClose={() => {}}
+        onSwapSource={vi.fn()}
+        onEditSources={vi.fn()}
+        availableSourceFields={makeAvailable()}
+      />,
+    )
+    const targetCol = screen.getByTestId('drawer-mapping-target-col')
+    expect(
+      within(targetCol).queryByTestId('drawer-mapping-target-edit'),
+    ).toBeNull()
+    expect(
+      within(targetCol).queryByTestId('drawer-mapping-target-remove'),
+    ).toBeNull()
+  })
+
+  it('no editing affordances render when handler props are absent (static identity display)', () => {
+    // Test mount without commit handlers — the body grid degrades to
+    // the static read-only display from PR #145.
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    expect(
+      screen.queryByTestId('drawer-mapping-source-edit'),
+    ).toBeNull()
+    expect(
+      screen.queryByTestId('drawer-mapping-source-remove'),
+    ).toBeNull()
+    expect(
+      screen.queryByTestId('drawer-mapping-add-source'),
+    ).toBeNull()
+  })
+})
+
 describe('MappingDrawer — Mapping-tab WHY THIS MAPPING (feat/mapping-drawer-redesign)', () => {
   it('renders the full aiReasoning text in the WHY THIS MAPPING section', () => {
     const reasoning = 'Customer external id is the canonical CRM anchor.'
@@ -3131,17 +2421,16 @@ describe('MappingDrawer Gap 9 — Approve action', () => {
         onClose={() => {}}
       />,
     )
-    // Pre-click sanity: header status dot reflects Needs Review.
+    // Pre-click sanity: header confidence line reflects Needs Review.
     expect(
-      screen.getByTestId('mapping-drawer-header-status-needs_review'),
-    ).toBeInTheDocument()
+      screen.getByTestId('mapping-drawer-header-confidence').getAttribute('data-status'),
+    ).toBe('needs_review')
     await user.click(screen.getByTestId('mapping-drawer-approve-button'))
     // While the promise is pending the optimistic overlay flips the
-    // header dot to Approved (drawer redesign — status moved to
-    // header line 2 dot).
+    // header confidence line's status to Approved.
     expect(
-      screen.getByTestId('mapping-drawer-header-status-approved'),
-    ).toBeInTheDocument()
+      screen.getByTestId('mapping-drawer-header-confidence').getAttribute('data-status'),
+    ).toBe('approved')
     // The post-optimistic state is `mapped/approved` → footer collapses
     // to `[Reject]` only (Q11.A lock), so the Approve button is no
     // longer rendered.
@@ -3174,10 +2463,10 @@ describe('MappingDrawer Gap 9 — Approve action', () => {
       await Promise.resolve()
       await Promise.resolve()
     })
-    // Header status dot reverted to Needs Review.
+    // Header confidence line reverted to Needs Review.
     expect(
-      screen.getByTestId('mapping-drawer-header-status-needs_review'),
-    ).toBeInTheDocument()
+      screen.getByTestId('mapping-drawer-header-confidence').getAttribute('data-status'),
+    ).toBe('needs_review')
     // Error banner shows the generic copy.
     const banner = screen.getByTestId('mapping-drawer-error')
     expect(banner.textContent).toContain("Couldn't approve this mapping")

@@ -18,6 +18,7 @@ import {
   ChevronDown,
   ChevronRight,
   Pencil,
+  Plus,
   Sparkles,
   X,
 } from '@/components/icons'
@@ -57,6 +58,7 @@ import {
 import type { SourceFieldWithState } from '@/lib/types/mappings-for-redesign'
 import { TableBadge } from './TableBadge'
 import { DrawerHeader } from './DrawerHeader'
+import { InlineSourcePicker } from './InlineSourcePicker'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MappingDrawer — Phase 3 Gaps 7 + 8a + 8b + 9, extended in Phase 4a-2 / 4a-3 /
@@ -801,24 +803,22 @@ export function MappingDrawer({
       )}
       style={{ width: `${MAPPING_DRAWER_WIDTH_PX}px` }}
     >
+      {/* feat/mapping-drawer-header-redesign — compact header (MAPPING
+          label + title row + confidence line + close). Editing
+          affordances retired here moved to the flat view
+          (primary-source swap, target swap, create-from-unmapped) or
+          to the drawer body's SOURCE column (non-primary source
+          swap, per-source remove, add source). See `DrawerHeader.tsx`
+          file-top comment for the relocation map. The
+          `onSwapSource` / `onEditSources` / `onSwapTarget` /
+          `onUnmapMapping` / `onCreateMapping` / `onNavigateTarget`
+          props on `MappingDrawerProps` stay so commit 2 can thread
+          them into `MappedBody`'s `MappingSourceTargetGrid`. */}
       <DrawerHeader
         row={effectiveRow}
         titleId={titleId}
         onClose={maybeRequestClose}
-        onSwapTarget={onSwapTarget}
-        onSwapSource={onSwapSource}
-        onEditSources={onEditSources}
-        onUnmapMapping={onUnmapMapping}
-        onCreateMapping={onCreateMapping}
-        onNavigateTarget={onNavigateTarget}
-        availableTargetFields={availableTargetFields}
-        availableSourceFields={availableSourceFields}
       />
-      {/* Sub-tab strip — sits between header and body for now (commit 1).
-          The follow-up header redesign PR will fold this strip into the
-          new compact header so title + confidence + tabs read as one
-          chrome unit; until then the existing FROM/TO stack stays.
-          Reverses Gap-7 ADR — see file-top comment. */}
       <DrawerTabStrip activeTab={activeTab} onTabChange={setActiveTab} />
       <DrawerBody
         row={effectiveRow}
@@ -826,6 +826,9 @@ export function MappingDrawer({
         projectId={projectId}
         pathDOutputs={pathDOutputs ?? null}
         onRemoveMappingClick={() => setConfirmRejectOpen(true)}
+        onSwapSource={onSwapSource}
+        onEditSources={onEditSources}
+        availableSourceFields={availableSourceFields}
       />
       <DrawerFooter
         row={effectiveRow}
@@ -1148,6 +1151,31 @@ interface DrawerBodyProps {
    * and on confirm fires the existing `handleRejectConfirm`.
    */
   onRemoveMappingClick: () => void
+  /**
+   * feat/mapping-drawer-header-redesign — per-source swap handler
+   * relocated from the retired header pencil into the body's SOURCE
+   * column pencil. Receives the shimmed contributor row id
+   * (`<tfmId>::<mappingSourceId>` for multi-source, bare TFM uuid for
+   * single-source) and the new source field id. Undefined when the
+   * parent has not threaded edit handlers (test mounts).
+   */
+  onSwapSource?: (
+    rowId: string,
+    newSourceFieldId: string,
+  ) => Promise<{ success: boolean }>
+  /**
+   * feat/mapping-drawer-header-redesign — source-set replace handler
+   * for the body's "+ Add source" button and per-source ✕ remove.
+   * Mirrors the retired header `AddSourceButton` / `HeaderRemoveButton`
+   * dispatch contract.
+   */
+  onEditSources?: (args: {
+    tfmId: string
+    sourceFieldIds: string[]
+    combinationType: 'single' | 'concat_space' | 'concat_comma'
+  }) => Promise<{ success: boolean }>
+  /** Source field universe for the body's source-swap and add-source pickers. */
+  availableSourceFields?: readonly SourceFieldWithState[]
 }
 
 function DrawerBody(props: DrawerBodyProps) {
@@ -1168,6 +1196,9 @@ function BodyContent({
   pathDOutputs,
   activeTab,
   onRemoveMappingClick,
+  onSwapSource,
+  onEditSources,
+  availableSourceFields,
 }: DrawerBodyProps) {
   switch (row.kind) {
     case 'mapped':
@@ -1178,6 +1209,9 @@ function BodyContent({
           pathDOutputs={pathDOutputs}
           activeTab={activeTab}
           onRemoveMappingClick={onRemoveMappingClick}
+          onSwapSource={onSwapSource}
+          onEditSources={onEditSources}
+          availableSourceFields={availableSourceFields}
         />
       )
     case 'value_assignment':
@@ -1926,6 +1960,19 @@ interface MappedBodyProps {
   activeTab: DrawerTab
   /** feat/mapping-drawer-redesign — Remove mapping link click handler. */
   onRemoveMappingClick: () => void
+  /** feat/mapping-drawer-header-redesign — body SOURCE column pencil swap. */
+  onSwapSource?: (
+    rowId: string,
+    newSourceFieldId: string,
+  ) => Promise<{ success: boolean }>
+  /** feat/mapping-drawer-header-redesign — body SOURCE column add/remove. */
+  onEditSources?: (args: {
+    tfmId: string
+    sourceFieldIds: string[]
+    combinationType: 'single' | 'concat_space' | 'concat_comma'
+  }) => Promise<{ success: boolean }>
+  /** Source field universe for body pickers. */
+  availableSourceFields?: readonly SourceFieldWithState[]
 }
 
 function MappedBody({
@@ -1934,6 +1981,9 @@ function MappedBody({
   pathDOutputs,
   activeTab,
   onRemoveMappingClick,
+  onSwapSource,
+  onEditSources,
+  availableSourceFields,
 }: MappedBodyProps) {
   // feat/mapping-drawer-redesign — sections partition by sub-tab:
   //
@@ -1954,8 +2004,13 @@ function MappedBody({
   return (
     <>
       <MappingSourceTargetGrid
+        tfmId={row.id}
         sources={row.sources}
+        combinationType={row.combinationType}
         targetField={row.targetField}
+        onSwapSource={onSwapSource}
+        onEditSources={onEditSources}
+        availableSourceFields={availableSourceFields}
       />
       <WhyThisMappingSection aiReasoning={row.aiReasoning} />
       <SampleSourceValuesSection
@@ -1975,25 +2030,179 @@ function MappedBody({
 // comes in via props from the body kind that mounts them.
 
 /**
- * Two-column SOURCE / TARGET grid for the Mapping sub-tab. Each column
- * shows: column label (small-caps muted) · table name (uppercase muted)
- * · field chip (monospace) · data type (e.g. `VARCHAR(16)`).
+ * Two-column SOURCE / TARGET grid for the Mapping sub-tab.
+ *
+ * Each column shows: column label (small-caps muted) · table name
+ * (uppercase muted) · field chip (monospace) · data type
+ * (e.g. `VARCHAR(16)`).
  *
  * Multi-source TFMs stack each source's block under the SOURCE column,
  * primary (sources[0]) first. The TARGET column is always a single block.
+ *
+ * feat/mapping-drawer-header-redesign — per-source editing affordances
+ * relocated from the retired header pencils into the SOURCE column:
+ *   • Per-source pencil ✏ — opens `InlineSourcePicker`, swaps that
+ *     specific source via `onSwapSource(rowId, newSourceFieldId)` with
+ *     `rowId = '<tfmId>::<msId>'` for multi-source rows, bare TFM uuid
+ *     for single-source.
+ *   • Per-source ✕ — calls `onEditSources({tfmId, sourceFieldIds:
+ *     <filtered>, combinationType})` to drop the source. Rendered only
+ *     when `sources.length > 1`; combinationType collapses to 'single'
+ *     when one source remains. Single-source removal happens via the
+ *     "Remove mapping" link at the bottom of the body.
+ *   • "+ Add source" button — opens `InlineSourcePicker` with no
+ *     initial selection, calls `onEditSources` with the new source
+ *     appended; switches combinationType single → concat_space.
+ *
+ * Editing affordances render only when their handler props are threaded
+ * AND `availableSourceFields` is provided. Otherwise the grid reads as
+ * a static identity display (matches test mounts that don't wire the
+ * commit handlers).
  */
 function MappingSourceTargetGrid({
+  tfmId,
   sources,
+  combinationType,
   targetField,
+  onSwapSource,
+  onEditSources,
+  availableSourceFields,
 }: {
+  tfmId: string
   sources: readonly MappingSourceRef[]
+  combinationType: 'single' | 'concat_space' | 'concat_comma' | 'custom_sql'
   targetField: TargetFieldRef
+  onSwapSource?: (
+    rowId: string,
+    newSourceFieldId: string,
+  ) => Promise<{ success: boolean }>
+  onEditSources?: (args: {
+    tfmId: string
+    sourceFieldIds: string[]
+    combinationType: 'single' | 'concat_space' | 'concat_comma'
+  }) => Promise<{ success: boolean }>
+  availableSourceFields?: readonly SourceFieldWithState[]
 }) {
+  // Picker open state. Two modes:
+  //   'swap-source'  — pencil clicked on a specific source block. The
+  //                     picker pre-selects that source field; on commit
+  //                     swap the single mapping_sources row via
+  //                     `onSwapSource`.
+  //   'add-source'   — "+ Add source" button clicked. Picker opens with
+  //                     no initial selection; on commit append to the
+  //                     existing source list via `onEditSources`.
+  type PickerState =
+    | {
+        mode: 'swap-source'
+        anchorEl: HTMLElement
+        sourceId: string
+        sourceFieldId: string
+      }
+    | {
+        mode: 'add-source'
+        anchorEl: HTMLElement
+      }
+    | null
+  const [picker, setPicker] = useState<PickerState>(null)
+  const closePicker = useCallback(() => setPicker(null), [])
+
+  // Edit affordances render only when both the handler and the
+  // available-source-fields universe are threaded.
+  const editable = Boolean(
+    onSwapSource && onEditSources && availableSourceFields,
+  )
+  const isMulti = sources.length > 1
+
+  // `editMappingSources` rejects `custom_sql`. For mapped rows this is
+  // not 'custom_sql' in practice (custom_sql is VA territory); the
+  // defensive fallback below mirrors the existing flat-view convention.
+  const safeCombinationType: 'single' | 'concat_space' | 'concat_comma' =
+    combinationType === 'single' ||
+    combinationType === 'concat_space' ||
+    combinationType === 'concat_comma'
+      ? combinationType
+      : 'concat_space'
+
+  const handleSwapSourceClick = useCallback(
+    (source: MappingSourceRef, anchorEl: HTMLElement) => {
+      setPicker({
+        mode: 'swap-source',
+        anchorEl,
+        sourceId: source.id,
+        sourceFieldId: source.sourceField.id,
+      })
+    },
+    [],
+  )
+
+  const handleRemoveSourceClick = useCallback(
+    async (source: MappingSourceRef) => {
+      if (!onEditSources) return
+      const remainingIds = sources
+        .filter((s) => s.id !== source.id)
+        .map((s) => s.sourceField.id)
+      if (remainingIds.length === 0) return // shouldn't happen — guarded by isMulti
+      // Collapse to 'single' when exactly one source remains; otherwise
+      // preserve the existing combinationType.
+      const nextCombinationType =
+        remainingIds.length === 1 ? 'single' : safeCombinationType
+      await onEditSources({
+        tfmId,
+        sourceFieldIds: remainingIds,
+        combinationType: nextCombinationType,
+      })
+    },
+    [onEditSources, sources, tfmId, safeCombinationType],
+  )
+
+  const handleAddSourceClick = useCallback(
+    (anchorEl: HTMLElement) => {
+      setPicker({ mode: 'add-source', anchorEl })
+    },
+    [],
+  )
+
+  const handlePickerCommit = useCallback(
+    async (newSourceFieldIds: string[]) => {
+      if (!picker) return { success: false }
+      const newId = newSourceFieldIds[0]
+      if (!newId) return { success: false }
+      if (picker.mode === 'swap-source') {
+        if (!onSwapSource) return { success: false }
+        const rowId = isMulti ? `${tfmId}::${picker.sourceId}` : tfmId
+        return onSwapSource(rowId, newId)
+      }
+      // 'add-source'
+      if (!onEditSources) return { success: false }
+      const existingIds = sources.map((s) => s.sourceField.id)
+      const nextIds = [...existingIds, newId]
+      // single + 1 new → concat_space (default multi combinator); else preserve.
+      const nextCombinationType =
+        combinationType === 'single' ? 'concat_space' : safeCombinationType
+      return onEditSources({
+        tfmId,
+        sourceFieldIds: nextIds,
+        combinationType: nextCombinationType,
+      })
+    },
+    [
+      picker,
+      onSwapSource,
+      onEditSources,
+      sources,
+      tfmId,
+      isMulti,
+      combinationType,
+      safeCombinationType,
+    ],
+  )
+
+  // Initial selection for the picker (single-pick autoCommit).
+  const pickerInitialIds =
+    picker?.mode === 'swap-source' ? [picker.sourceFieldId] : []
+
   return (
-    <section
-      data-testid="drawer-section-mapping-grid"
-      className="mb-6"
-    >
+    <section data-testid="drawer-section-mapping-grid" className="mb-6">
       <div className="grid grid-cols-2 gap-6">
         <div data-testid="drawer-mapping-source-col">
           <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-slate-500">
@@ -2008,9 +2217,24 @@ function MappingSourceTargetGrid({
                 tableName={source.sourceTable.name}
                 fieldName={source.sourceField.name}
                 dataType={source.sourceField.dataType}
+                onEditClick={
+                  editable
+                    ? (anchorEl) => handleSwapSourceClick(source, anchorEl)
+                    : undefined
+                }
+                editAriaLabel={`Edit source ${source.sourceField.name}`}
+                onRemoveClick={
+                  editable && isMulti
+                    ? () => void handleRemoveSourceClick(source)
+                    : undefined
+                }
+                removeAriaLabel={`Remove source ${source.sourceField.name} from this mapping`}
               />
             ))}
           </div>
+          {editable ? (
+            <AddSourceButton onClick={handleAddSourceClick} />
+          ) : null}
         </div>
         <div data-testid="drawer-mapping-target-col">
           <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-slate-500">
@@ -2024,6 +2248,17 @@ function MappingSourceTargetGrid({
           />
         </div>
       </div>
+      {picker && availableSourceFields ? (
+        <InlineSourcePicker
+          anchorRef={{ current: picker.anchorEl }}
+          initialSourceFieldIds={pickerInitialIds}
+          availableSourceFields={[...availableSourceFields]}
+          onCommit={handlePickerCommit}
+          onClose={closePicker}
+          mode="single"
+          autoCommit={true}
+        />
+      ) : null}
     </section>
   )
 }
@@ -2033,6 +2268,11 @@ function MappingSourceTargetGrid({
  * muted) · field chip · data type. The chip uses the same gray monospace
  * pill aesthetic as the flat view's `FieldNameChip` so the drawer and
  * grid feel like one visual system.
+ *
+ * feat/mapping-drawer-header-redesign — source-side blocks gain
+ * optional pencil (swap) + ✕ (remove) buttons. Both render only when
+ * their handlers are threaded; target-side mounts leave them undefined
+ * and stay read-only.
  */
 function MappingFieldBlock({
   testIdPrefix,
@@ -2040,13 +2280,24 @@ function MappingFieldBlock({
   tableName,
   fieldName,
   dataType,
+  onEditClick,
+  editAriaLabel,
+  onRemoveClick,
+  removeAriaLabel,
 }: {
   testIdPrefix: 'drawer-mapping-source' | 'drawer-mapping-target'
   dataMappingSourceId?: string
   tableName: string
   fieldName: string
   dataType: string
+  /** Click handler for the pencil button. Anchor element threaded for the picker. */
+  onEditClick?: (anchorEl: HTMLElement) => void
+  editAriaLabel?: string
+  /** Click handler for the ✕ button. */
+  onRemoveClick?: () => void
+  removeAriaLabel?: string
 }) {
+  const editButtonRef = useRef<HTMLButtonElement | null>(null)
   return (
     <div
       data-testid={`${testIdPrefix}-block`}
@@ -2060,13 +2311,50 @@ function MappingFieldBlock({
       >
         {tableName}
       </div>
-      <span
-        data-testid={`${testIdPrefix}-field`}
-        title={fieldName}
-        className="inline-block max-w-full truncate rounded bg-slate-100 px-1.5 py-0.5 align-middle font-mono text-sm font-medium text-slate-700"
-      >
-        {fieldName}
-      </span>
+      <div className="flex items-center gap-1.5">
+        <span
+          data-testid={`${testIdPrefix}-field`}
+          title={fieldName}
+          className="inline-block max-w-full truncate rounded bg-slate-100 px-1.5 py-0.5 align-middle font-mono text-sm font-medium text-slate-700"
+        >
+          {fieldName}
+        </span>
+        {onEditClick ? (
+          <button
+            ref={editButtonRef}
+            type="button"
+            data-testid={`${testIdPrefix}-edit`}
+            aria-label={editAriaLabel ?? 'Edit'}
+            title={editAriaLabel ?? 'Edit'}
+            onClick={() => {
+              if (editButtonRef.current) onEditClick(editButtonRef.current)
+            }}
+            className={cn(
+              'inline-flex h-5 w-5 flex-shrink-0 items-center justify-center rounded',
+              'text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700',
+              'focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300',
+            )}
+          >
+            <Pencil className="h-3 w-3" />
+          </button>
+        ) : null}
+        {onRemoveClick ? (
+          <button
+            type="button"
+            data-testid={`${testIdPrefix}-remove`}
+            aria-label={removeAriaLabel ?? 'Remove'}
+            title={removeAriaLabel ?? 'Remove'}
+            onClick={onRemoveClick}
+            className={cn(
+              'inline-flex h-5 w-5 flex-shrink-0 items-center justify-center rounded',
+              'text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600',
+              'focus:outline-none focus-visible:ring-2 focus-visible:ring-red-300',
+            )}
+          >
+            <X className="h-3 w-3" />
+          </button>
+        ) : null}
+      </div>
       <div
         data-testid={`${testIdPrefix}-type`}
         className="font-mono text-xs text-slate-500"
@@ -2074,6 +2362,39 @@ function MappingFieldBlock({
         {dataType}
       </div>
     </div>
+  )
+}
+
+/**
+ * "+ Add source" button below the SOURCE column. Opens
+ * `InlineSourcePicker` anchored on itself; the picker's commit appends
+ * the chosen source field to the TFM's source list via
+ * `onEditSources({sourceFieldIds: [...existing, new], combinationType})`.
+ */
+function AddSourceButton({
+  onClick,
+}: {
+  onClick: (anchorEl: HTMLElement) => void
+}) {
+  const buttonRef = useRef<HTMLButtonElement | null>(null)
+  return (
+    <button
+      ref={buttonRef}
+      type="button"
+      data-testid="drawer-mapping-add-source"
+      aria-label="Add another source field"
+      onClick={() => {
+        if (buttonRef.current) onClick(buttonRef.current)
+      }}
+      className={cn(
+        'mt-3 inline-flex items-center gap-1 text-xs text-slate-500',
+        'transition-colors hover:text-slate-800',
+        'focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500',
+      )}
+    >
+      <Plus className="h-3 w-3" />
+      <span>Add source</span>
+    </button>
   )
 }
 
