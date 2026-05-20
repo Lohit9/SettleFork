@@ -1808,6 +1808,7 @@ describe('FieldMappingRow — source-cell unification (2026-04-28)', () => {
         isAcknowledged: false,
         isRejected: false,
         aiReasoning: null,
+        confidence: null,
       },
       {
         id: 'sf-2',
@@ -1820,6 +1821,7 @@ describe('FieldMappingRow — source-cell unification (2026-04-28)', () => {
         isAcknowledged: false,
         isRejected: false,
         aiReasoning: null,
+        confidence: null,
       },
     ]
   }

@@ -986,6 +986,7 @@ describe('MappingDrawer — source-field-only stub mount (feat/mapping-row-unifo
       isAcknowledged: false,
       isRejected: false,
       aiReasoning: null,
+      confidence: null,
     }
   }
 
@@ -1570,6 +1571,7 @@ describe('MappingDrawer — body SOURCE column editing affordances (feat/mapping
         isAcknowledged: false,
         isRejected: false,
         aiReasoning: null,
+        confidence: null,
       },
       {
         id: 'sf-2',
@@ -1582,6 +1584,7 @@ describe('MappingDrawer — body SOURCE column editing affordances (feat/mapping
         isAcknowledged: false,
         isRejected: false,
         aiReasoning: null,
+        confidence: null,
       },
       {
         id: 'sf-new',
@@ -1594,6 +1597,7 @@ describe('MappingDrawer — body SOURCE column editing affordances (feat/mapping
         isAcknowledged: false,
         isRejected: false,
         aiReasoning: null,
+        confidence: null,
       },
     ]
   }
@@ -2697,6 +2701,7 @@ function makeSourceField(
     isAcknowledged: false,
     isRejected: false,
     aiReasoning: null,
+    confidence: null,
     ...overrides,
   }
 }

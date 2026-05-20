@@ -109,6 +109,7 @@ import {
 import { ToastProvider, useToast } from '@/lib/contexts/ToastContext'
 import { CONFIDENCE_THRESHOLD_ROW_HIGH } from '@/lib/utils/confidence-format'
 import { useCollapsedGroups } from '@/lib/hooks/useCollapsedGroups'
+import { flattenRowsForListView } from '@/lib/utils/flatten-rows-for-list-view'
 import type { ProjectStats } from '@/lib/quality/project-stats'
 
 // Phase 4c-1 — high-confidence threshold (mirrors legacy default).
@@ -1928,19 +1929,31 @@ function MappingContentLoaded({
     return n
   }, [effectiveRows])
 
+  // Strip Approved / Needs Review chips. Counted over the flat-row
+  // projection — `flattenRowsForListView` folds in the source-side
+  // rows (acks + pure unmapped source fields) that never appear in
+  // `data.rows`. Iterating `data.rows`/`effectiveRows` directly omitted
+  // every `unmapped-source` row, so the chips silently undercounted
+  // (Rootstock POC: Needs Review showed 87 — the target-keyed rows
+  // only — while the unmapped source fields went uncounted). Counting
+  // over the flattened projection makes the chips reflect all four row
+  // kinds: mapped, value_assignment, unmapped-target, unmapped-source.
+  // `effectiveRows` is threaded in (not `data.rows`) so optimistic
+  // approve/reject state still flows through for target-keyed rows.
   const effectiveCounts = useMemo(() => {
+    const flatRows = flattenRowsForListView({ ...data, rows: effectiveRows })
     let approved = 0
     let needsReview = 0
-    for (const row of effectiveRows) {
+    for (const row of flatRows) {
       if (row.status === 'approved') approved++
-      if (row.status === 'needs_review') needsReview++
+      else if (row.status === 'needs_review') needsReview++
     }
     return {
-      total: effectiveRows.length,
+      total: flatRows.length,
       approved,
       needsReview,
     }
-  }, [effectiveRows])
+  }, [data, effectiveRows])
 
   // Phase 4-polish-1 sidebar architecture refactor (2026-04-26): the
   // returned Fragment expands as direct children of the outer flex

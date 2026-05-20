@@ -39,6 +39,7 @@ function makeSourceField(
     isAcknowledged: false,
     isRejected: false,
     aiReasoning: null,
+    confidence: null,
     ...overrides,
   }
 }
