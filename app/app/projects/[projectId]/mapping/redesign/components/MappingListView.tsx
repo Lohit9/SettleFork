@@ -968,7 +968,7 @@ function FlatRowView({
             <span
               data-testid="flat-cell-source-table"
               title={sourceTableName}
-              className="shrink-0 truncate text-[10px] font-medium uppercase tracking-wide text-slate-500"
+              className="min-w-0 shrink-[9999] truncate text-[11px] font-normal text-slate-500"
             >
               {sourceTableName}
             </span>
@@ -1103,7 +1103,7 @@ function FlatRowView({
             <span
               data-testid="flat-cell-target-table"
               title={targetTable}
-              className="shrink-0 truncate text-[10px] font-medium uppercase tracking-wide text-slate-500"
+              className="min-w-0 shrink-[9999] truncate text-[11px] font-normal text-slate-500"
             >
               {targetTable}
             </span>
@@ -1262,7 +1262,7 @@ function FlatRowView({
                 <span
                   data-testid="flat-subrow-source-table"
                   title={src.sourceTable.name}
-                  className="shrink-0 truncate text-[10px] font-medium uppercase tracking-wide text-slate-500"
+                  className="min-w-0 shrink-[9999] truncate text-[11px] font-normal text-slate-500"
                 >
                   {src.sourceTable.name}
                 </span>
