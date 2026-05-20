@@ -1937,7 +1937,7 @@ function UnmappedBody({
   // else (target identity, analysis, decisions, rejected banner) lives
   // on the Mapping tab.
   if (activeTab === 'transform') {
-    return <TransformationSection row={row} projectId={projectId} />
+    return <TransformTabContent row={row} projectId={projectId} />
   }
   return (
     <>
@@ -2197,7 +2197,7 @@ function MappedBody({
   // they degrade to nothing on projects without enrichment data
   // (matching the mockup empirically on the Rootstock POC).
   if (activeTab === 'transform') {
-    return <TransformationSection row={row} projectId={projectId} />
+    return <TransformTabContent row={row} projectId={projectId} />
   }
   return (
     <>
@@ -2650,9 +2650,76 @@ function AddSourceButton({
  * reasoning short-circuits to render nothing (don't render an empty
  * section label).
  */
+// ── WHY THIS MAPPING — reasoning-text treatment (Refinement #5b) ─────────────
+//
+// `ai_reasoning` (post-PR #151: only the JSON `explanation` field) is a
+// short multi-paragraph string with `\n\n` separators. The section is
+// rendered for skimmability:
+//   • `\n\n` → discrete <p> blocks (a single <p> folds them to one run).
+//   • All-caps SQL keyword phrases + double-quoted values → inline <code>
+//     chips (a smaller cousin of the field-name chip).
+//   • A leading "Field type:" sentence → bold prefix.
+
+const FIELD_TYPE_PREFIX = 'Field type:'
+
+// Lone all-caps tokens promoted to inline code. Multi-word all-caps runs
+// (NO INVENTORY, CASE WHEN) are always promoted; a single all-caps token
+// is promoted only if it is a recognised SQL keyword — this keeps plain
+// abbreviations (RCB, SKU, CRM, ID) as prose.
+const REASONING_SQL_KEYWORDS = new Set<string>([
+  'NULL', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END',
+  'COALESCE', 'CAST', 'CONCAT', 'NULLIF', 'TRUE', 'FALSE', 'DEFAULT',
+])
+
+// A double-quoted span OR a run of one-or-more all-caps words. Single-
+// quoted spans are intentionally not matched — a lone apostrophe in
+// prose ("doesn't"/"won't") would let the pattern swallow a sentence.
+const REASONING_CODE_TOKEN_RE =
+  /"[^"\n]+"|[A-Z][A-Z0-9_]+(?:\s[A-Z][A-Z0-9_]+)*/g
+
+function isReasoningCodeToken(match: string): boolean {
+  if (match.startsWith('"')) return true
+  const words = match.split(/\s+/)
+  if (words.length >= 2) return true
+  return REASONING_SQL_KEYWORDS.has(words[0]!)
+}
+
+// Split a paragraph into plain-text + inline <code> nodes.
+function renderReasoningInline(
+  text: string,
+  keyPrefix: string,
+): React.ReactNode[] {
+  const nodes: React.ReactNode[] = []
+  let lastIndex = 0
+  let codeIndex = 0
+  for (const m of text.matchAll(REASONING_CODE_TOKEN_RE)) {
+    const matchText = m[0]
+    const at = m.index ?? 0
+    if (!isReasoningCodeToken(matchText)) continue
+    if (at > lastIndex) nodes.push(text.slice(lastIndex, at))
+    nodes.push(
+      <code
+        key={`${keyPrefix}-code-${codeIndex}`}
+        data-testid="drawer-why-this-mapping-code"
+        className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px] text-slate-700"
+      >
+        {matchText}
+      </code>,
+    )
+    lastIndex = at + matchText.length
+    codeIndex++
+  }
+  if (lastIndex < text.length) nodes.push(text.slice(lastIndex))
+  return nodes
+}
+
 function WhyThisMappingSection({ aiReasoning }: { aiReasoning: string | null }) {
   const text = aiReasoning?.trim()
   if (!text) return null
+  const paragraphs = text
+    .split(/\n{2,}/)
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0)
   return (
     <section
       data-testid="drawer-section-why-this-mapping"
@@ -2661,12 +2728,38 @@ function WhyThisMappingSection({ aiReasoning }: { aiReasoning: string | null }) 
       <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-slate-500">
         Why this mapping
       </h3>
-      <p
+      {/* The `drawer-why-this-mapping-text` testid moves to this wrapper
+          (now spanning every paragraph) so callers reading its
+          textContent stay correct. */}
+      <div
         data-testid="drawer-why-this-mapping-text"
-        className="text-sm leading-relaxed text-slate-700"
+        className="space-y-2"
       >
-        {text}
-      </p>
+        {paragraphs.map((para, idx) => {
+          const isLeading = idx === 0 && para.startsWith(FIELD_TYPE_PREFIX)
+          return (
+            <p
+              key={idx}
+              data-testid="drawer-why-this-mapping-paragraph"
+              className="text-sm leading-relaxed text-slate-700"
+            >
+              {isLeading ? (
+                <>
+                  <span className="font-semibold text-slate-900">
+                    {FIELD_TYPE_PREFIX}
+                  </span>
+                  {renderReasoningInline(
+                    para.slice(FIELD_TYPE_PREFIX.length),
+                    `p${idx}`,
+                  )}
+                </>
+              ) : (
+                renderReasoningInline(para, `p${idx}`)
+              )}
+            </p>
+          )
+        })}
+      </div>
     </section>
   )
 }
@@ -3109,6 +3202,63 @@ const TRANSFORMATION_STATUS_PILL: Record<
     label: 'Stale',
     className: 'bg-amber-100 text-amber-800',
   },
+}
+
+// ── Transform tab — "Transformation needed" indicator (Refinement #5b) ───────
+//
+// Surfaces the wire `transformationNeeded` verdict above the
+// TRANSFORMATION section. `null` / `undefined` (agent-generated projects
+// without the field, coverage-only orphans) → render nothing rather than
+// an empty label.
+function TransformationNeededIndicator({
+  needed,
+}: {
+  needed: boolean | null | undefined
+}) {
+  if (needed === null || needed === undefined) return null
+  return (
+    <div
+      data-testid="drawer-transformation-needed"
+      data-needed={needed ? 'yes' : 'no'}
+      className="mb-3 flex items-center gap-1.5"
+    >
+      <span
+        aria-hidden="true"
+        className={cn(
+          'inline-block h-2 w-2 rounded-full',
+          needed ? 'bg-emerald-500' : 'bg-slate-300',
+        )}
+      />
+      <span className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+        Transformation needed: {needed ? 'Yes' : 'No'}
+      </span>
+    </div>
+  )
+}
+
+// Transform sub-tab content: the needed-indicator stacked above the
+// TRANSFORMATION section. When `transformationNeeded === false` the
+// section is dimmed — the recipe text (e.g. "Leave NULL — does not
+// apply to RCB.") still shows but reads as "no transformation applied".
+function TransformTabContent({
+  row,
+  projectId,
+}: {
+  row: MappedRow | UnmappedRow
+  projectId: string | undefined
+}) {
+  const needed = row.transformationNeeded
+  return (
+    <>
+      <TransformationNeededIndicator needed={needed} />
+      <div
+        data-testid="drawer-transformation-body"
+        className={cn(needed === false && 'opacity-60')}
+      >
+        <TransformationSection row={row} projectId={projectId} />
+      </div>
+    </>
+  )
 }
 
 function TransformationSection({

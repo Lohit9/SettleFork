@@ -1957,6 +1957,148 @@ describe('MappingDrawer — Mapping-tab WHY THIS MAPPING (feat/mapping-drawer-re
       screen.queryByTestId('drawer-section-why-this-mapping'),
     ).toBeNull()
   })
+
+  // Refinement #5b — reasoning-text visual treatment.
+
+  it('renders \\n\\n-separated reasoning as discrete paragraphs', () => {
+    render(
+      <MappingDrawer
+        row={mapped({
+          aiReasoning:
+            'Field type: VARCHAR(16) identifier.\n\nMaps the customer SKU narrative.',
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const paragraphs = screen.getAllByTestId(
+      'drawer-why-this-mapping-paragraph',
+    )
+    expect(paragraphs).toHaveLength(2)
+    expect(paragraphs[0]!.textContent).toContain('Field type:')
+    expect(paragraphs[1]!.textContent).toContain(
+      'Maps the customer SKU narrative.',
+    )
+  })
+
+  it('bolds the leading "Field type:" prefix for skimmability', () => {
+    render(
+      <MappingDrawer
+        row={mapped({
+          aiReasoning: 'Field type: integer surrogate key.\n\nNarrative.',
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const firstParagraph = screen.getAllByTestId(
+      'drawer-why-this-mapping-paragraph',
+    )[0]!
+    const prefix = within(firstParagraph).getByText('Field type:')
+    expect(prefix.className).toContain('font-semibold')
+  })
+
+  it('renders all-caps SQL phrases and keywords as inline code chips', () => {
+    render(
+      <MappingDrawer
+        row={mapped({
+          aiReasoning:
+            'Leave the field as NO INVENTORY when the source value is NULL.',
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const chips = screen.getAllByTestId('drawer-why-this-mapping-code')
+    const chipText = chips.map((c) => c.textContent)
+    // Multi-word all-caps run + recognised single SQL keyword both promoted.
+    expect(chipText).toContain('NO INVENTORY')
+    expect(chipText).toContain('NULL')
+    // Each chip carries the monospace + tinted-background styling.
+    for (const chip of chips) {
+      expect(chip.className).toContain('font-mono')
+      expect(chip.className).toContain('bg-slate-100')
+    }
+  })
+
+  it('leaves lone non-keyword abbreviations (RCB) as plain prose', () => {
+    render(
+      <MappingDrawer
+        row={mapped({ aiReasoning: 'This column does not apply to RCB.' })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    // RCB is all-caps but not a SQL keyword → not promoted to a chip.
+    expect(
+      screen.queryByTestId('drawer-why-this-mapping-code'),
+    ).toBeNull()
+    expect(
+      screen.getByTestId('drawer-why-this-mapping-text').textContent,
+    ).toContain('RCB')
+  })
+})
+
+describe('MappingDrawer — Transform tab "Transformation needed" indicator (Refinement #5b)', () => {
+  it('renders a "Yes" indicator when transformationNeeded is true', () => {
+    render(
+      <MappingDrawer
+        row={mapped({ transformationNeeded: true })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    fireEvent.click(screen.getByTestId('drawer-tab-transform'))
+    const indicator = screen.getByTestId('drawer-transformation-needed')
+    expect(indicator.getAttribute('data-needed')).toBe('yes')
+    expect(indicator.textContent).toContain('Yes')
+    // Section reads at full weight — no transformation is "not applied".
+    expect(
+      screen.getByTestId('drawer-transformation-body').className,
+    ).not.toContain('opacity-60')
+  })
+
+  it('renders a "No" indicator and dims the section when transformationNeeded is false', () => {
+    render(
+      <MappingDrawer
+        row={mapped({ transformationNeeded: false })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    fireEvent.click(screen.getByTestId('drawer-tab-transform'))
+    const indicator = screen.getByTestId('drawer-transformation-needed')
+    expect(indicator.getAttribute('data-needed')).toBe('no')
+    expect(indicator.textContent).toContain('No')
+    // Reduced visual weight — the recipe text still shows, dimmed.
+    expect(
+      screen.getByTestId('drawer-transformation-body').className,
+    ).toContain('opacity-60')
+  })
+
+  it('renders no indicator when transformationNeeded is null', () => {
+    render(
+      <MappingDrawer
+        row={mapped({ transformationNeeded: null })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    fireEvent.click(screen.getByTestId('drawer-tab-transform'))
+    expect(
+      screen.queryByTestId('drawer-transformation-needed'),
+    ).toBeNull()
+  })
+
+  it('renders no indicator when transformationNeeded is omitted (undefined)', () => {
+    render(
+      <MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />,
+    )
+    fireEvent.click(screen.getByTestId('drawer-tab-transform'))
+    expect(
+      screen.queryByTestId('drawer-transformation-needed'),
+    ).toBeNull()
+  })
 })
 
 describe('MappingDrawer — Mapping-tab SAMPLE SOURCE VALUES (feat/mapping-drawer-redesign)', () => {
