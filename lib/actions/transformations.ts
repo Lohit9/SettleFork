@@ -153,6 +153,8 @@ export interface FieldItem {
   confidence: number | null
   /** AI-generated reasoning from the TFM (why this mapping was made) */
   aiReasoning: string | null
+  /** Upstream transform guidance from the mapping phase. */
+  transformationIntent: string | null
   /** Null rate for the source field (from field_profiles) */
   nullPercentage: number
   /** Count of format issues for the source field (from field_profiles) */
@@ -227,6 +229,11 @@ export interface UnmappedTargetField {
   /** Raw DEFAULT expression (migration 064). When set, a NOT NULL column
    *  is no longer "required" for mapping coverage — the DB auto-populates. */
   default_value: string | null
+  /** Persisted no-source metadata when this target field already has an acknowledged TFM. */
+  confidence?: number | null
+  aiReasoning?: string | null
+  transformationIntent?: string | null
+  transformationNeeded?: boolean | null
 }
 
 /**
@@ -657,6 +664,7 @@ export async function getTransformData(
     { data: targetFields },
     { data: fieldProfiles },
     { data: transformations },
+    { data: acknowledgedNoSourceTfms },
   ] = await Promise.all([
     allSourceFieldIds.length > 0
       ? supabase
@@ -680,6 +688,14 @@ export async function getTransformData(
       .select('*')
       .in('target_field_mapping_id', tfmIds)
       .returns<TransformationRow[]>(),
+    supabase
+      .from('target_field_mappings')
+      .select(
+        'id, target_field_id, confidence, ai_reasoning, transformation_intent, needs_transformation',
+      )
+      .eq('project_id', projectId)
+      .eq('is_acknowledged', true)
+      .neq('status', 'rejected'),
   ])
 
   // ── 4. Schema documents for context ────────────────────────────────────────
@@ -708,6 +724,23 @@ export async function getTransformData(
   const transformByTfmId = new Map<string, TransformationRow>()
   for (const tr of (transformations ?? []) as TransformationRow[]) {
     transformByTfmId.set(tr.target_field_mapping_id, tr)
+  }
+  const acknowledgedNoSourceTfmByTargetFieldId = new Map<
+    string,
+    {
+      confidence: number | null
+      ai_reasoning: string | null
+      transformation_intent: string | null
+      needs_transformation: boolean | null
+    }
+  >()
+  for (const tfm of acknowledgedNoSourceTfms ?? []) {
+    acknowledgedNoSourceTfmByTargetFieldId.set(tfm.target_field_id as string, {
+      confidence: (tfm.confidence ?? null) as number | null,
+      ai_reasoning: (tfm.ai_reasoning ?? null) as string | null,
+      transformation_intent: (tfm.transformation_intent ?? null) as string | null,
+      needs_transformation: (tfm.needs_transformation ?? null) as boolean | null,
+    })
   }
 
   // ── Index sources per TFM ──────────────────────────────────────────────────
@@ -852,6 +885,7 @@ export async function getTransformData(
       typeCompatibility: primary?.typeCompatibility ?? null,
       confidence: primary?.confidence ?? tfm.confidence,
       aiReasoning: tfm.ai_reasoning,
+      transformationIntent: tfm.transformation_intent ?? null,
       nullPercentage: (profile as typeof profile & { null_percentage?: number } | undefined)?.null_percentage ?? 0,
       formatIssuesCount: (profile as typeof profile & { format_issues_count?: number } | undefined)?.format_issues_count ?? 0,
       sampleValues: (profile?.sample_values as unknown[]) ?? [],
@@ -934,6 +968,16 @@ export async function getTransformData(
 
   const allUnmapped = (allTgtFieldRows ?? []).filter((f) => !mappedTargetFieldIds.has(f.id))
   const toUnmapped = (f: typeof allUnmapped[number]): UnmappedTargetField => ({
+    ...(acknowledgedNoSourceTfmByTargetFieldId.get(f.id)
+      ? {
+          confidence: acknowledgedNoSourceTfmByTargetFieldId.get(f.id)!.confidence,
+          aiReasoning: acknowledgedNoSourceTfmByTargetFieldId.get(f.id)!.ai_reasoning,
+          transformationIntent:
+            acknowledgedNoSourceTfmByTargetFieldId.get(f.id)!.transformation_intent,
+          transformationNeeded:
+            acknowledgedNoSourceTfmByTargetFieldId.get(f.id)!.needs_transformation,
+        }
+      : {}),
     id: f.id,
     name: f.name,
     data_type: f.data_type,
@@ -2952,6 +2996,7 @@ ${tgtFieldCtx && tgtFieldCtx.cardinality > 0 ? `Distinct values: ${tgtFieldCtx.c
 Type compatibility: ${typeCompat ?? 'Not specified'}
 Confidence: ${ctx.primarySource?.mappingSourceId ? (ctx.tfm.confidence ?? 'N/A') : (ctx.tfm.confidence ?? 'N/A')}%
 AI reasoning: ${ctx.tfm.ai_reasoning ?? 'Not available'}
+Transformation suggestion: ${resolvedIntent ?? 'Not available'}
 </mapping_context>
 ${lookupTablesBlock ? '\n' + lookupTablesBlock + '\n' : ''}${projectDecisionsBlock ? '\n' + projectDecisionsBlock + '\n' : ''}${docsBlock}
 ${aiCtx.intelligence_context ? aiCtx.intelligence_context + '\n\n' : ''}${transformationIntentBlock ? transformationIntentBlock + '\n\n' : ''}${pocBlock ? pocBlock + '\n\n' : ''}Suggest a transformation description for this field mapping.`
