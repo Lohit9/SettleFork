@@ -1548,6 +1548,379 @@ describe('MappingDrawer — Mapping-tab MAPPING GRID (feat/mapping-drawer-redesi
   })
 })
 
+// ─── feat/mapping-drawer-header-redesign — body SOURCE column editing ─────
+
+describe('MappingDrawer — body SOURCE column editing affordances (feat/mapping-drawer-header-redesign)', () => {
+  // Editing affordances (pencil / ✕ / + Add source) render only when
+  // the parent threads `onSwapSource` + `onEditSources` +
+  // `availableSourceFields`. Test mounts that omit them get the
+  // static identity view (regression-guard for that case lives below).
+
+  function makeAvailable(): SourceFieldWithState[] {
+    return [
+      {
+        id: 'sf-1',
+        name: 'ACCT_NO',
+        dataType: 'NUMBER',
+        ordinalPosition: 0,
+        sourceTable: { id: 'st-1', name: 'ACCT_MASTER' },
+        mappingStatus: 'unmapped',
+        sampleValues: [],
+        isAcknowledged: false,
+        isRejected: false,
+      },
+      {
+        id: 'sf-2',
+        name: 'CIF_NO',
+        dataType: 'NUMBER',
+        ordinalPosition: 1,
+        sourceTable: { id: 'st-1', name: 'ACCT_MASTER' },
+        mappingStatus: 'unmapped',
+        sampleValues: [],
+        isAcknowledged: false,
+        isRejected: false,
+      },
+      {
+        id: 'sf-new',
+        name: 'NEW_COL',
+        dataType: 'TEXT',
+        ordinalPosition: 2,
+        sourceTable: { id: 'st-1', name: 'ACCT_MASTER' },
+        mappingStatus: 'unmapped',
+        sampleValues: [],
+        isAcknowledged: false,
+        isRejected: false,
+      },
+    ]
+  }
+
+  it('renders pencil + Add source on a single-source mapped row; NO remove ✕ when sources.length === 1', () => {
+    const onSwapSource = vi.fn().mockResolvedValue({ success: true })
+    const onEditSources = vi.fn().mockResolvedValue({ success: true })
+    render(
+      <MappingDrawer
+        row={mapped()}
+        isOpen={true}
+        onClose={() => {}}
+        onSwapSource={onSwapSource}
+        onEditSources={onEditSources}
+        availableSourceFields={makeAvailable()}
+      />,
+    )
+    const sourceCol = screen.getByTestId('drawer-mapping-source-col')
+    expect(
+      within(sourceCol).getByTestId('drawer-mapping-source-edit'),
+    ).toBeInTheDocument()
+    // No remove on single-source.
+    expect(
+      within(sourceCol).queryByTestId('drawer-mapping-source-remove'),
+    ).toBeNull()
+    expect(screen.getByTestId('drawer-mapping-add-source')).toBeInTheDocument()
+  })
+
+  it('renders pencil + ✕ on each source block + Add source on a multi-source mapped row', () => {
+    render(
+      <MappingDrawer
+        row={mapped({
+          sources: [
+            source({ id: 'ms-a', ordinal: 0 }),
+            source({
+              id: 'ms-b',
+              ordinal: 1,
+              sourceField: {
+                id: 'sf-b',
+                name: 'b_field',
+                dataType: 'TEXT',
+                isNullable: false,
+              },
+              sourceTable: { id: 'st-b', name: 'TBL_B' },
+            }),
+          ],
+        })}
+        isOpen={true}
+        onClose={() => {}}
+        onSwapSource={vi.fn()}
+        onEditSources={vi.fn()}
+        availableSourceFields={makeAvailable()}
+      />,
+    )
+    const blocks = screen.getAllByTestId('drawer-mapping-source-block')
+    expect(blocks).toHaveLength(2)
+    for (const block of blocks) {
+      expect(
+        within(block).getByTestId('drawer-mapping-source-edit'),
+      ).toBeInTheDocument()
+      expect(
+        within(block).getByTestId('drawer-mapping-source-remove'),
+      ).toBeInTheDocument()
+    }
+    expect(screen.getByTestId('drawer-mapping-add-source')).toBeInTheDocument()
+  })
+
+  it('clicking pencil on single-source mapped opens InlineSourcePicker; commit calls onSwapSource(bareTfmId, newSourceFieldId)', async () => {
+    const onSwapSource = vi.fn().mockResolvedValue({ success: true })
+    const onEditSources = vi.fn().mockResolvedValue({ success: true })
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={mapped()}
+        isOpen={true}
+        onClose={() => {}}
+        onSwapSource={onSwapSource}
+        onEditSources={onEditSources}
+        availableSourceFields={makeAvailable()}
+      />,
+    )
+    await user.click(screen.getByTestId('drawer-mapping-source-edit'))
+    // Picker portal renders.
+    expect(
+      screen.getByTestId('inline-source-picker'),
+    ).toBeInTheDocument()
+    // Click a different source field in the picker — single-mode autoCommit fires onCommit.
+    const sf2Row = document.querySelector(
+      '[data-source-field-id="sf-2"]',
+    ) as HTMLElement
+    await user.click(sf2Row)
+    expect(onSwapSource).toHaveBeenCalledWith('tfm-1', 'sf-2')
+    expect(onEditSources).not.toHaveBeenCalled()
+  })
+
+  it('clicking pencil on multi-source mapped opens picker; commit calls onSwapSource with shimmed `<tfmId>::<msId>`', async () => {
+    const onSwapSource = vi.fn().mockResolvedValue({ success: true })
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={mapped({
+          sources: [
+            source({ id: 'ms-a', ordinal: 0 }),
+            source({
+              id: 'ms-b',
+              ordinal: 1,
+              sourceField: {
+                id: 'sf-b',
+                name: 'b_field',
+                dataType: 'TEXT',
+                isNullable: false,
+              },
+              sourceTable: { id: 'st-b', name: 'TBL_B' },
+            }),
+          ],
+        })}
+        isOpen={true}
+        onClose={() => {}}
+        onSwapSource={onSwapSource}
+        onEditSources={vi.fn()}
+        availableSourceFields={makeAvailable()}
+      />,
+    )
+    // Click the pencil on the SECOND (non-primary) block.
+    const blocks = screen.getAllByTestId('drawer-mapping-source-block')
+    await user.click(
+      within(blocks[1]!).getByTestId('drawer-mapping-source-edit'),
+    )
+    expect(screen.getByTestId('inline-source-picker')).toBeInTheDocument()
+    // Commit by clicking a different source field.
+    await user.click(
+      document.querySelector('[data-source-field-id="sf-2"]') as HTMLElement,
+    )
+    // Shimmed contributor id for the second source (ms-b).
+    expect(onSwapSource).toHaveBeenCalledWith('tfm-1::ms-b', 'sf-2')
+  })
+
+  it('clicking ✕ on a multi-source row calls onEditSources with the source filtered out; combinationType preserved when ≥ 2 remain', async () => {
+    const onEditSources = vi.fn().mockResolvedValue({ success: true })
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={mapped({
+          combinationType: 'concat_space',
+          sources: [
+            source({ id: 'ms-a', ordinal: 0 }),
+            source({
+              id: 'ms-b',
+              ordinal: 1,
+              sourceField: {
+                id: 'sf-b',
+                name: 'b_field',
+                dataType: 'TEXT',
+                isNullable: false,
+              },
+              sourceTable: { id: 'st-b', name: 'TBL_B' },
+            }),
+            source({
+              id: 'ms-c',
+              ordinal: 2,
+              sourceField: {
+                id: 'sf-c',
+                name: 'c_field',
+                dataType: 'TEXT',
+                isNullable: false,
+              },
+              sourceTable: { id: 'st-c', name: 'TBL_C' },
+            }),
+          ],
+        })}
+        isOpen={true}
+        onClose={() => {}}
+        onSwapSource={vi.fn()}
+        onEditSources={onEditSources}
+        availableSourceFields={makeAvailable()}
+      />,
+    )
+    const blocks = screen.getAllByTestId('drawer-mapping-source-block')
+    // Remove the middle source (ms-b / sf-b).
+    await user.click(
+      within(blocks[1]!).getByTestId('drawer-mapping-source-remove'),
+    )
+    expect(onEditSources).toHaveBeenCalledWith({
+      tfmId: 'tfm-1',
+      sourceFieldIds: ['sf-1', 'sf-c'],
+      combinationType: 'concat_space',
+    })
+  })
+
+  it('clicking ✕ on a 2-source row collapses combinationType to "single" when one source remains', async () => {
+    const onEditSources = vi.fn().mockResolvedValue({ success: true })
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={mapped({
+          combinationType: 'concat_space',
+          sources: [
+            source({ id: 'ms-a', ordinal: 0 }),
+            source({
+              id: 'ms-b',
+              ordinal: 1,
+              sourceField: {
+                id: 'sf-b',
+                name: 'b_field',
+                dataType: 'TEXT',
+                isNullable: false,
+              },
+              sourceTable: { id: 'st-b', name: 'TBL_B' },
+            }),
+          ],
+        })}
+        isOpen={true}
+        onClose={() => {}}
+        onSwapSource={vi.fn()}
+        onEditSources={onEditSources}
+        availableSourceFields={makeAvailable()}
+      />,
+    )
+    const blocks = screen.getAllByTestId('drawer-mapping-source-block')
+    await user.click(
+      within(blocks[1]!).getByTestId('drawer-mapping-source-remove'),
+    )
+    expect(onEditSources).toHaveBeenCalledWith({
+      tfmId: 'tfm-1',
+      sourceFieldIds: ['sf-1'],
+      combinationType: 'single',
+    })
+  })
+
+  it('clicking + Add source opens picker; commit appends source to existing list and switches single → concat_space', async () => {
+    const onEditSources = vi.fn().mockResolvedValue({ success: true })
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={mapped({ combinationType: 'single' })}
+        isOpen={true}
+        onClose={() => {}}
+        onSwapSource={vi.fn()}
+        onEditSources={onEditSources}
+        availableSourceFields={makeAvailable()}
+      />,
+    )
+    await user.click(screen.getByTestId('drawer-mapping-add-source'))
+    expect(screen.getByTestId('inline-source-picker')).toBeInTheDocument()
+    // Commit by picking the new field.
+    await user.click(
+      document.querySelector('[data-source-field-id="sf-new"]') as HTMLElement,
+    )
+    expect(onEditSources).toHaveBeenCalledWith({
+      tfmId: 'tfm-1',
+      sourceFieldIds: ['sf-1', 'sf-new'],
+      combinationType: 'concat_space',
+    })
+  })
+
+  it('Add source on an already-multi row preserves the existing combinationType', async () => {
+    const onEditSources = vi.fn().mockResolvedValue({ success: true })
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={mapped({
+          combinationType: 'concat_comma',
+          sources: [
+            source({ id: 'ms-a', ordinal: 0 }),
+            source({
+              id: 'ms-b',
+              ordinal: 1,
+              sourceField: {
+                id: 'sf-b',
+                name: 'b_field',
+                dataType: 'TEXT',
+                isNullable: false,
+              },
+              sourceTable: { id: 'st-b', name: 'TBL_B' },
+            }),
+          ],
+        })}
+        isOpen={true}
+        onClose={() => {}}
+        onSwapSource={vi.fn()}
+        onEditSources={onEditSources}
+        availableSourceFields={makeAvailable()}
+      />,
+    )
+    await user.click(screen.getByTestId('drawer-mapping-add-source'))
+    await user.click(
+      document.querySelector('[data-source-field-id="sf-new"]') as HTMLElement,
+    )
+    expect(onEditSources).toHaveBeenCalledWith({
+      tfmId: 'tfm-1',
+      sourceFieldIds: ['sf-1', 'sf-b', 'sf-new'],
+      combinationType: 'concat_comma',
+    })
+  })
+
+  it('TARGET column stays read-only — no pencil or ✕ on the target block', () => {
+    render(
+      <MappingDrawer
+        row={mapped()}
+        isOpen={true}
+        onClose={() => {}}
+        onSwapSource={vi.fn()}
+        onEditSources={vi.fn()}
+        availableSourceFields={makeAvailable()}
+      />,
+    )
+    const targetCol = screen.getByTestId('drawer-mapping-target-col')
+    expect(
+      within(targetCol).queryByTestId('drawer-mapping-target-edit'),
+    ).toBeNull()
+    expect(
+      within(targetCol).queryByTestId('drawer-mapping-target-remove'),
+    ).toBeNull()
+  })
+
+  it('no editing affordances render when handler props are absent (static identity display)', () => {
+    // Test mount without commit handlers — the body grid degrades to
+    // the static read-only display from PR #145.
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    expect(
+      screen.queryByTestId('drawer-mapping-source-edit'),
+    ).toBeNull()
+    expect(
+      screen.queryByTestId('drawer-mapping-source-remove'),
+    ).toBeNull()
+    expect(
+      screen.queryByTestId('drawer-mapping-add-source'),
+    ).toBeNull()
+  })
+})
+
 describe('MappingDrawer — Mapping-tab WHY THIS MAPPING (feat/mapping-drawer-redesign)', () => {
   it('renders the full aiReasoning text in the WHY THIS MAPPING section', () => {
     const reasoning = 'Customer external id is the canonical CRM anchor.'
