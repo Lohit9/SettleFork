@@ -54,7 +54,10 @@ import { inferFkCandidates } from '@/lib/utils/fk-inference'
 // call time, not at module-load time.
 import { runSingleAgentMappingLoop } from '@/lib/ai/single-agent-mapping'
 import { runMultiAgentMappingPipeline } from '@/lib/ai/multi-agent-orchestrator'
-import { getStaticSuggestionForTarget } from '@/lib/mappings/static-provider'
+import {
+  getStaticSuggestionForTarget,
+  resolveStaticSourceUnmappedRationale,
+} from '@/lib/mappings/static-provider'
 
 // ─── Raw row shapes fetched from Supabase ────────────────────────────
 //
@@ -213,6 +216,14 @@ export interface AssembleInput {
    * coverage row is present.
    */
   coverage?: RawCoverageRow[]
+  /**
+   * Display-only rationale for unmapped source fields, keyed by
+   * `fields.id`. Sourced from the static-mappings config's `explanation`
+   * field via `resolveStaticSourceUnmappedRationale`. Optional with
+   * default empty `Map` — projects with no static config (and fixtures /
+   * tests) simply omit it. Flows onto `SourceFieldWithState.aiReasoning`.
+   */
+  staticSourceRationale?: ReadonlyMap<string, string>
 }
 
 // Also export the raw row types so tests and future call sites can
@@ -979,6 +990,7 @@ function buildSourceFieldsWithState(
   tfms: RawTfmRow[],
   mappingSources: RawMappingSourceRow[],
   sourceAcks: RawSourceAckRow[],
+  staticSourceRationale: ReadonlyMap<string, string>,
 ): SourceFieldWithState[] {
   const tfmStatusById = new Map<string, string>(
     tfms.map((t) => [t.id, t.status]),
@@ -1019,6 +1031,7 @@ function buildSourceFieldsWithState(
       sampleValues: extractSampleValues(field.field_profiles),
       isAcknowledged: acknowledgedSourceFieldIds.has(field.id),
       isRejected: rejectedSourceFieldIds.has(field.id),
+      aiReasoning: staticSourceRationale.get(field.id) ?? null,
     })
   }
 
@@ -1203,6 +1216,7 @@ export function assembleMappingsForRedesign(
     sourceAcks,
     transformations,
     coverage = [],
+    staticSourceRationale = new Map<string, string>(),
   } = input
 
   // ── Build dataset / table / field indexes ──────────────────────────
@@ -1379,6 +1393,7 @@ export function assembleMappingsForRedesign(
     tfms,
     mappingSources,
     sourceAcks,
+    staticSourceRationale,
   )
 
   // ── Project-level counters ────────────────────────────────────────
@@ -1510,6 +1525,17 @@ export async function getMappingsForRedesignCore(
   const fields = (fieldsRaw ?? []) as RawFieldRow[]
   const transformations = (transformationsRaw ?? []) as RawTransformationRow[]
 
+  // Display-only rationale for unmapped source fields, resolved from the
+  // static-mappings config (one config-file read; empty map for projects
+  // with no static config). Read-only — no `source_field_acknowledgments`
+  // write. Flows onto `SourceFieldWithState.aiReasoning`.
+  const staticSourceRationale = await resolveStaticSourceUnmappedRationale(
+    supabase,
+    projectId,
+    fields,
+    tables,
+  )
+
   return assembleMappingsForRedesign({
     projectId,
     datasets,
@@ -1520,6 +1546,7 @@ export async function getMappingsForRedesignCore(
     sourceAcks,
     transformations,
     coverage,
+    staticSourceRationale,
   })
 }
 

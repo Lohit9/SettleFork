@@ -38,6 +38,7 @@ function makeSourceField(
     sampleValues: [],
     isAcknowledged: false,
     isRejected: false,
+    aiReasoning: null,
     ...overrides,
   }
 }
@@ -131,6 +132,37 @@ describe('flattenRowsForListView — source-side rows', () => {
     expect(row.acknowledgmentId).toBeNull()
     expect(row.status).toBe('needs_review')
     expect(row.id).toBe('unmapped-source::sf-untouched')
+  })
+
+  it('carries SourceFieldWithState.aiReasoning onto the fall-through unmapped-source row', () => {
+    // The unmapped-source FlatRow embeds the full `sourceField`, so the
+    // static-config rationale on `SourceFieldWithState.aiReasoning` is
+    // available downstream (the RATIONALE column reads it as a fallback
+    // when there is no acknowledgment reason).
+    const sf = makeSourceField({
+      id: 'sf-with-rationale',
+      name: 'PRODUCT_NOTES',
+      aiReasoning: 'Free-text notes — about 30% null; not migrated.',
+    })
+    const result = makeResult({ sourceFields: [sf] })
+
+    const rows = flattenRowsForListView(result)
+    const row = rows.find((r) => r.kind === 'unmapped-source')
+    if (row?.kind !== 'unmapped-source') throw new Error('shape')
+    expect(row.acknowledgmentId).toBeNull()
+    expect(row.sourceField.aiReasoning).toBe(
+      'Free-text notes — about 30% null; not migrated.',
+    )
+  })
+
+  it('carries a null aiReasoning when the source field has no static rationale', () => {
+    const sf = makeSourceField({ id: 'sf-no-rationale', name: 'OPEN_COL' })
+    const result = makeResult({ sourceFields: [sf] })
+
+    const rows = flattenRowsForListView(result)
+    const row = rows.find((r) => r.kind === 'unmapped-source')
+    if (row?.kind !== 'unmapped-source') throw new Error('shape')
+    expect(row.sourceField.aiReasoning).toBeNull()
   })
 
   it('does NOT emit source-only rows for fields referenced by any mapping', () => {
