@@ -47,6 +47,12 @@ const VIEWPORT_MARGIN_PX = 8
 
 export interface TargetFieldCellCommitResult {
   success: boolean
+  /**
+   * True when the commit hit an already-mapped target and handed off to
+   * the merge-confirmation dialog. The picker closes (the dialog owns
+   * the surface now) even though `success` is false.
+   */
+  mergeOpened?: boolean
 }
 
 export interface TargetFieldCellPickerProps {
@@ -195,7 +201,9 @@ export function TargetFieldCellPicker({
           setIsSaving(false)
           return
         }
-        if (result.success) {
+        // Close on success OR when a merge dialog took over — in both
+        // cases the picker's job is done. A plain failure keeps it open.
+        if (result.success || result.mergeOpened) {
           setIsSaving(false)
           onClose()
           return

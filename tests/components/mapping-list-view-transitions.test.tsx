@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { useState } from 'react'
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import {
   MappingDrawer,
   type DrawerRow,
@@ -63,9 +63,10 @@ vi.mock('next/navigation', () => ({
 //   T5  mapped multi → ✕ remove to 1            → onEditSources 'single'
 //        (existing, covered in mapping-drawer.test.tsx)
 //   T6  mapped target swap → unmapped target     → onSwapTarget
-//   T7  mapped target swap → already-mapped      → onSwapTarget; the
-//        server refuses with TARGET_CONFLICT, surfaced as a failed
-//        result → picker stays open (asserted below).
+//   T7  mapped target swap → already-mapped      → onSwapTarget returns
+//        { success: false, mergeOpened: true }; the picker closes and
+//        the merge-confirmation dialog takes over the surface. A plain
+//        failed result still keeps the picker open for retry (T7b).
 
 // ── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -245,10 +246,42 @@ describe('drawer mapped body — TARGET column swap (T6 / T7)', () => {
     expect(onSwapTarget).toHaveBeenCalledWith('tfm-1', 'tf-99')
   })
 
-  it('T7 — a TARGET_CONFLICT (failed result) keeps the picker open for retry', async () => {
-    // The server refuses a swap onto an already-mapped target with
-    // errorCode TARGET_CONFLICT; the mutation layer surfaces an error
-    // toast and returns { success: false }. The picker must stay open.
+  it('T7 — a merge-required swap closes the picker (the merge dialog takes over)', async () => {
+    // A swap onto an already-mapped target returns
+    // { success: false, mergeOpened: true }. The picker closes — the
+    // merge-confirmation dialog (hosted by MappingContent) owns the
+    // surface from here.
+    const onSwapTarget = vi
+      .fn()
+      .mockResolvedValue({ success: false, mergeOpened: true })
+    render(
+      <MappingDrawer
+        row={mapped()}
+        isOpen
+        onClose={() => {}}
+        onSwapTarget={onSwapTarget}
+        availableTargetFields={TARGET_UNIVERSE}
+      />,
+    )
+    fireEvent.click(screen.getByTestId('drawer-mapping-target-edit'))
+    const picker = await screen.findByTestId('target-field-cell-picker')
+    const option = within(picker)
+      .getAllByTestId('target-field-cell-picker-field')
+      .find((el) => el.getAttribute('data-target-field-id') === 'tf-99')
+    fireEvent.click(option as HTMLElement)
+
+    expect(onSwapTarget).toHaveBeenCalledWith('tfm-1', 'tf-99')
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId('target-field-cell-picker'),
+      ).not.toBeInTheDocument()
+    })
+  })
+
+  it('T7b — a plain failed swap keeps the picker open for retry', async () => {
+    // A genuine failure (no mergeOpened) surfaces an error toast and
+    // returns { success: false }. The picker stays open so the user can
+    // pick a different target.
     const onSwapTarget = vi.fn().mockResolvedValue({ success: false })
     render(
       <MappingDrawer

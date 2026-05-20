@@ -13,6 +13,7 @@ import {
   updateMappingSourceField,
   updateMappingTargetField,
   type CreateFieldMappingCombinationType,
+  type TargetMergePreview,
 } from '@/lib/actions/mappings-for-redesign'
 import { acknowledgeField } from '@/lib/actions/field-acknowledgments'
 
@@ -50,7 +51,27 @@ interface UseMappingListMutationsArgs {
 // it to re-point at a row whose identity changed (e.g. an unmapped row
 // promoted to a real TFM). Mutations that don't resolve a TFM leave it
 // undefined.
-type MutationResult = { success: boolean; tfmId?: string }
+type MutationResult = {
+  success: boolean
+  tfmId?: string
+  /**
+   * True when a target swap hit an already-mapped target and opened the
+   * merge-confirmation dialog instead of completing. The picker callers
+   * close their popover on this so the dialog has a clean surface.
+   */
+  mergeOpened?: boolean
+}
+
+/**
+ * A target swap that the server reported as `MERGE_REQUIRED`, parked
+ * pending the user's confirmation in `MergeTargetDialog`. `confirmMerge`
+ * re-invokes `updateMappingTargetField` with the same identity.
+ */
+export interface PendingTargetMerge {
+  swappingTfmId: string
+  newTargetFieldId: string
+  preview: TargetMergePreview
+}
 
 export interface MappingListMutations {
   /**
@@ -178,6 +199,25 @@ export interface MappingListMutations {
     sourceFieldIds: string[]
     combinationType: CreateFieldMappingCombinationType
   }) => Promise<MutationResult>
+
+  /**
+   * A target swap parked awaiting merge confirmation, or `null`. When
+   * non-null, the host renders `MergeTargetDialog`. Set when
+   * `swapMappingTarget` receives a `MERGE_REQUIRED` response.
+   */
+  pendingMerge: PendingTargetMerge | null
+
+  /** True while `confirmPendingMerge` is in flight. */
+  isMergePending: boolean
+
+  /**
+   * Execute the parked merge — re-invokes `updateMappingTargetField`
+   * with `confirmMerge: true`. Clears `pendingMerge` when done.
+   */
+  confirmPendingMerge: () => Promise<MutationResult>
+
+  /** Dismiss the parked merge without executing it. */
+  cancelPendingMerge: () => void
 }
 
 export function useMappingListMutations(
@@ -187,6 +227,10 @@ export function useMappingListMutations(
   const router = useRouter()
   const { pushToast } = useToast()
   const [pendingKeys, setPendingKeys] = useState<Set<string>>(new Set())
+  const [pendingMerge, setPendingMerge] = useState<PendingTargetMerge | null>(
+    null,
+  )
+  const [isMergePending, setIsMergePending] = useState(false)
 
   const markPending = useCallback((key: string) => {
     setPendingKeys((prev) => {
@@ -272,15 +316,95 @@ export function useMappingListMutations(
     [run],
   )
 
+  // Target swap is two-phase. A clean swap (target unmapped) completes
+  // in one call. A swap onto an already-mapped target returns
+  // `MERGE_REQUIRED`: instead of an error toast, park the merge in
+  // `pendingMerge` so the host can open `MergeTargetDialog`.
   const swapMappingTarget = useCallback(
-    (tfmId: string, newTargetFieldId: string) =>
-      run(
-        tfmId,
-        () => updateMappingTargetField({ tfmId, newTargetFieldId }),
-        'Target field updated',
-      ),
-    [run],
+    async (
+      tfmId: string,
+      newTargetFieldId: string,
+    ): Promise<MutationResult> => {
+      markPending(tfmId)
+      try {
+        const result = await updateMappingTargetField({
+          tfmId,
+          newTargetFieldId,
+        })
+        if (!result.success && result.errorCode === 'MERGE_REQUIRED') {
+          setPendingMerge({
+            swappingTfmId: tfmId,
+            newTargetFieldId,
+            preview: result.merge,
+          })
+          return { success: false, mergeOpened: true }
+        }
+        if (!result.success) {
+          pushToast({
+            variant: 'error',
+            message: result.error ?? 'Action failed. Please retry.',
+          })
+          return { success: false }
+        }
+        pushToast({ variant: 'success', message: 'Target field updated' })
+        router.refresh()
+        return { success: true, tfmId: result.tfmId }
+      } catch (err) {
+        pushToast({
+          variant: 'error',
+          message:
+            err instanceof Error
+              ? err.message
+              : 'Unexpected error. Please retry.',
+        })
+        return { success: false }
+      } finally {
+        clearPending(tfmId)
+      }
+    },
+    [markPending, clearPending, pushToast, router],
   )
+
+  const confirmPendingMerge = useCallback(async (): Promise<MutationResult> => {
+    if (!pendingMerge) return { success: false }
+    const { swappingTfmId, newTargetFieldId } = pendingMerge
+    setIsMergePending(true)
+    markPending(swappingTfmId)
+    try {
+      const result = await updateMappingTargetField({
+        tfmId: swappingTfmId,
+        newTargetFieldId,
+        confirmMerge: true,
+      })
+      if (!result.success) {
+        pushToast({
+          variant: 'error',
+          message: result.error ?? 'Merge failed. Please retry.',
+        })
+        return { success: false }
+      }
+      pushToast({ variant: 'success', message: 'Mappings merged' })
+      setPendingMerge(null)
+      router.refresh()
+      return { success: true, tfmId: result.tfmId }
+    } catch (err) {
+      pushToast({
+        variant: 'error',
+        message:
+          err instanceof Error
+            ? err.message
+            : 'Unexpected error. Please retry.',
+      })
+      return { success: false }
+    } finally {
+      setIsMergePending(false)
+      clearPending(swappingTfmId)
+    }
+  }, [pendingMerge, markPending, clearPending, pushToast, router])
+
+  const cancelPendingMerge = useCallback(() => {
+    setPendingMerge(null)
+  }, [])
 
   const createFromUnmapped = useCallback(
     (input: {
@@ -391,5 +515,9 @@ export function useMappingListMutations(
     approveUnmappedSource,
     promoteUnmappedSource: promoteUnmappedSourceMut,
     editMappingSources: editMappingSourcesMut,
+    pendingMerge,
+    isMergePending,
+    confirmPendingMerge,
+    cancelPendingMerge,
   }
 }
