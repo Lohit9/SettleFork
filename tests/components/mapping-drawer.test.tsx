@@ -362,19 +362,49 @@ describe('MappingDrawer — header (feat/mapping-drawer-header-redesign)', () =>
     )
     line = screen.getByTestId('mapping-drawer-header-confidence')
     expect(line.getAttribute('data-status')).toBe('rejected')
+    // feat/normalize-rejected-rows-null-confidence: post-#157/#158/A2
+    // 'rejected' collapses onto the needs_review visual (Reject =
+    // reset). The dot renders slate-400, NOT red — matching the
+    // flat-view `FlatStatusDot` / `StatusDot` collapse. The trailing
+    // label word stays "rejected".
     expect(
       within(line).getByTestId('mapping-drawer-header-confidence-dot').className,
-    ).toContain('bg-red-500')
+    ).toContain('bg-slate-400')
+    expect(
+      within(line).getByTestId('mapping-drawer-header-confidence-dot').className,
+    ).not.toContain('bg-red-500')
     expect(
       within(line).getByTestId('mapping-drawer-header-confidence-text').textContent,
     ).toContain('rejected')
   })
 
-  it('confidence line omits the percentage when row.confidence is null (unmapped / null-confidence VA)', () => {
+  it('confidence line renders NOTHING when row.confidence is null (unmapped / null-confidence VA)', () => {
     render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
-    const text = screen.getByTestId('mapping-drawer-header-confidence-text')
-    // No percent sign should appear; just the status label.
-    expect(text.textContent).not.toContain('%')
+    // feat/normalize-rejected-rows-null-confidence: a null confidence
+    // suppresses the whole line — no dot, no label. Pre-change it
+    // rendered a bare status word with no number.
+    expect(
+      screen.queryByTestId('mapping-drawer-header-confidence'),
+    ).toBeNull()
+    expect(
+      screen.queryByTestId('mapping-drawer-header-confidence-text'),
+    ).toBeNull()
+  })
+
+  it('confidence line renders NOTHING for an approved row with null confidence (orphan-visual fix)', () => {
+    render(
+      <MappingDrawer
+        row={mapped({ status: 'approved', confidence: null })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    // The orphan visual this fix targets: approved + null confidence
+    // previously showed the bare word "confidence" with no percentage.
+    // Suppression is status-agnostic — it keys off confidence alone.
+    expect(
+      screen.queryByTestId('mapping-drawer-header-confidence'),
+    ).toBeNull()
   })
 
   it('dialog aria-labelledby points at the new header title element id', () => {

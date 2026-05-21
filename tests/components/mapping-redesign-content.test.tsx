@@ -1076,6 +1076,56 @@ describe('MappingRedesignContent — strip counters include unmapped-source rows
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
+// feat/normalize-rejected-rows-null-confidence — Needs Review folds in
+// `status === 'rejected'` rows.
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Post-#157/#158/A2 'rejected' no longer carries a semantic distinct from
+// 'needs_review' (Reject = reset). `effectiveCounts` counts rejected flat
+// rows in the Needs Review chip — never Approved, never a separate
+// Rejected bucket. Pre-change a rejected row dropped out of BOTH chips.
+
+describe('MappingRedesignContent — Needs Review folds in rejected rows', () => {
+  it('a mapped row with status=rejected counts in Needs Review, not Approved', () => {
+    const base = buildData()
+    // buildData ships 4 approved + 1 needs_review mapped rows. Flip one
+    // approved row (r-customers-1) to rejected.
+    const rows: MappingRow[] = base.rows.map((r) =>
+      r.id === 'r-customers-1' ? { ...r, status: 'rejected' as const } : r,
+    )
+    renderRedesign('', { rows })
+    const approved = screen.getByTestId('mapping-summary-chip-approved')
+    const needsReview = screen.getByTestId('mapping-summary-chip-needs-review')
+    // Approved 4 → 3 (r-customers-1 left the bucket). Needs Review folds
+    // the rejected row in: 1 mapped needs_review + 1 pure unmapped-source
+    // (sf-acct-unused) + 1 rejected = 3.
+    expect(Number(approved.textContent?.match(/\d+/)?.[0])).toBe(3)
+    expect(Number(needsReview.textContent?.match(/\d+/)?.[0])).toBe(3)
+  })
+
+  it('every flat row stays accounted for across the two chips when a rejected row is present', () => {
+    const base = buildData()
+    const rows: MappingRow[] = base.rows.map((r) =>
+      r.id === 'r-customers-1' ? { ...r, status: 'rejected' as const } : r,
+    )
+    renderRedesign('', { rows })
+    const approved = Number(
+      screen
+        .getByTestId('mapping-summary-chip-approved')
+        .textContent?.match(/\d+/)?.[0],
+    )
+    const needsReview = Number(
+      screen
+        .getByTestId('mapping-summary-chip-needs-review')
+        .textContent?.match(/\d+/)?.[0],
+    )
+    // 5 mapped + 1 pure unmapped-source = 6 flat rows, all tallied
+    // (the rejected row lands in Needs Review rather than dropping out).
+    expect(approved + needsReview).toBe(6)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Phase 4-polish-1 sidebar architecture refactor — zero-gap regression guard.
 // ─────────────────────────────────────────────────────────────────────────────
 //
