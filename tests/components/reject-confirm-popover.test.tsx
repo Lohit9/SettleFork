@@ -50,12 +50,12 @@ function Harness({ onConfirm, onCancel, consequence }: HarnessProps) {
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 describe('RejectConfirmPopover — render + locked copy', () => {
-  it('renders the locked title and Cancel/Reject buttons', async () => {
+  it('renders the locked title and Cancel/Unmap buttons', async () => {
     const onConfirm = vi.fn()
     const onCancel = vi.fn()
     render(<Harness onConfirm={onConfirm} onCancel={onCancel} />)
-    // Title — locked copy.
-    expect(await screen.findByText('Reject this mapping?')).toBeInTheDocument()
+    // Title — locked copy (feat/reject-to-unmap renamed "Reject" → "Unmap").
+    expect(await screen.findByText('Unmap this mapping?')).toBeInTheDocument()
     // Both buttons render via testids; the role+name pattern is also a
     // valid surface but the testids let us assert specifically which
     // button (cancel vs confirm) without ambiguity.
@@ -71,7 +71,7 @@ describe('RejectConfirmPopover — render + locked copy', () => {
     render(<Harness onConfirm={vi.fn()} onCancel={vi.fn()} />)
     const popover = await screen.findByTestId('reject-confirm-popover')
     expect(popover.getAttribute('role')).toBe('dialog')
-    expect(popover.getAttribute('aria-label')).toBe('Reject this mapping?')
+    expect(popover.getAttribute('aria-label')).toBe('Unmap this mapping?')
   })
 
   it('confirm button is destructive (red) — class signature pinned', async () => {
@@ -171,7 +171,7 @@ describe('RejectConfirmPopover — confirm + cancel button wiring', () => {
     expect(onConfirm).not.toHaveBeenCalled()
   })
 
-  it('Reject button click fires onConfirm', async () => {
+  it('Unmap button click fires onConfirm', async () => {
     const onConfirm = vi.fn()
     const onCancel = vi.fn()
     const user = userEvent.setup()

@@ -109,7 +109,7 @@ export function MergeTargetDialog({
         <div className="px-6 pb-1 text-sm text-slate-600">
           The merged mapping returns to <strong>Needs review</strong> and its transformation SQL is
           cleared for re-authoring. The original mapping&apos;s old target reverts to unmapped. This
-          is a merge, not a replace — to discard the existing mapping instead, reject it first, then
+          is a merge, not a replace — to discard the existing mapping instead, unmap it first, then
           swap.
         </div>
 

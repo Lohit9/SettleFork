@@ -127,7 +127,7 @@ function pluralise(count: number, singular: string, plural?: string): string {
 
 function buildTitle(props: BulkConfirmDialogProps): string {
   const { mode, scope, targetTableName, threshold } = props
-  const verb = mode === 'approve' ? 'Approve' : 'Reject'
+  const verb = mode === 'approve' ? 'Approve' : 'Unmap'
   if (scope === 'table') {
     return `${verb} all needs-review on ${targetTableName ?? '?'}`
   }
@@ -139,7 +139,7 @@ function buildTitle(props: BulkConfirmDialogProps): string {
 function buildLeadCopy(props: BulkConfirmDialogProps): string {
   const { mode, scope, count } = props
   const n = count ?? 0
-  const verb = mode === 'approve' ? 'approve' : 'reject'
+  const verb = mode === 'approve' ? 'approve' : 'unmap'
   const noun = pluralise(n, 'mapping')
   if (scope === 'table') {
     return `You're about to ${verb} ${n} needs-review ${noun}.`
@@ -154,7 +154,7 @@ function buildLeadCopy(props: BulkConfirmDialogProps): string {
 // the destructive contract before confirming.
 function buildConsequenceCopy(props: BulkConfirmDialogProps): string {
   if (props.mode === 'reject') {
-    return 'Each rejected mapping is deleted permanently. The target fields will appear as unmapped (Rule 6). This cannot be undone.'
+    return 'Unmapping deletes each mapping permanently. The target fields will appear as unmapped (Rule 6). This cannot be undone.'
   }
   return 'This cannot be undone.'
 }
@@ -162,9 +162,9 @@ function buildConsequenceCopy(props: BulkConfirmDialogProps): string {
 function buildActionLabel(props: BulkConfirmDialogProps): string {
   const { mode, count, isSubmitting } = props
   const n = count ?? 0
-  const verb = mode === 'approve' ? 'Approve' : 'Reject'
+  const verb = mode === 'approve' ? 'Approve' : 'Unmap'
   if (isSubmitting) {
-    return mode === 'approve' ? 'Approving…' : 'Rejecting…'
+    return mode === 'approve' ? 'Approving…' : 'Unmapping…'
   }
   // §3 dialog copy uses the count verbatim — "Approve 7 mappings".
   return `${verb} ${n} ${pluralise(n, 'mapping')}`

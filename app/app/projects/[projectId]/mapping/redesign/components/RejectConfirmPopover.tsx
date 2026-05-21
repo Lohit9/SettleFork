@@ -19,10 +19,13 @@ import { cn } from '@/components/ui/utils'
 //      polish-3 — keeping scope tight; the pattern can promote later if a
 //      second non-row caller appears.
 //
-//   2. Locked copy:
-//        Title:  "Reject this mapping?"
-//        Buttons: "Cancel" (default) + "Reject" (destructive red)
-//      The drawer's existing reject AlertDialog carries a longer body
+//   2. Locked copy (feat/reject-to-unmap renamed the verb "Reject" →
+//      "Unmap"; the component name `RejectConfirmPopover` stays as an
+//      internal API name):
+//        Title:  "Unmap this mapping?"
+//        Buttons: "Cancel" (default) + "Unmap" (destructive red — the
+//        rename does not change that the action deletes the TFM)
+//      The drawer's existing unmap AlertDialog carries a longer body
 //      ("…will become unmapped. The mapping and any associated
 //      transformation will be deleted. This cannot be undone."). The
 //      inline popover stays terse — the row's destructive verb +
@@ -30,9 +33,9 @@ import { cn } from '@/components/ui/utils'
 //      paragraph.
 //
 //   3. Dismiss on Esc / click-outside (treat as cancel); the destructive
-//      action is invoked only on Reject click. Focus moves to the Cancel
+//      action is invoked only on Unmap click. Focus moves to the Cancel
 //      button on mount so a stray Enter cancels rather than confirms
-//      (defense-in-depth — the Reject button is destructive).
+//      (defense-in-depth — the Unmap button is destructive).
 
 const POPOVER_WIDTH_PX = 240
 const POPOVER_HEIGHT_PX = 96
@@ -55,8 +58,8 @@ export interface RejectConfirmPopoverProps {
   onCancel: () => void
   /**
    * Drawer redesign PR 2 — copy override for re-use as a per-source
-   * remove confirm. Defaults to the row-level reject copy
-   * ("Reject this mapping?" / "Reject"). Per-source remove sets
+   * remove confirm. Defaults to the row-level unmap copy
+   * ("Unmap this mapping?" / "Unmap"). Per-source remove sets
    * `title: "Remove this source from the mapping?"` / `confirmLabel:
    * "Remove"`.
    */
@@ -78,8 +81,8 @@ export function RejectConfirmPopover({
   anchorRef,
   onConfirm,
   onCancel,
-  title = 'Reject this mapping?',
-  confirmLabel = 'Reject',
+  title = 'Unmap this mapping?',
+  confirmLabel = 'Unmap',
   consequence,
 }: RejectConfirmPopoverProps) {
   // A consequence line adds a paragraph — feed the taller estimate into

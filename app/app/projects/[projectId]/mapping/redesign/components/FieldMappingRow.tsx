@@ -763,15 +763,23 @@ function InlineActionsCell({
 
   const buttons: React.ReactNode[] = []
 
-  // PR α₀ — status-driven approve/reject for every row kind. The dispatch
-  // table:
-  //   needs_review → ✓ + ✗   (approve/reject both surfaced)
-  //   approved     →     ✗   (reject only)
+  // PR α₀ — status-driven approve/reject. feat/reject-to-unmap gates the
+  // ✗ (now "Unmap") action to mapped / value_assignment rows only.
+  // Dispatch table (the ✗ rows additionally require kind !== 'unmapped'):
+  //   needs_review → ✓ + ✗   (approve + unmap)
+  //   approved     →     ✗   (unmap only)
   //   rejected     → ✓       (un-reject only — re-runs approve flow)
+  //
+  // The kind gate lives here because this cell is status-driven; it has
+  // no per-kind `actions` table to drop the reject wiring from (unlike
+  // the flat view's `MappingListView`). Under the post-#157 model
+  // "reject" on an unmapped row is a non-destructive no-op (it only
+  // clears AI rationale text), so unmapped rows surface no ✗.
   const showApprove =
     (row.status === 'needs_review' || row.status === 'rejected') &&
     onInlineApprove !== undefined
   const showReject =
+    row.kind !== 'unmapped' &&
     (row.status === 'needs_review' || row.status === 'approved') &&
     onInlineReject !== undefined
 
@@ -796,8 +804,8 @@ function InlineActionsCell({
       <ActionIconButton
         key="reject"
         testId="field-mapping-row-reject-button"
-        ariaLabel="Reject mapping"
-        tooltip="Reject mapping"
+        ariaLabel="Unmap mapping"
+        tooltip="Unmap mapping"
         onClick={(e) => onInlineReject!(row.id, e.currentTarget)}
         disabled={isBusy}
         variant="reject"

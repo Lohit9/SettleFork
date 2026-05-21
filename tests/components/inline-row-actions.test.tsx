@@ -17,16 +17,25 @@ import type {
 //
 // Pins the founder-locked per-row-state button matrix:
 //
-//   needs_review (mapped/VA/unmapped) → ✓ approve  + ✗ reject
-//   approved (mapped/VA/unmapped)     →             ✗ reject
-//   rejected (mapped/VA/unmapped)     → ✓ approve  (un-reject)
+//   mapped / VA  needs_review → ✓ approve  + ✗ unmap
+//   mapped / VA  approved     →             ✗ unmap
+//   mapped / VA  rejected     → ✓ approve  (un-reject)
+//   unmapped     needs_review → ✓ approve  (NO ✗ — see below)
+//   unmapped     approved     →            (no inline action)
+//   unmapped     rejected     → ✓ approve  (un-reject)
+//
+// feat/reject-to-unmap: the ✗ button (renamed "Reject" → "Unmap") is
+// gated to mapped / value_assignment rows. On an unmapped row "reject"
+// was a non-destructive no-op (it only cleared AI rationale text), so
+// unmapped rows surface no ✗ at all.
 //
 // INF-57 cleanup (2026-05-10): the prior `target_acknowledged → ✗ un-
 // acknowledge (opens drawer)` row was dropped — coverage-approved
-// no-source rows now surface as kind='unmapped' + status='approved' and
-// participate in the symmetric status-driven dispatch above. To
-// un-approve back to needs_review, the user opens the drawer (footer
-// Un-approve button calls resetMappingStatus).
+// no-source rows now surface as kind='unmapped' + status='approved'.
+// Post-reject-to-unmap such a row carries no inline action at all
+// (approve is hidden because it is already approved; ✗ is gated off
+// for unmapped). To un-approve back to needs_review, the user opens
+// the drawer (footer Un-approve button calls resetMappingStatus).
 //
 // Plus the visibility / optimistic-state / event-payload contracts.
 // The picker integration (clicking the source cell to open the
@@ -184,12 +193,13 @@ describe('Inline action buttons — render matrix', () => {
     ).toBeInTheDocument()
   })
 
-  it('coverage-approved no-source row renders ✗ reject ONLY (INF-57 cleanup — symmetric with mapped/VA approved)', () => {
-    // INF-57 cleanup design lock 1: coverage-approved no-source rows fall
-    // through to α₀'s standard status-driven dispatch (no suppression
-    // guard). With status='approved' the cell renders × reject only —
-    // identical to mapped/VA approved rows. To un-approve, the user
-    // opens the drawer (footer Un-approve button → resetMappingStatus).
+  it('coverage-approved no-source row renders NO inline action (unmapped + approved — feat/reject-to-unmap)', () => {
+    // INF-57 cleanup folds coverage-approved no-source rows into
+    // kind='unmapped' + status='approved'. feat/reject-to-unmap then
+    // gates the ✗ (Unmap) action off for unmapped rows, and approve is
+    // already hidden on an approved row — so the actions cell is empty.
+    // To un-approve back to needs_review the user opens the drawer
+    // (footer Un-approve button → resetMappingStatus).
     render(
       <FieldMappingRow
         row={targetAck()}
@@ -200,22 +210,20 @@ describe('Inline action buttons — render matrix', () => {
     expect(
       screen.queryByTestId('field-mapping-row-approve-button'),
     ).toBeNull()
-    expect(
-      screen.getByTestId('field-mapping-row-reject-button'),
-    ).toBeInTheDocument()
+    expect(screen.queryByTestId('field-mapping-row-reject-button')).toBeNull()
     // The legacy unacknowledge button no longer exists at this surface.
     expect(
       screen.queryByTestId('field-mapping-row-unacknowledge-button'),
     ).toBeNull()
   })
 
-  it('unmapped + needs_review renders ✓ approve AND ✗ reject ONLY (PR α₀ Path A — no + or ⊘)', () => {
-    // PR α₀ Path A (2026-05-09): the kind='unmapped' overlay was
-    // dropped from the action cell. unmapped rows now show only the
-    // status-driven approve/reject pair, identical to mapped/VA.
-    // Re-mapping moves to the source-field cell's hover pencil
-    // affordance (covered by the "Inline source-edit hint" describe
-    // block).
+  it('unmapped + needs_review renders ✓ approve ONLY (feat/reject-to-unmap — no ✗ on unmapped)', () => {
+    // PR α₀ Path A (2026-05-09) dropped the kind='unmapped' overlay.
+    // feat/reject-to-unmap further gates the ✗ (Unmap) action off for
+    // unmapped rows — on an unmapped row "reject" was a non-destructive
+    // no-op. So an unmapped needs_review row shows the ✓ approve button
+    // only. Re-mapping moves to the source-field cell's hover pencil
+    // affordance (covered by the "Inline source-edit hint" describe).
     render(
       <FieldMappingRow
         row={unmapped({ status: 'needs_review' })}
@@ -228,9 +236,8 @@ describe('Inline action buttons — render matrix', () => {
     expect(
       screen.getByTestId('field-mapping-row-approve-button'),
     ).toBeInTheDocument()
-    expect(
-      screen.getByTestId('field-mapping-row-reject-button'),
-    ).toBeInTheDocument()
+    // feat/reject-to-unmap — no ✗ on unmapped rows.
+    expect(screen.queryByTestId('field-mapping-row-reject-button')).toBeNull()
     // The dropped kind='unmapped' overlay buttons MUST NOT render —
     // re-map is now exclusively reachable via the source-field pencil.
     expect(screen.queryByTestId('field-mapping-row-map-button')).toBeNull()
@@ -328,16 +335,23 @@ describe('Inline action buttons — render matrix', () => {
   })
 })
 
-// ── INF-57 cleanup — symmetric inline dispatch on coverage-approved no-source ─
+// ── feat/reject-to-unmap — unmapped + approved has no inline action ─────────
 
-describe('Inline action buttons — INF-57 symmetric dispatch (unmapped + approved)', () => {
-  // Locked design decision 1: coverage-approved no-source rows fall through
-  // to α₀'s standard status-driven dispatch — × reject IS rendered and
-  // direct-writes to rejected, identical to mapped/VA approved rows. No
-  // suppression guard. To un-approve back to needs_review, the user opens
-  // the drawer (footer Un-approve button calls resetMappingStatus).
+describe('Inline action buttons — unmapped + approved (feat/reject-to-unmap)', () => {
+  // INF-57 cleanup folded `target_acknowledged` into kind='unmapped' +
+  // status='approved'. feat/reject-to-unmap gates the ✗ (Unmap) action
+  // off for unmapped rows; approve is already hidden on an approved
+  // row. Net: a coverage-approved no-source row has an empty actions
+  // cell. To un-approve back to needs_review the user opens the drawer
+  // (footer Un-approve button calls resetMappingStatus).
+  //
+  // The prior tests here asserted "× reject only" + "clicking × fires
+  // onInlineReject" on these rows. The click test was removed when
+  // feat/reject-to-unmap dropped the unmapped-row reject affordance —
+  // there is no ✗ on an unmapped row to click. The render test below
+  // is updated to assert the affordance is gone.
 
-  it('renders × reject only on a coverage-approved no-source row (mirrors mapped/VA approved)', () => {
+  it('renders neither ✓ approve nor ✗ unmap on a coverage-approved no-source row', () => {
     render(
       <FieldMappingRow
         row={targetAck()}
@@ -345,31 +359,10 @@ describe('Inline action buttons — INF-57 symmetric dispatch (unmapped + approv
         onInlineReject={vi.fn()}
       />,
     )
-    expect(
-      screen.getByTestId('field-mapping-row-reject-button'),
-    ).toBeInTheDocument()
+    expect(screen.queryByTestId('field-mapping-row-reject-button')).toBeNull()
     expect(
       screen.queryByTestId('field-mapping-row-approve-button'),
     ).toBeNull()
-  })
-
-  it('clicking × on a coverage-approved no-source row fires onInlineReject(row.id, anchorEl) — direct-writes to rejected via the standard path', async () => {
-    const onInlineReject = vi.fn()
-    const user = userEvent.setup()
-    render(
-      <FieldMappingRow
-        row={targetAck({ id: 'unmapped::tf-cov-X' })}
-        onInlineApprove={vi.fn()}
-        onInlineReject={onInlineReject}
-      />,
-    )
-    const rejectBtn = screen.getByTestId('field-mapping-row-reject-button')
-    await user.click(rejectBtn)
-    expect(onInlineReject).toHaveBeenCalledTimes(1)
-    expect(onInlineReject).toHaveBeenCalledWith(
-      'unmapped::tf-cov-X',
-      expect.any(HTMLElement),
-    )
   })
 
   it('does NOT render the legacy un-acknowledge button (dropped in INF-57 cleanup)', () => {
@@ -491,13 +484,13 @@ describe('Inline action buttons — click payloads', () => {
 
   // The legacy test "clicking ✗ on a target_acknowledged row fires
   // onInlineUnacknowledge (drawer entry path)" was dropped by INF-57
-  // cleanup. Coverage-approved no-source rows now participate in the
-  // standard status-driven dispatch — clicking ✗ direct-writes to
-  // rejected via onInlineReject, identical to mapped/VA approved rows.
-  // To un-approve back to needs_review the user opens the drawer (footer
-  // Un-approve button calls resetMappingStatus). The ✗ → reject payload
-  // contract for unmapped+approved is exercised by the new test in the
-  // describe block below.
+  // cleanup. feat/reject-to-unmap then removed the ✗ affordance from
+  // unmapped rows entirely — there is no ✗-click payload contract for
+  // unmapped rows to exercise. The ✗ → onInlineReject contract for
+  // mapped/VA rows is covered by "clicking ✗ fires onInlineReject"
+  // above. To un-approve a coverage-approved no-source row back to
+  // needs_review the user opens the drawer (footer Un-approve button
+  // calls resetMappingStatus).
 
   it('action button clicks do NOT bubble to the row-body drawer-open handler', async () => {
     // The row body itself becomes a `role="button"` drawer trigger
