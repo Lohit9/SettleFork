@@ -45,6 +45,8 @@ export type ValidationCheckId =
   | 'enum_mismatch'
   | 'unmapped_required_target'
   | 'many_to_one_collision'
+  | 'timezone_coercion'
+  | 'fk_value_gap'
 
 export interface ValidationResult {
   /** True if zero errors (warnings are OK). */
@@ -68,6 +70,8 @@ export interface SourceField {
   nullPct?: number | null
   /** Sample values from profiling. */
   sampleValues?: string[]
+  /** Whether the source datetime values include timezone info (null if not profiled). */
+  hasTimezone?: boolean | null
 }
 
 export interface TargetField {
@@ -82,6 +86,8 @@ export interface TargetField {
   maxLength?: number | null
   /** Allowed enum values if the field is constrained. */
   enumValues?: string[]
+  /** Known values in the FK lookup table (null if not a FK or not profiled). */
+  fkLookupValues?: string[] | null
 }
 
 export interface MappingProposal {
@@ -280,6 +286,95 @@ function checkEnumMismatch(proposal: MappingProposal): ValidationIssue[] {
   return issues
 }
 
+// ─── Timezone-aware types ───────────────────────────────────────────
+
+/** Types that carry timezone info vs types that don't. */
+const TZ_AWARE_TYPES = new Set(['timestamptz', 'datetimeoffset', 'timestamp with time zone'])
+const TZ_NAIVE_TYPES = new Set(['datetime', 'timestamp', 'datetime2', 'smalldatetime'])
+
+function isTimezoneAware(dataType: string): boolean | null {
+  const lower = dataType.toLowerCase().trim()
+  if (TZ_AWARE_TYPES.has(lower)) return true
+  if (TZ_NAIVE_TYPES.has(lower)) return false
+  return null
+}
+
+function checkTimezoneCoercion(proposal: MappingProposal): ValidationIssue[] {
+  const issues: ValidationIssue[] = []
+  if (proposal.transformSql) return issues
+
+  const tgtFamily = parseBaseType(proposal.targetField.dataType)
+  if (tgtFamily !== 'datetime') return issues
+
+  const targetTzAware = isTimezoneAware(proposal.targetField.dataType)
+
+  for (const src of proposal.sourceFields) {
+    const srcFamily = parseBaseType(src.dataType)
+    if (srcFamily !== 'datetime') continue
+
+    const sourceTzAware = isTimezoneAware(src.dataType)
+
+    // Naive → TZ-aware: silent reinterpretation as UTC (or server TZ)
+    if (sourceTzAware === false && targetTzAware === true) {
+      issues.push({
+        check: 'timezone_coercion',
+        severity: 'warning',
+        message: `${src.name} (${src.dataType}) → ${proposal.targetField.name} (${proposal.targetField.dataType}): no timezone in source, target expects timezone`,
+        detail: src.hasTimezone === false
+          ? `Profiling confirms source values have no timezone offset. They will be silently interpreted as UTC (or the target DB's default timezone), which may shift every timestamp.`
+          : `Source type has no timezone component. If values represent local time, they will be silently reinterpreted. Run profiling to check for timezone offsets in the data.`,
+        sourceFields: [src.name],
+        targetField: proposal.targetField.name,
+        suggestion: `Add AT TIME ZONE '<source_timezone>' to explicitly declare the source timezone before casting to ${proposal.targetField.dataType}`,
+      })
+    }
+
+    // TZ-aware → naive: silently drops timezone (may shift values if not UTC)
+    if (sourceTzAware === true && targetTzAware === false) {
+      issues.push({
+        check: 'timezone_coercion',
+        severity: 'warning',
+        message: `${src.name} (${src.dataType}) → ${proposal.targetField.name} (${proposal.targetField.dataType}): timezone info will be silently dropped`,
+        detail: `Source carries timezone offsets. Target stores bare datetime. Values in non-UTC zones will lose their offset, making the stored time ambiguous.`,
+        sourceFields: [src.name],
+        targetField: proposal.targetField.name,
+        suggestion: `Add AT TIME ZONE 'UTC' to normalize to UTC before storing in the naive target column`,
+      })
+    }
+  }
+  return issues
+}
+
+// ─── FK value gap ───────────────────────────────────────────────────
+
+function checkFkValueGap(proposal: MappingProposal): ValidationIssue[] {
+  const issues: ValidationIssue[] = []
+  const lookupValues = proposal.targetField.fkLookupValues
+  if (!proposal.targetField.isForeignKey || !lookupValues || lookupValues.length === 0) return issues
+
+  for (const src of proposal.sourceFields) {
+    if (!src.sampleValues || src.sampleValues.length === 0) continue
+
+    const missing = src.sampleValues.filter(v => !lookupValues.includes(v))
+    if (missing.length === 0) continue
+
+    const missingPct = Math.round((missing.length / src.sampleValues.length) * 100)
+
+    issues.push({
+      check: 'fk_value_gap',
+      severity: missingPct > 50 ? 'error' : 'warning',
+      message: `${src.name} has values not found in ${proposal.targetField.fkReference ?? 'lookup table'}: ${missingPct}% of sample unmatched`,
+      detail: `Missing from lookup: ${missing.slice(0, 8).join(', ')}${missing.length > 8 ? ` (+${missing.length - 8} more)` : ''}. These rows will fail FK constraints at load time.`,
+      sourceFields: [src.name],
+      targetField: proposal.targetField.name,
+      suggestion: missing.length <= 5
+        ? `Insert missing values into ${proposal.targetField.fkReference ?? 'the lookup table'} before migration, or add a CASE WHEN to remap them`
+        : `Source values diverge significantly from lookup table. Verify the mapping is correct — this may be the wrong FK target`,
+    })
+  }
+  return issues
+}
+
 // ─── Main validator ─────────────────────────────────────────────────
 
 /**
@@ -299,6 +394,8 @@ export function validateMapping(proposal: MappingProposal): ValidationResult {
     ...checkNullViolation(proposal),
     ...checkUniqueViolation(proposal),
     ...checkEnumMismatch(proposal),
+    ...checkTimezoneCoercion(proposal),
+    ...checkFkValueGap(proposal),
   ]
 
   const counts = {
