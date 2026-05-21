@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Settle — Architecture Proposal: Slim Agents, Fat Validation</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif; background: #0f172a; color: #e2e8f0; padding: 40px; max-width: 1100px; margin: 0 auto; }
+  h1 { font-size: 20px; color: #1d9e75; margin-bottom: 6px; }
+  .sub { color: #64748b; font-size: 13px; margin-bottom: 40px; }
+  h2 { font-size: 15px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.12em; margin: 40px 0 16px; }
+  .compare { display: grid; grid-template-columns: 1fr 60px 1fr; gap: 0; margin-bottom: 40px; }
+  .compare .arrow-col { display: flex; align-items: center; justify-content: center; font-size: 28px; color: #1d9e75; }
+  .stack { background: #1e293b; border: 1px solid #334155; border-radius: 10px; overflow: hidden; }
+  .stack .header { padding: 12px 16px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; border-bottom: 1px solid #334155; }
+  .stack .header.current { background: #7f1d1d; color: #fca5a5; }
+  .stack .header.proposed { background: #14532d; color: #86efac; }
+  .layer { display: flex; align-items: stretch; border-bottom: 1px solid #1e293b; }
+  .layer:last-child { border-bottom: none; }
+  .layer .bar { flex-shrink: 0; }
+  .layer .info { padding: 10px 14px; flex: 1; }
+  .layer .name { font-size: 13px; font-weight: 600; color: #f1f5f9; }
+  .layer .detail { font-size: 11px; color: #64748b; margin-top: 2px; line-height: 1.4; }
+  .layer .loc { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #475569; margin-top: 3px; }
+
+  /* bar widths represent relative code weight */
+  .bar-ai { background: #dc2626; }
+  .bar-det { background: #1d9e75; }
+  .bar-human { background: #3b82f6; }
+  .bar-graph { background: #a855f7; }
+  .bar-dead { background: #374151; }
+
+  .flow { margin: 30px 0; }
+  .flow-row { display: flex; align-items: center; gap: 0; margin-bottom: 2px; }
+  .flow-node { padding: 8px 14px; font-size: 12px; font-weight: 500; border-radius: 6px; white-space: nowrap; }
+  .flow-arrow { width: 32px; text-align: center; color: #475569; font-size: 14px; flex-shrink: 0; }
+  .flow-label { font-size: 10px; color: #64748b; margin-left: 12px; font-style: italic; }
+  .fn-ai { background: #7f1d1d; color: #fca5a5; border: 1px solid #991b1b; }
+  .fn-det { background: #14532d; color: #86efac; border: 1px solid #166534; }
+  .fn-human { background: #1e3a5f; color: #93c5fd; border: 1px solid #1d4ed8; }
+  .fn-graph { background: #3b0764; color: #d8b4fe; border: 1px solid #6b21a8; }
+  .fn-dead { background: #1f2937; color: #6b7280; border: 1px solid #374151; text-decoration: line-through; }
+
+  .metric { display: inline-flex; align-items: center; gap: 6px; background: #1e293b; border: 1px solid #334155; border-radius: 6px; padding: 6px 12px; font-size: 12px; margin: 4px; }
+  .metric .num { font-family: 'JetBrains Mono', monospace; font-weight: 700; }
+  .metric .num.red { color: #f87171; }
+  .metric .num.green { color: #4ade80; }
+
+  .section { background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 20px; margin: 20px 0; }
+  .section h3 { font-size: 14px; color: #f1f5f9; margin-bottom: 12px; }
+  .section ul { list-style: none; }
+  .section li { font-size: 12px; color: #94a3b8; padding: 4px 0; padding-left: 16px; position: relative; line-height: 1.5; }
+  .section li::before { content: '→'; position: absolute; left: 0; color: #1d9e75; }
+
+  table.edge { width: 100%; border-collapse: collapse; font-size: 12px; }
+  table.edge th { text-align: left; color: #64748b; font-weight: 500; padding: 8px 10px; border-bottom: 1px solid #334155; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; }
+  table.edge td { padding: 8px 10px; border-bottom: 1px solid #1e293b; color: #cbd5e1; }
+  table.edge td.fix { color: #4ade80; }
+  table.edge td.risk { color: #f87171; }
+</style>
+</head>
+<body>
+
+<h1>Settle Architecture Proposal</h1>
+<p class="sub">Slim the agents. Fatten the deterministic layer. Add the graph view. — Alex Wu, May 21 2026</p>
+
+<!-- ─── CURRENT vs PROPOSED weight ─── -->
+<h2>Code Weight: Current vs Proposed</h2>
+
+<div class="compare">
+  <!-- CURRENT -->
+  <div class="stack">
+    <div class="header current">Current (225K lines)</div>
+    <div class="layer">
+      <div class="bar bar-ai" style="width:140px"></div>
+      <div class="info">
+        <div class="name">AI / Agent Layer</div>
+        <div class="detail">Multi-agent orchestrator, 4 prompt files, agent loop, mapping engine, context builder, tool schemas</div>
+        <div class="loc">14,524 lines · lib/ai/</div>
+      </div>
+    </div>
+    <div class="layer">
+      <div class="bar bar-det" style="width:14px"></div>
+      <div class="info">
+        <div class="name">Deterministic Validation</div>
+        <div class="detail">Basic field validation only</div>
+        <div class="loc">124 lines · lib/validation/</div>
+      </div>
+    </div>
+    <div class="layer">
+      <div class="bar bar-det" style="width:46px"></div>
+      <div class="info">
+        <div class="name">Data Quality Engine</div>
+        <div class="detail">Profiling, FK inference, detection rules</div>
+        <div class="loc">4,771 lines · lib/quality/</div>
+      </div>
+    </div>
+    <div class="layer">
+      <div class="bar bar-human" style="width:48px"></div>
+      <div class="info">
+        <div class="name">UI / Human Review</div>
+        <div class="detail">Mapping redesign (24 components), data overview, quality view</div>
+        <div class="loc">~5,000 lines · components/ + app/</div>
+      </div>
+    </div>
+    <div class="layer">
+      <div class="bar bar-graph" style="width:0px"></div>
+      <div class="info">
+        <div class="name" style="color:#6b7280">Graph View</div>
+        <div class="detail" style="color:#475569">Does not exist</div>
+        <div class="loc">0 lines</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow-col">→</div>
+
+  <!-- PROPOSED -->
+  <div class="stack">
+    <div class="header proposed">Proposed</div>
+    <div class="layer">
+      <div class="bar bar-ai" style="width:50px"></div>
+      <div class="info">
+        <div class="name">AI / Agent Layer (trimmed)</div>
+        <div class="detail">Single-agent loop only. Multi-agent killed as default. Context builder + tool schemas kept. Mapping engine simplified.</div>
+        <div class="loc">~5,000 lines (-65%)</div>
+      </div>
+    </div>
+    <div class="layer">
+      <div class="bar bar-det" style="width:80px"></div>
+      <div class="info">
+        <div class="name">Deterministic Validation (fattened)</div>
+        <div class="detail">SQL parse + dry-run, FK constraint check, type coercion, null/unique violations, orphan detection, load order enforcement</div>
+        <div class="loc">~3,000 lines (+2,400%)</div>
+      </div>
+    </div>
+    <div class="layer">
+      <div class="bar bar-det" style="width:46px"></div>
+      <div class="info">
+        <div class="name">Data Quality Engine (kept)</div>
+        <div class="detail">Profiling, FK inference, detection rules — already solid</div>
+        <div class="loc">4,771 lines (unchanged)</div>
+      </div>
+    </div>
+    <div class="layer">
+      <div class="bar bar-human" style="width:48px"></div>
+      <div class="info">
+        <div class="name">UI / Human Review (kept)</div>
+        <div class="detail">Mapping redesign stays. List view + graph view toggle added.</div>
+        <div class="loc">~5,000 lines (unchanged)</div>
+      </div>
+    </div>
+    <div class="layer">
+      <div class="bar bar-graph" style="width:30px"></div>
+      <div class="info">
+        <div class="name">Graph View (new)</div>
+        <div class="detail">Dependency graph, topo sort, cycle detection, load order viz, FK cascade highlighting</div>
+        <div class="loc">~500 lines (new)</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── KEY METRICS ─── -->
+<div style="text-align:center; margin: 30px 0;">
+  <div class="metric"><span>AI calls per table pair:</span> <span class="num red">10</span> <span>→</span> <span class="num green">1-3</span></div>
+  <div class="metric"><span>Cost per migration:</span> <span class="num red">~$4.50/table</span> <span>→</span> <span class="num green">~$0.50/table</span></div>
+  <div class="metric"><span>Validation coverage:</span> <span class="num red">124 lines</span> <span>→</span> <span class="num green">~3,000 lines</span></div>
+  <div class="metric"><span>Time to first mapping:</span> <span class="num red">~45s</span> <span>→</span> <span class="num green">~8s</span></div>
+</div>
+
+<!-- ─── PIPELINE FLOW ─── -->
+<h2>Pipeline: Current vs Proposed</h2>
+
+<div class="section">
+  <h3>Current: Multi-Agent Voting Pipeline</h3>
+  <div class="flow">
+    <div class="flow-row">
+      <div class="flow-node fn-ai">3× Generator</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-node fn-ai">Vote Aggregation</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-node fn-ai">Cross-Table Specialist</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-node fn-ai">Cardinality Specialist</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-node fn-ai">3× Critic</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-node fn-ai">Refinement</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-node fn-human">Human</div>
+    </div>
+    <div class="flow-label">10 LLM calls. ~$4.50. ~45 seconds. Consensus ≠ correctness.</div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Proposed: Propose → Validate → Iterate Loop</h3>
+  <div class="flow">
+    <div class="flow-row">
+      <div class="flow-node fn-graph">Graph View</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-node fn-ai">1× Agent Propose</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-node fn-det">Deterministic Validate</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-node fn-ai" style="font-size:11px">Agent Sees Failure</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-node fn-det">Re-Validate</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-node fn-human">Human</div>
+    </div>
+    <div class="flow-label">1-3 LLM calls. ~$0.50. ~8 seconds. Validation = proof, not opinion.</div>
+  </div>
+  <div class="flow" style="margin-top:16px">
+    <div class="flow-row">
+      <div class="flow-node fn-dead">3× Generator</div>
+      <div class="flow-arrow" style="color:#374151">✕</div>
+      <div class="flow-node fn-dead">3× Critic</div>
+      <div class="flow-arrow" style="color:#374151">✕</div>
+      <div class="flow-node fn-dead">Vote Aggregation</div>
+      <div class="flow-label" style="color:#6b7280">Killed. Consensus is theater when all agents share training data.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── WHAT THE DETERMINISTIC LAYER CATCHES ─── -->
+<h2>What the Fattened Deterministic Layer Does</h2>
+
+<div class="section">
+  <table class="edge">
+    <thead>
+      <tr>
+        <th>Check</th>
+        <th>What It Catches</th>
+        <th>Current</th>
+        <th>Proposed</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>SQL Parse</td>
+        <td>Transform SQL syntax errors before human sees them</td>
+        <td class="risk">Partial (agent dry-run)</td>
+        <td class="fix">Full parse + dialect check</td>
+      </tr>
+      <tr>
+        <td>SQL Dry-Run</td>
+        <td>Execute transform against sample data, catch runtime failures</td>
+        <td class="risk">In agent loop only</td>
+        <td class="fix">Standalone module, runs on every mapping</td>
+      </tr>
+      <tr>
+        <td>FK Constraint</td>
+        <td>Orphan records — child rows referencing nonexistent parents</td>
+        <td class="risk">Detection engine (partial)</td>
+        <td class="fix">Full FK graph walk + orphan count per table</td>
+      </tr>
+      <tr>
+        <td>Type Coercion</td>
+        <td>VARCHAR→INT, DATE format mismatches, precision loss</td>
+        <td class="risk">None</td>
+        <td class="fix">Per-mapping type compatibility check</td>
+      </tr>
+      <tr>
+        <td>Null Violations</td>
+        <td>Source nulls mapping to NOT NULL target fields</td>
+        <td class="risk">None</td>
+        <td class="fix">Source null % vs target nullability</td>
+      </tr>
+      <tr>
+        <td>Unique Violations</td>
+        <td>Duplicate values mapping to UNIQUE target fields</td>
+        <td class="risk">None</td>
+        <td class="fix">Source distinct count vs target constraint</td>
+      </tr>
+      <tr>
+        <td>Load Order</td>
+        <td>Migration will fail if tables loaded in wrong sequence</td>
+        <td class="risk">Static config only</td>
+        <td class="fix">Auto topo-sort from FK graph + cycle detection</td>
+      </tr>
+      <tr>
+        <td>Cascade Impact</td>
+        <td>Changing one mapping affects downstream tables</td>
+        <td class="risk">Not surfaced</td>
+        <td class="fix">Graph highlights all affected nodes</td>
+      </tr>
+      <tr>
+        <td>Circular Deps</td>
+        <td>Mutual FK references requiring staged loading</td>
+        <td class="risk">Not detected</td>
+        <td class="fix">Kahn's algorithm flags cycles</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ─── GRAPH VIEW VALUE ─── -->
+<h2>Why the Graph View Replaces Investigation Agents</h2>
+
+<div class="section">
+  <h3>Current: AI writes understanding docs before mapping (~$2/table)</h3>
+  <ul>
+    <li>Investigation agent reads schema docs, writes field-by-field context</li>
+    <li>Human reads the doc to understand table relationships</li>
+    <li>Expensive, slow, and the output is a text wall nobody wants to read</li>
+  </ul>
+</div>
+
+<div class="section">
+  <h3>Proposed: Graph shows structure instantly ($0)</h3>
+  <ul>
+    <li>FK relationships rendered as directed edges — see dependencies at a glance</li>
+    <li>Topological load order computed automatically — no AI needed</li>
+    <li>Click any table → jump to its field mappings</li>
+    <li>Color-coded readiness — green/amber/red per table</li>
+    <li>Cycle detection warns about circular deps before migration starts</li>
+    <li>Cascade highlighting — hover a table, see everything downstream</li>
+    <li>The human gets the "understanding" that the investigation agent was trying to produce, but visually and instantly</li>
+  </ul>
+</div>
+
+<!-- ─── EDGE CASES ─── -->
+<h2>Edge Cases the Graph + Validation Catch</h2>
+
+<div class="section">
+  <table class="edge">
+    <thead>
+      <tr><th>Edge Case</th><th>How It Manifests</th><th>How We Catch It</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Circular FK</td>
+        <td>Table A refs B, B refs A — can't load either first</td>
+        <td class="fix">Kahn's topo-sort detects cycle, flags in graph as red nodes, suggests staged load + backfill</td>
+      </tr>
+      <tr>
+        <td>Orphan Records</td>
+        <td>Orders ref customer_id=999, but customer 999 doesn't exist in source</td>
+        <td class="fix">FK graph walk + validation query: count child rows with no parent match</td>
+      </tr>
+      <tr>
+        <td>Diamond Dependency</td>
+        <td>BOM_Lines → BOM → Item_Master AND BOM_Lines → Item_Master (two paths)</td>
+        <td class="fix">Topo-sort resolves longest path — Item_Master loads first regardless</td>
+      </tr>
+      <tr>
+        <td>Self-Reference</td>
+        <td>employees.manager_id → employees.id (tree structure)</td>
+        <td class="fix">Cycle detector catches single-node loop, suggests NULL FK + backfill</td>
+      </tr>
+      <tr>
+        <td>Disconnected Tables</td>
+        <td>Lookup tables with no FK edges — might indicate missing annotations</td>
+        <td class="fix">Graph renders them as isolated nodes, visually obvious</td>
+      </tr>
+      <tr>
+        <td>Hub Table</td>
+        <td>Item_Master referenced by 5+ tables — change cascades everywhere</td>
+        <td class="fix">Graph shows fan-in degree, hover highlights all dependents</td>
+      </tr>
+      <tr>
+        <td>Type Mismatch</td>
+        <td>Source VARCHAR "2024-01-15" → target DATE, but some rows have "N/A"</td>
+        <td class="fix">Deterministic type check + sample scan catches non-castable values</td>
+      </tr>
+      <tr>
+        <td>Silent Truncation</td>
+        <td>Source VARCHAR(255) → target VARCHAR(40), data gets silently cut</td>
+        <td class="fix">Max-length scan on source data vs target field width</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ─── PRINCIPLE ─── -->
+<div style="text-align:center; margin: 50px 0 20px; padding: 24px; border: 2px solid #1d9e75; border-radius: 10px;">
+  <div style="font-size: 18px; font-weight: 700; color: #1d9e75; letter-spacing: 0.04em;">AI proposes → Deterministic validates → Human approves</div>
+  <div style="font-size: 12px; color: #64748b; margin-top: 8px;">The principle stays. The weight distribution shifts.</div>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Settle — Dependency Graph (Draft)</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif; background: #fafafa; color: #1e293b; overflow: hidden; height: 100vh; }
+  header { background: #fff; border-bottom: 1px solid #e2e8f0; padding: 12px 20px; display: flex; align-items: center; justify-content: space-between; }
+  header h1 { font-size: 15px; font-weight: 600; color: #0f172a; }
+  header h1 span { color: #1d9e75; }
+  header .stats { font-size: 12px; color: #64748b; display: flex; gap: 16px; }
+  header .stats .warn { color: #ef4444; font-weight: 600; }
+  .canvas-wrap { height: calc(100vh - 49px); position: relative; }
+  canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+  canvas:active { cursor: grabbing; }
+
+  .legend { position: absolute; top: 12px; right: 12px; background: rgba(255,255,255,0.95); border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 14px; font-size: 11px; color: #64748b; display: flex; flex-direction: column; gap: 6px; }
+  .legend .row { display: flex; align-items: center; gap: 8px; }
+  .legend .dot { width: 8px; height: 8px; border-radius: 50%; }
+
+  .load-order { position: absolute; bottom: 12px; left: 12px; background: rgba(255,255,255,0.95); border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 14px; font-size: 11px; max-width: 70%; }
+  .load-order .title { font-weight: 600; color: #475569; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 4px; }
+  .load-order .chain { display: flex; flex-wrap: wrap; gap: 2px; align-items: center; }
+  .load-order .chain .tbl { padding: 2px 6px; border-radius: 3px; font-family: 'JetBrains Mono', monospace; font-size: 10px; }
+  .load-order .chain .arrow { color: #cbd5e1; }
+
+  .tooltip { position: absolute; display: none; background: #0f172a; color: #f1f5f9; font-size: 12px; padding: 8px 12px; border-radius: 6px; pointer-events: none; z-index: 10; max-width: 240px; line-height: 1.4; }
+</style>
+</head>
+<body>
+<header>
+  <h1><span>settle</span> — dependency graph</h1>
+  <div class="stats">
+    <span id="stat-tables">—</span>
+    <span id="stat-edges">—</span>
+    <span id="stat-cycles" class="warn" style="display:none"></span>
+  </div>
+</header>
+<div class="canvas-wrap">
+  <canvas id="c"></canvas>
+  <div class="legend">
+    <div class="row"><div class="dot" style="background:#10b981"></div> All fields mapped + approved</div>
+    <div class="row"><div class="dot" style="background:#f59e0b"></div> Partially mapped</div>
+    <div class="row"><div class="dot" style="background:#94a3b8"></div> Unmapped</div>
+    <div class="row" style="margin-top:4px;border-top:1px solid #e2e8f0;padding-top:6px"><div style="width:8px;height:2px;background:#94a3b8"></div> FK relationship (arrow = depends on)</div>
+  </div>
+  <div class="load-order" id="load-order"></div>
+  <div class="tooltip" id="tooltip"></div>
+</div>
+
+<script>
+// ─── Mock data: ERP → CRM migration (RCB Industries scale) ─────────
+
+const TABLES = [
+  { id: 'customers', name: 'Customers', fields: 24, mapped: 22, approved: 20 },
+  { id: 'contacts', name: 'Contacts', fields: 18, mapped: 15, approved: 12 },
+  { id: 'addresses', name: 'Addresses', fields: 12, mapped: 12, approved: 12 },
+  { id: 'orders', name: 'Sales_Orders', fields: 32, mapped: 28, approved: 18 },
+  { id: 'order_lines', name: 'Order_Lines', fields: 16, mapped: 14, approved: 10 },
+  { id: 'products', name: 'Item_Master', fields: 45, mapped: 38, approved: 30 },
+  { id: 'bom', name: 'Bill_of_Materials', fields: 22, mapped: 18, approved: 8 },
+  { id: 'bom_lines', name: 'BOM_Lines', fields: 14, mapped: 10, approved: 4 },
+  { id: 'vendors', name: 'Vendors', fields: 20, mapped: 16, approved: 14 },
+  { id: 'purchase', name: 'Purchase_Orders', fields: 28, mapped: 20, approved: 12 },
+  { id: 'po_lines', name: 'PO_Lines', fields: 15, mapped: 8, approved: 4 },
+  { id: 'inventory', name: 'Inventory', fields: 20, mapped: 0, approved: 0 },
+  { id: 'commodity', name: 'Commodity_Codes', fields: 6, mapped: 6, approved: 6 },
+  { id: 'uom', name: 'Units_of_Measure', fields: 4, mapped: 4, approved: 4 },
+  { id: 'warehouses', name: 'Warehouses', fields: 8, mapped: 6, approved: 6 },
+];
+
+// FK edges: [child, parent, fk_field_name]
+// child DEPENDS ON parent (parent must load first)
+const FK_EDGES = [
+  ['contacts', 'customers', 'customer_id'],
+  ['addresses', 'customers', 'customer_id'],
+  ['orders', 'customers', 'customer_id'],
+  ['order_lines', 'orders', 'order_id'],
+  ['order_lines', 'products', 'item_id'],
+  ['bom', 'products', 'parent_item_id'],
+  ['bom_lines', 'bom', 'bom_id'],
+  ['bom_lines', 'products', 'component_item_id'],
+  ['purchase', 'vendors', 'vendor_id'],
+  ['po_lines', 'purchase', 'po_id'],
+  ['po_lines', 'products', 'item_id'],
+  ['inventory', 'products', 'item_id'],
+  ['inventory', 'warehouses', 'warehouse_id'],
+  ['products', 'commodity', 'commodity_code'],
+  ['products', 'uom', 'uom_id'],
+];
+
+// ─── Topo sort (Kahn's) ────────────────────────────────────────────
+
+function topoSort(ids, edges) {
+  const inDeg = new Map(ids.map(id => [id, 0]));
+  const adj = new Map(ids.map(id => [id, []]));
+  for (const [child, parent] of edges) {
+    adj.get(parent)?.push(child);
+    inDeg.set(child, (inDeg.get(child)||0) + 1);
+  }
+  const q = ids.filter(id => inDeg.get(id) === 0);
+  const order = [];
+  while (q.length) {
+    const n = q.shift();
+    order.push(n);
+    for (const c of adj.get(n)||[]) {
+      inDeg.set(c, inDeg.get(c)-1);
+      if (inDeg.get(c) === 0) q.push(c);
+    }
+  }
+  const hasCycles = order.length < ids.length;
+  const cycleNodes = hasCycles ? ids.filter(id => !order.includes(id)) : [];
+  return { order, hasCycles, cycleNodes };
+}
+
+// ─── Layout (simple layered) ────────────────────────────────────────
+
+function computeLayout(tables, edges) {
+  const ids = tables.map(t => t.id);
+  const { order, hasCycles, cycleNodes } = topoSort(ids, edges);
+
+  // Compute depth layers via BFS
+  const children = new Map(ids.map(id => [id, []]));
+  const hasParent = new Set();
+  for (const [child, parent] of edges) {
+    children.get(parent)?.push(child);
+    hasParent.add(child);
+  }
+  const roots = ids.filter(id => !hasParent.has(id));
+  const depth = new Map();
+  for (const r of roots) depth.set(r, 0);
+  const bfs = [...roots];
+  while (bfs.length) {
+    const id = bfs.shift();
+    const d = depth.get(id);
+    for (const c of children.get(id)||[]) {
+      if ((depth.get(c)??-1) < d+1) {
+        depth.set(c, d+1);
+        bfs.push(c);
+      }
+    }
+  }
+  // Assign positions per layer
+  const byLayer = new Map();
+  for (const t of tables) {
+    const d = depth.get(t.id) ?? 0;
+    if (!byLayer.has(d)) byLayer.set(d, []);
+    byLayer.get(d).push(t);
+  }
+  const NODE_W = 180, NODE_H = 72, PAD_X = 40, PAD_Y = 100;
+  const positions = new Map();
+  for (const [layer, group] of byLayer) {
+    const totalW = group.length * NODE_W + (group.length-1) * PAD_X;
+    const startX = -totalW/2;
+    group.forEach((t, i) => {
+      positions.set(t.id, {
+        x: startX + i * (NODE_W + PAD_X),
+        y: layer * (NODE_H + PAD_Y),
+      });
+    });
+  }
+  return { positions, order, hasCycles, cycleNodes, NODE_W, NODE_H };
+}
+
+// ─── Canvas rendering ───────────────────────────────────────────────
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const tooltip = document.getElementById('tooltip');
+let W, H, DPR;
+let zoom = 1, panX = 0, panY = 0;
+let dragStart = null, panStart = null;
+let hoverTable = null;
+
+const STATUS_COL = { done: '#10b981', partial: '#f59e0b', unmapped: '#94a3b8' };
+const STATUS_BG  = { done: '#ecfdf5', partial: '#fffbeb', unmapped: '#f8fafc' };
+const STATUS_BORDER = { done: '#6ee7b7', partial: '#fcd34d', unmapped: '#cbd5e1' };
+
+function getStatus(t) {
+  if (t.approved === t.fields && t.fields > 0) return 'done';
+  if (t.mapped > 0) return 'partial';
+  return 'unmapped';
+}
+
+const layout = computeLayout(TABLES, FK_EDGES);
+const { positions, order, hasCycles, cycleNodes, NODE_W, NODE_H } = layout;
+
+// Stats
+document.getElementById('stat-tables').textContent = `${TABLES.length} tables`;
+document.getElementById('stat-edges').textContent = `${FK_EDGES.length} relationships`;
+if (hasCycles) {
+  const el = document.getElementById('stat-cycles');
+  el.style.display = '';
+  el.textContent = `⚠ ${cycleNodes.length} circular deps`;
+}
+
+// Load order
+const loEl = document.getElementById('load-order');
+loEl.innerHTML = '<div class="title">Migration Load Order</div><div class="chain">' +
+  order.map((id, i) => {
+    const t = TABLES.find(t => t.id === id);
+    const s = getStatus(t);
+    const bg = STATUS_BG[s]; const border = STATUS_BORDER[s]; const col = STATUS_COL[s];
+    return (i > 0 ? '<span class="arrow">→</span>' : '') +
+      `<span class="tbl" style="background:${bg};border:1px solid ${border};color:${col}">${t.name}</span>`;
+  }).join('') + '</div>';
+
+function fit() {
+  const r = canvas.getBoundingClientRect();
+  DPR = window.devicePixelRatio || 1;
+  W = r.width; H = r.height;
+  canvas.width = Math.round(W * DPR);
+  canvas.height = Math.round(H * DPR);
+}
+
+function screenToWorld(sx, sy) {
+  return { x: (sx - panX) / zoom, y: (sy - panY) / zoom };
+}
+
+function tableAt(sx, sy) {
+  const w = screenToWorld(sx, sy);
+  for (const t of TABLES) {
+    const p = positions.get(t.id);
+    if (w.x >= p.x && w.x <= p.x + NODE_W && w.y >= p.y && w.y <= p.y + NODE_H) return t;
+  }
+  return null;
+}
+
+function draw() {
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#fafafa';
+  ctx.fillRect(0, 0, W, H);
+
+  // Grid
+  ctx.setTransform(DPR * zoom, 0, 0, DPR * zoom, panX * DPR, panY * DPR);
+  ctx.strokeStyle = '#f1f5f9';
+  ctx.lineWidth = 1 / zoom;
+  for (let x = -2000; x < 2000; x += 40) { ctx.beginPath(); ctx.moveTo(x, -2000); ctx.lineTo(x, 2000); ctx.stroke(); }
+  for (let y = -2000; y < 2000; y += 40) { ctx.beginPath(); ctx.moveTo(-2000, y); ctx.lineTo(2000, y); ctx.stroke(); }
+
+  // Edges
+  for (const [child, parent, fkField] of FK_EDGES) {
+    const cp = positions.get(child);
+    const pp = positions.get(parent);
+    if (!cp || !pp) continue;
+
+    const isHighlight = hoverTable && (hoverTable.id === child || hoverTable.id === parent);
+    const x1 = pp.x + NODE_W/2, y1 = pp.y + NODE_H;
+    const x2 = cp.x + NODE_W/2, y2 = cp.y;
+    const mx = (x1+x2)/2, my = (y1+y2)/2;
+
+    ctx.strokeStyle = isHighlight ? '#1d9e75' : '#cbd5e1';
+    ctx.lineWidth = isHighlight ? 2/zoom : 1.2/zoom;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.bezierCurveTo(x1, y1 + 40, x2, y2 - 40, x2, y2);
+    ctx.stroke();
+
+    // Arrow
+    const angle = Math.atan2(y2 - (y2-40), x2 - x2);
+    const aSize = 6/zoom;
+    ctx.fillStyle = isHighlight ? '#1d9e75' : '#cbd5e1';
+    ctx.beginPath();
+    ctx.moveTo(x2, y2);
+    ctx.lineTo(x2 - aSize, y2 - aSize*1.5);
+    ctx.lineTo(x2 + aSize, y2 - aSize*1.5);
+    ctx.fill();
+
+    // Edge label
+    if (isHighlight) {
+      ctx.font = `${10/zoom}px -apple-system, sans-serif`;
+      ctx.fillStyle = '#475569';
+      ctx.textAlign = 'center';
+      ctx.fillText(fkField, mx, my - 4/zoom);
+    }
+  }
+
+  // Nodes
+  for (const t of TABLES) {
+    const p = positions.get(t.id);
+    const s = getStatus(t);
+    const isHover = hoverTable?.id === t.id;
+    const isCycle = cycleNodes.includes(t.id);
+    const coverage = t.fields > 0 ? t.mapped / t.fields : 0;
+
+    // Shadow
+    if (isHover) {
+      ctx.shadowColor = 'rgba(0,0,0,0.1)';
+      ctx.shadowBlur = 12/zoom;
+      ctx.shadowOffsetY = 4/zoom;
+    }
+
+    // Card bg
+    const r = 8/zoom;
+    ctx.beginPath();
+    ctx.roundRect(p.x, p.y, NODE_W, NODE_H, r);
+    ctx.fillStyle = isHover ? '#fff' : STATUS_BG[s];
+    ctx.fill();
+    ctx.strokeStyle = isCycle ? '#ef4444' : (isHover ? '#1d9e75' : STATUS_BORDER[s]);
+    ctx.lineWidth = (isHover || isCycle) ? 2/zoom : 1/zoom;
+    ctx.stroke();
+    ctx.shadowColor = 'transparent';
+
+    // Status dot
+    ctx.beginPath();
+    ctx.arc(p.x + 12, p.y + 16, 4/zoom, 0, Math.PI*2);
+    ctx.fillStyle = isCycle ? '#ef4444' : STATUS_COL[s];
+    ctx.fill();
+
+    // Table name
+    ctx.font = `600 ${12/zoom}px -apple-system, sans-serif`;
+    ctx.fillStyle = '#0f172a';
+    ctx.textAlign = 'left';
+    ctx.fillText(t.name, p.x + 22, p.y + 20);
+
+    // Stats
+    ctx.font = `${10/zoom}px -apple-system, sans-serif`;
+    ctx.fillStyle = '#64748b';
+    ctx.fillText(`${t.fields} fields`, p.x + 12, p.y + 38);
+
+    ctx.textAlign = 'right';
+    ctx.fillStyle = STATUS_COL[s];
+    ctx.font = `500 ${10/zoom}px 'JetBrains Mono', monospace`;
+    ctx.fillText(`${Math.round(coverage*100)}%`, p.x + NODE_W - 12, p.y + 38);
+    ctx.textAlign = 'left';
+
+    // Coverage bar
+    const barY = p.y + 48, barW = NODE_W - 24, barH = 4/zoom;
+    ctx.fillStyle = '#e2e8f0';
+    ctx.beginPath(); ctx.roundRect(p.x + 12, barY, barW, barH, 2/zoom); ctx.fill();
+    if (coverage > 0) {
+      ctx.fillStyle = STATUS_COL[s];
+      ctx.beginPath(); ctx.roundRect(p.x + 12, barY, barW * coverage, barH, 2/zoom); ctx.fill();
+    }
+
+    // Approved count
+    if (t.approved > 0) {
+      ctx.font = `${9/zoom}px -apple-system, sans-serif`;
+      ctx.fillStyle = '#94a3b8';
+      ctx.fillText(`${t.approved}/${t.fields} approved`, p.x + 12, p.y + 64);
+    }
+  }
+}
+
+// ─── Interaction ────────────────────────────────────────────────────
+
+fit();
+// Center the graph
+const allX = [...positions.values()].map(p => p.x);
+const allY = [...positions.values()].map(p => p.y);
+const cx = (Math.min(...allX) + Math.max(...allX) + NODE_W) / 2;
+const cy = (Math.min(...allY) + Math.max(...allY) + NODE_H) / 2;
+panX = W/2 - cx; panY = H/2 - cy;
+
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const d = e.deltaY > 0 ? 0.9 : 1.1;
+  const nz = Math.max(0.2, Math.min(3, zoom * d));
+  const r = canvas.getBoundingClientRect();
+  const mx = e.clientX - r.left, my = e.clientY - r.top;
+  panX = mx - (mx - panX) * (nz / zoom);
+  panY = my - (my - panY) * (nz / zoom);
+  zoom = nz;
+}, { passive: false });
+
+canvas.addEventListener('mousedown', (e) => {
+  const r = canvas.getBoundingClientRect();
+  dragStart = { x: e.clientX - r.left, y: e.clientY - r.top };
+  panStart = { x: panX, y: panY };
+});
+
+canvas.addEventListener('mousemove', (e) => {
+  const r = canvas.getBoundingClientRect();
+  const mx = e.clientX - r.left, my = e.clientY - r.top;
+
+  if (dragStart) {
+    panX = panStart.x + (mx - dragStart.x);
+    panY = panStart.y + (my - dragStart.y);
+  }
+
+  const t = tableAt(mx, my);
+  hoverTable = t;
+  canvas.style.cursor = t ? 'pointer' : (dragStart ? 'grabbing' : 'grab');
+
+  if (t) {
+    const s = getStatus(t);
+    const cov = t.fields > 0 ? Math.round(t.mapped/t.fields*100) : 0;
+    const parents = FK_EDGES.filter(([c]) => c === t.id).map(([,p,f]) => `← ${TABLES.find(x=>x.id===p).name} (${f})`);
+    const children = FK_EDGES.filter(([,p]) => p === t.id).map(([c,,f]) => `→ ${TABLES.find(x=>x.id===c).name} (${f})`);
+    const deps = [...parents, ...children];
+    tooltip.innerHTML = `<strong>${t.name}</strong><br>${t.fields} fields · ${cov}% mapped · ${t.approved} approved${deps.length ? '<br><br>Dependencies:<br>' + deps.join('<br>') : ''}`;
+    tooltip.style.display = 'block';
+    tooltip.style.left = (e.clientX + 12) + 'px';
+    tooltip.style.top = (e.clientY - 10) + 'px';
+  } else {
+    tooltip.style.display = 'none';
+  }
+});
+
+window.addEventListener('mouseup', () => { dragStart = null; });
+window.addEventListener('resize', () => { fit(); });
+
+function tick() { draw(); requestAnimationFrame(tick); }
+tick();
+</script>
+</body>
+</html>
