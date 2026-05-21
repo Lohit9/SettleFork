@@ -191,8 +191,9 @@ export function MappingSummaryStrip({
           ratio={`${projectStats.target.usedInMapping}/${projectStats.target.schemaTotal}`}
         />
         <SummaryChipBlockDivider />
-        {/* Status chips use actual status counts so rejected rows do not
-            remain inside the Needs Review number. */}
+        {/* Status chips read row-status counts. Post-#157/#158/A2
+            'rejected' rows are folded into the Needs Review number
+            (Reject = reset — no distinct rejected semantic). */}
         {/* Linear-style polish: 8px fill + 2px ring @ 25% opacity for
             the hued summary dots. Mirrors `StatusDot` in
             MappingListView so the row-level and summary dots read

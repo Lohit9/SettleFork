@@ -49,13 +49,25 @@ import { formatConfidencePercent } from '@/lib/utils/confidence-format'
 //   unmapped (target-only)
 //     TGT_TBL · tgt_field
 //
-// Confidence line varies by status:
+// Confidence line varies by status (rendered ONLY when confidence is
+// non-null):
 //
 //   approved      ● 98% confidence       (emerald dot)
 //   needs_review  ● 54% needs review     (slate dot)
-//   rejected      ● 80% rejected         (red dot)
-//   unmapped /
-//     null conf   ● <status label>       (gray dot; no pct)
+//   rejected      ● 80% rejected         (slate dot — collapsed)
+//
+// Post-#157/#158/A2 'rejected' no longer carries a semantic distinct
+// from 'needs_review' (Reject = reset). The rejected confidence dot
+// collapses onto the same slate-400 + ring treatment as needs_review,
+// matching the flat-view `FlatStatusDot` / `StatusDot` change. The
+// trailing label word ("rejected") is unchanged — only the dot color
+// moved.
+//
+// When `row.confidence` is null the line renders NOTHING — no dot, no
+// label — regardless of status. Mirrors WHY THIS MAPPING's null
+// handling. The prior behavior showed a bare status word with no
+// number ("Confidence" on approved+null rows), which read as an orphan
+// visual.
 
 export interface DrawerHeaderProps {
   row: MappingRow
@@ -87,9 +99,12 @@ const STATUS_CONFIG: Record<
     ringClassName: 'ring-2 ring-slate-400/25',
   },
   rejected: {
+    // Post-#157/#158/A2 'rejected' collapses onto the needs_review
+    // visual (Reject = reset — no distinct rejected semantic). Slate
+    // dot + ring matches `FlatStatusDot` / MappingListView `StatusDot`.
     label: 'rejected',
-    dotClassName: 'bg-red-500',
-    ringClassName: 'ring-2 ring-red-500/25',
+    dotClassName: 'bg-slate-400',
+    ringClassName: 'ring-2 ring-slate-400/25',
   },
   unmapped: {
     label: 'unmapped',
@@ -276,11 +291,13 @@ function TitleArrow() {
 // ── Confidence line ────────────────────────────────────────────────────────
 
 function DrawerConfidenceLine({ row }: { row: MappingRow }) {
+  // Null confidence → render nothing. Same null-handling contract as
+  // `WhyThisMappingSection` (returns null on empty `aiReasoning`).
+  // Applies regardless of status — an approved row with no confidence
+  // on record shows no confidence line rather than a bare label.
+  if (row.confidence === null || row.confidence === undefined) return null
   const config = STATUS_CONFIG[row.status]
-  const pct =
-    row.confidence !== null && row.confidence !== undefined
-      ? formatConfidencePercent(row.confidence)
-      : null
+  const pct = formatConfidencePercent(row.confidence)
   return (
     <div
       data-testid="mapping-drawer-header-confidence"
@@ -296,19 +313,10 @@ function DrawerConfidenceLine({ row }: { row: MappingRow }) {
           config.ringClassName,
         )}
       />
-      {pct ? (
-        <span data-testid="mapping-drawer-header-confidence-text">
-          <span className="tabular-nums text-slate-700">{pct}</span>
-          <span className="ml-1">{config.label}</span>
-        </span>
-      ) : (
-        <span
-          data-testid="mapping-drawer-header-confidence-text"
-          className="capitalize"
-        >
-          {config.label}
-        </span>
-      )}
+      <span data-testid="mapping-drawer-header-confidence-text">
+        <span className="tabular-nums text-slate-700">{pct}</span>
+        <span className="ml-1">{config.label}</span>
+      </span>
     </div>
   )
 }

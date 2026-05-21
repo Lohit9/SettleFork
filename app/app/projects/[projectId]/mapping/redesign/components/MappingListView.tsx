@@ -126,9 +126,15 @@ const STATUS_DOT_CONFIG: Record<
     ring: 'ring-2 ring-slate-400/25',
   },
   rejected: {
+    // Post-#157/#158/A2 'rejected' no longer carries a semantic
+    // distinct from 'needs_review' (Reject = reset). Legacy
+    // SimpleLegal mapped+rejected rows collapse onto the same
+    // slate-400 + ring treatment as needs_review — the dot reflects
+    // the unified needs-review state. `DisplayStatus` keeps its
+    // 'rejected' member; only this visual token changed.
     label: 'Rejected',
-    fill: 'bg-red-500',
-    ring: 'ring-2 ring-red-500/25',
+    fill: 'bg-slate-400',
+    ring: 'ring-2 ring-slate-400/25',
   },
 }
 

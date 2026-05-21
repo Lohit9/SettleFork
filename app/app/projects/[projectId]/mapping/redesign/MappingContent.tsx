@@ -1973,13 +1973,19 @@ function MappingContentLoaded({
   // kinds: mapped, value_assignment, unmapped-target, unmapped-source.
   // `effectiveRows` is threaded in (not `data.rows`) so optimistic
   // approve/reject state still flows through for target-keyed rows.
+  // Post-#157/#158/A2 'rejected' no longer carries a semantic distinct
+  // from 'needs_review' (Reject = reset). The Needs Review chip folds in
+  // `status === 'rejected'` rows so legacy SimpleLegal mapped+rejected
+  // data is tallied alongside needs_review rather than dropping out of
+  // both chips. Approved counts only `status === 'approved'`.
   const effectiveCounts = useMemo(() => {
     const flatRows = flattenRowsForListView({ ...data, rows: effectiveRows })
     let approved = 0
     let needsReview = 0
     for (const row of flatRows) {
       if (row.status === 'approved') approved++
-      else if (row.status === 'needs_review') needsReview++
+      else if (row.status === 'needs_review' || row.status === 'rejected')
+        needsReview++
     }
     return {
       total: flatRows.length,
