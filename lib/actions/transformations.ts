@@ -1611,13 +1611,22 @@ The user has updated their description. Modify the existing SQL expression above
 //
 // When the user hand-edits a transformation's SQL, the AI metadata on the
 // parent TFM no longer describes the live mapping — the transformation is now
-// user-owned. Clears both stale AI metadata fields:
+// user-owned. Clears the stale AI metadata fields:
 //
 //   • `ai_reasoning` — the narrative no longer matches the edited transform.
 //     Guarded on a non-null `currentReasoning` so a debounced re-save neither
 //     re-writes the row nor re-emits an audit entry. The frozen first-proposal
 //     copy survives in `target_field_mappings.original_ai_reasoning`
 //     (migration 083), so the clear is non-destructive of provenance.
+//
+//   • `transformation_intent` — the Path D mapping-pass recipe (migration
+//     093) describing the AI's intended transformation for the original
+//     pairing. Once the user hand-edits the SQL it no longer applies.
+//     Guarded on a non-null `currentTransformationIntent` so a debounced
+//     re-save is a no-op. Unlike `ai_reasoning` there is no frozen
+//     `original_*` copy — the clear is destructive of the mapping-phase
+//     recipe by design (locked model: user edits clear AI commentary; no
+//     provenance-preservation use case identified — see PR notes).
 //
 //   • `confidence` — a "92%" number describes the AI's confidence in its
 //     original proposal, not the user's edited transform (locked model: user
@@ -1639,6 +1648,7 @@ async function clearStaleAiMetadataForTransformEdit(args: {
   projectId: string
   actorId: string
   currentReasoning: string | null
+  currentTransformationIntent: string | null
   combinationType: string | null
 }): Promise<void> {
   // ── ai_reasoning — guarded so a debounced re-save is a no-op ──────────────
@@ -1661,6 +1671,33 @@ async function clearStaleAiMetadataForTransformEdit(args: {
         entityId: args.tfmId,
         fieldPath: 'ai_reasoning',
         oldValue: args.currentReasoning,
+        newValue: null,
+        editKind: 'human_modified',
+        metadata: { reason: 'transformation_edited' },
+      })
+    }
+  }
+
+  // ── transformation_intent — guarded so a debounced re-save is a no-op ─────
+  if (args.currentTransformationIntent !== null) {
+    const { error } = await supabaseAdmin
+      .from('target_field_mappings')
+      .update({ transformation_intent: null, updated_at: new Date().toISOString() })
+      .eq('id', args.tfmId)
+
+    if (error) {
+      console.warn(
+        '[transformations] failed to clear stale TFM transformation_intent (SQL write committed):',
+        error.message,
+      )
+    } else {
+      void logAIEdit({
+        projectId: args.projectId,
+        actorId: args.actorId,
+        entityType: 'target_field_mapping',
+        entityId: args.tfmId,
+        fieldPath: 'transformation_intent',
+        oldValue: args.currentTransformationIntent,
         newValue: null,
         editKind: 'human_modified',
         metadata: { reason: 'transformation_edited' },
@@ -1720,11 +1757,12 @@ export async function updateTransformSQL(
 
   const { data: tfmRow } = await supabaseAdmin
     .from('target_field_mappings')
-    .select('project_id, ai_reasoning, combination_type')
+    .select('project_id, ai_reasoning, transformation_intent, combination_type')
     .eq('id', tx.target_field_mapping_id)
     .single<{
       project_id: string
       ai_reasoning: string | null
+      transformation_intent: string | null
       combination_type: string | null
     }>()
   if (!tfmRow) return { success: false, error: 'Transformation not found' }
@@ -1771,12 +1809,13 @@ export async function updateTransformSQL(
     })
 
     // The user now owns this transformation — clear the parent TFM's stale
-    // AI metadata (ai_reasoning narrative + confidence).
+    // AI metadata (ai_reasoning narrative + transformation_intent + confidence).
     await clearStaleAiMetadataForTransformEdit({
       tfmId: tx.target_field_mapping_id,
       projectId: tfmRow.project_id,
       actorId: user.id,
       currentReasoning: tfmRow.ai_reasoning,
+      currentTransformationIntent: tfmRow.transformation_intent,
       combinationType: tfmRow.combination_type,
     })
 
@@ -1939,11 +1978,12 @@ export async function autoSaveTransform(
 
   const { data: tfmRow } = await supabaseAdmin
     .from('target_field_mappings')
-    .select('project_id, ai_reasoning, combination_type')
+    .select('project_id, ai_reasoning, transformation_intent, combination_type')
     .eq('id', tx.target_field_mapping_id)
     .single<{
       project_id: string
       ai_reasoning: string | null
+      transformation_intent: string | null
       combination_type: string | null
     }>()
   if (!tfmRow) return { success: false, error: 'Transformation not found' }
@@ -1987,15 +2027,16 @@ export async function autoSaveTransform(
     }
 
     // The user now owns this transformation — clear the parent TFM's stale
-    // AI metadata (ai_reasoning narrative + confidence). Runs on every
-    // auto-save (SQL or description); the helper's non-null guard makes a
-    // debounced re-save a no-op for ai_reasoning, and the confidence clear
-    // is idempotent.
+    // AI metadata (ai_reasoning narrative + transformation_intent +
+    // confidence). Runs on every auto-save (SQL or description); the helper's
+    // non-null guards make a debounced re-save a no-op for ai_reasoning and
+    // transformation_intent, and the confidence clear is idempotent.
     await clearStaleAiMetadataForTransformEdit({
       tfmId: tx.target_field_mapping_id,
       projectId: tfmRow.project_id,
       actorId: user.id,
       currentReasoning: tfmRow.ai_reasoning,
+      currentTransformationIntent: tfmRow.transformation_intent,
       combinationType: tfmRow.combination_type,
     })
 

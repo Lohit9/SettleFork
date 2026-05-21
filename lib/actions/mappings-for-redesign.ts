@@ -1958,6 +1958,13 @@ export async function editMappingSources(input: {
   // describes a pairing that no longer exists. The frozen first-proposal
   // copy survives in `original_ai_reasoning` (migration 083). See Step 10.
   //
+  // `transformation_intent` (the Path D mapping-pass recipe, migration 093)
+  // is cleared in the same UPDATE — it described the AI's intended transform
+  // for the pre-edit source set (locked model: user edits clear AI
+  // commentary). This is the only clear site for the merge case too: a
+  // target-swap merge folds its sources through `editMappingSources`, so the
+  // survivor's `transformation_intent` is cleared here for free.
+  //
   // `confidence` is also cleared directly here. For a normal mapped→mapped
   // edit the Step-12 RPC already nulled every source row and the trigger
   // recomputed TFM.confidence to null; this direct write is the
@@ -1971,6 +1978,7 @@ export async function editMappingSources(input: {
       status: 'needs_review',
       combination_type: combinationType,
       ai_reasoning: null,
+      transformation_intent: null,
       confidence: null,
       updated_at: new Date().toISOString(),
     })
@@ -4359,18 +4367,22 @@ export async function updateMappingSourceField(input: {
     )
   }
 
-  // ── Step 14: flip TFM status; clear stale AI reasoning ─────────────────
+  // ── Step 14: flip TFM status; clear stale AI metadata ──────────────────
   // The source field just changed, so the AI's `ai_reasoning` narrative now
   // describes a source→target pairing that no longer exists. Clear it in the
   // same UPDATE as the status flip so partial state never persists. The
   // frozen first-proposal copy survives in `original_ai_reasoning`
   // (migration 083), so this is non-destructive of provenance. `confidence`
-  // was cleared in Steps 13/13b.
+  // was cleared in Steps 13/13b. `transformation_intent` (the Path D
+  // mapping-pass recipe, migration 093) is cleared in the same UPDATE — it
+  // described the AI's intended transform for the old pairing (locked model:
+  // user edits clear AI commentary).
   const { error: tfmUpdErr } = await supabaseAdmin
     .from('target_field_mappings')
     .update({
       status: 'approved',
       ai_reasoning: null,
+      transformation_intent: null,
       updated_at: new Date().toISOString(),
     })
     .eq('id', tfm.id)
@@ -4877,7 +4889,7 @@ export async function updateMappingTargetField(input: {
   const transformReset = reset.success ? reset.hadTransform : false
   const stagedRowsReverted = reset.success ? reset.rowsReverted : 0
 
-  // ── Step 11: UPDATE the TFM (target swap; clear stale AI reasoning) ────
+  // ── Step 11: UPDATE the TFM (target swap; clear stale AI metadata) ─────
   // The target field just changed, so the AI's `ai_reasoning` narrative now
   // describes a source→target pairing that no longer exists. Clear it in the
   // same UPDATE as the swap so partial state never persists. The frozen
@@ -4886,12 +4898,17 @@ export async function updateMappingTargetField(input: {
   // swap and the bare-ack fall-through (Path 1); the MERGE path returned at
   // Step 9 and is out of scope for this PR (its survivor's `ai_reasoning` is
   // written by `editMappingSources` provenance laundering — see PR notes).
+  // `transformation_intent` (the Path D mapping-pass recipe, migration 093)
+  // is cleared in the same UPDATE — it described the AI's intended transform
+  // for the old target (locked model: user edits clear AI commentary). The
+  // MERGE path's survivor is cleared by `editMappingSources` Step 13.
   const { error: tfmUpdErr } = await supabaseAdmin
     .from('target_field_mappings')
     .update({
       target_field_id: newTargetFieldId,
       status: 'approved',
       ai_reasoning: null,
+      transformation_intent: null,
       updated_at: new Date().toISOString(),
     })
     .eq('id', tfm.id)
