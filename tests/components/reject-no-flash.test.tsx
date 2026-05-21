@@ -34,9 +34,10 @@
 //         MappingRow>` and threads it to FieldMappingRow.
 //   RF8.  FieldMappingRow consumes the override via
 //         `optimisticData?.get(providedRow.id) ?? providedRow`.
-//   RF9.  Negative invariant — `handleRejectConfirm` still has
-//         `setTimeout(() => router.refresh(), 200)` (the fade-out
-//         duration is unchanged; only the data-shape override is new).
+//   RF9.  `handleRejectConfirm`'s 200ms success hook fires
+//         `router.refresh()` AND `clearOptimistic(rowId)` (the fade-out
+//         duration is unchanged; the 'rejecting' optimisticState is
+//         cleared on the same hook since it has no data-driven clear).
 //   RF10. Negative invariant — the `isRejecting` className branch in
 //         FieldMappingRow.tsx must NOT include `opacity-0`. This is
 //         the test that would have caught the PR #58 failure mode:
@@ -227,9 +228,20 @@ describe("[Mapping reject-flash fix] optimistic-data override — invariants", (
     );
   });
 
-  it("RF9 — handleRejectConfirm still uses setTimeout(() => router.refresh(), 200) for fade-out timing", () => {
+  it("RF9 — handleRejectConfirm's 200ms success hook fires router.refresh AND clears the 'rejecting' optimisticState", () => {
+    // The 200ms delay preserves the slide-fade-out timing before the
+    // data swap. `clearOptimistic(rowId)` rides the same hook: unlike
+    // 'approving' — which the [data.rows] effect drops once the row
+    // reads back status='approved' — the 'rejecting' optimisticState
+    // has no data-driven clear. Reject does not always produce an
+    // observable delta: a `needs_review` unmapped-target row rejected
+    // under the post-#157 reject-as-reset semantic stays `needs_review`
+    // at the same stable `unmapped::<id>` row id, so no [data.rows]
+    // effect can detect the reject settled. Without the explicit clear
+    // here the row stays in the disabled, sliding 'rejecting' visual
+    // permanently.
     expect(HANDLE_REJECT_CONFIRM).toMatch(
-      /setTimeout\(\(\)\s*=>\s*router\.refresh\(\)\s*,\s*200\s*\)/,
+      /setTimeout\(\(\)\s*=>\s*\{[\s\S]*?router\.refresh\(\)[\s\S]*?clearOptimistic\(rowId\)[\s\S]*?\}\s*,\s*200\s*\)/,
     );
   });
 

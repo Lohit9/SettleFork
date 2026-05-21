@@ -1509,9 +1509,25 @@ function MappingContentLoaded({
       // Wait for the 200ms slide-fade-out to complete before firing
       // `router.refresh()` so the user sees the row leave gracefully
       // rather than blink out instantly when the data swap arrives.
-      // The cleanup useEffect drops the override once data.rows no
-      // longer contains the rowId (post-refresh settle).
-      setTimeout(() => router.refresh(), 200)
+      // The cleanup useEffect drops the optimisticData override once
+      // data.rows no longer contains the rowId (post-refresh settle).
+      //
+      // `clearOptimistic` rides the same 200ms hook. Unlike 'approving'
+      // — which the [data.rows] effect above drops once the row reads
+      // back `status='approved'` — the 'rejecting' optimisticState has
+      // no data-driven clear: reject does not always produce an
+      // observable delta. A `needs_review` unmapped-target row rejected
+      // under the post-#157 reject-as-reset semantic stays
+      // `needs_review` at the same stable `unmapped::<targetFieldId>`
+      // id, so no [data.rows] effect can detect the reject settled.
+      // Clearing here (mirrors the 'mapping' state's own 200ms clear)
+      // returns the row to its enabled, non-sliding state once the cue
+      // has played; for mapped-row rejects it also drops the
+      // previously-harmless stale entry keyed by the now-dead TFM id.
+      setTimeout(() => {
+        router.refresh()
+        clearOptimistic(rowId)
+      }, 200)
     } catch (err) {
       pushToast({
         id: `inline-reject-${rowId}-${Date.now()}`,
