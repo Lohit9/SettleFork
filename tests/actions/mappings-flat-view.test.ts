@@ -15,10 +15,10 @@
 //
 // Open-question resolutions captured here as regression guards:
 //
-//   Q1  Confidence: edited source's confidence set to
-//       FLAT_VIEW_USER_CONFIDENCE (=100); TFM-aggregate left to the
-//       MIN trigger. We assert the confidence write hits ONE
-//       mapping_source row, never a TFM-wide override.
+//   Q1  Confidence: post clear-confidence PR the edited source's
+//       confidence is cleared to null (a user edit clears confidence);
+//       TFM-aggregate left to the MIN trigger. We assert the confidence
+//       write hits `mapping_sources`, never a TFM-wide override.
 //   Q2  Status revert on contributor reject: existing rejectFieldMapping
 //       behavior preserved (this test file does NOT touch that path —
 //       its invariants are already locked by `edit-mapping-sources` and
@@ -123,7 +123,10 @@ describe('[flat-view] updateMappingSourceField — shape', () => {
     expect(SRC).toMatch(/export async function updateMappingSourceField\(input: \{/)
     expect(SRC_FIELD_BODY).toMatch(/rowId:\s*string/)
     expect(SRC_FIELD_BODY).toMatch(/newSourceFieldId:\s*string/)
-    expect(SRC_FIELD_BODY).toMatch(/newConfidence\?:\s*number/)
+    // `newConfidence` was removed by the clear-confidence PR: a user edit
+    // clears confidence (→ null) rather than recording a user-supplied
+    // number, so the parameter is no longer meaningful.
+    expect(SRC_FIELD_BODY).not.toMatch(/newConfidence/)
   })
 
   it('returns a discriminated union with tfmId / mappingSourceId / transformReset / stagedRowsReverted', () => {
@@ -244,11 +247,12 @@ describe('[flat-view] updateMappingSourceField — write semantics (Q1)', () => 
   })
 
   it('Q1: UPDATE writes confidence to the edited mapping_source row, NOT a TFM-wide override', () => {
-    // The UPDATE block targets `mapping_sources` and includes a
-    // confidence field. We assert by chain: from('mapping_sources') →
-    // .update({ ... confidence: ... }).
+    // Post clear-confidence PR: the edited mapping_source row is written
+    // with `confidence: null` (a user edit clears confidence). The write
+    // still hits `mapping_sources`, never a direct TFM-wide override —
+    // TFM.confidence is recomputed by the MIN-of-sources trigger.
     expect(SRC_FIELD_BODY).toMatch(
-      /from\(['"]mapping_sources['"]\)[\s\S]{0,800}\.update\(\{[\s\S]{0,800}confidence:\s*newConfidence/,
+      /from\(['"]mapping_sources['"]\)[\s\S]{0,800}\.update\(\{[\s\S]{0,800}confidence:\s*null/,
     )
     // And the TFM update does NOT write confidence — only status + updated_at.
     const tfmUpdateMatch = SRC_FIELD_BODY.match(

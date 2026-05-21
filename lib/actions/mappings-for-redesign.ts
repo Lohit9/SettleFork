@@ -1918,14 +1918,16 @@ export async function editMappingSources(input: {
     return {
       source_field_id: sf.id,
       source_table_id: sf.table_id,
-      // Edit-time we don't have a fresh confidence signal — preserve the
-      // existing per-source confidence by reusing 100 for new manual rows
-      // and re-using the stored value when the source is retained. The
-      // RPC's INSERT writes whatever we send; we don't pass through prior
-      // per-source confidence today (would require a per-id lookup) — a
-      // future polish, low priority because confidence isn't gating any
-      // behavior.
-      confidence: 100,
+      // `confidence` is cleared to null on every source-set edit (locked
+      // model: user edits clear confidence — an AI confidence number no
+      // longer describes the user's edited mapping). Nulling every
+      // replacement row makes the MIN-of-mapping_sources trigger (migration
+      // 074) recompute TFM.confidence to null deterministically, regardless
+      // of which sources survived. The VA→mapped conversion case is also
+      // covered by the explicit confidence:null write in Step 13 (the
+      // trigger skips the TFM while it is still combination_type=custom_sql
+      // during this RPC).
+      confidence: null as number | null,
       ai_reasoning: isRetainedAi
         ? existingSources.find((s) => s.source_field_id === sf.id)
             ?.ai_reasoning ?? 'AI-suggested: (preserved across edit)'
@@ -1955,12 +1957,21 @@ export async function editMappingSources(input: {
   // `ai_reasoning` is cleared to null on every edit — the AI narrative now
   // describes a pairing that no longer exists. The frozen first-proposal
   // copy survives in `original_ai_reasoning` (migration 083). See Step 10.
+  //
+  // `confidence` is also cleared directly here. For a normal mapped→mapped
+  // edit the Step-12 RPC already nulled every source row and the trigger
+  // recomputed TFM.confidence to null; this direct write is the
+  // belt-and-suspenders that additionally covers the VA→mapped conversion
+  // (combination_type custom_sql → single/concat): the trigger skips the
+  // TFM during the RPC because it is still custom_sql at that instant, so
+  // without this write the VA's stale confidence would survive.
   const { error: tfmUpdErr } = await supabaseAdmin
     .from('target_field_mappings')
     .update({
       status: 'needs_review',
       combination_type: combinationType,
       ai_reasoning: null,
+      confidence: null,
       updated_at: new Date().toISOString(),
     })
     .eq('id', tfm.id)
@@ -3969,6 +3980,47 @@ export async function bulkRejectFieldMappingsForTargetTable(input: {
 
 const FLAT_VIEW_USER_CONFIDENCE = 100
 
+/**
+ * Clear a TFM's `confidence` as part of a user edit. Locked product model:
+ * a user edit clears both `ai_reasoning` AND `confidence` — an AI confidence
+ * number describes the AI's original proposal, not the user's edited version.
+ * (Approve does NOT clear — that path preserves AI commentary as documentation
+ * of endorsed work.)
+ *
+ * Branches on `combination_type` because the MIN-of-`mapping_sources` trigger
+ * (migration 074) recomputes `target_field_mappings.confidence` only for
+ * non-`custom_sql`, non-acknowledged TFMs:
+ *   • `custom_sql` (value assignment) — the trigger skips it and a VA has no
+ *     `mapping_sources` rows; write `target_field_mappings.confidence` null
+ *     directly (the trigger never resurrects a custom_sql TFM, so the direct
+ *     write is durable).
+ *   • otherwise (mapped) — null EVERY `mapping_sources` row for the TFM; the
+ *     trigger then recomputes `confidence = MIN(all-null) = null`,
+ *     deterministically regardless of source count or which row was edited.
+ *
+ * Best-effort: callers invoke this after their primary write has committed,
+ * so a failure is returned for logging but never rolls back the edit.
+ */
+async function clearMappingConfidenceForEdit(
+  tfmId: string,
+  combinationType: string | null,
+): Promise<{ success: boolean; error?: string }> {
+  if (combinationType === 'custom_sql') {
+    const { error } = await supabaseAdmin
+      .from('target_field_mappings')
+      .update({ confidence: null, updated_at: new Date().toISOString() })
+      .eq('id', tfmId)
+    if (error) return { success: false, error: error.message }
+    return { success: true }
+  }
+  const { error } = await supabaseAdmin
+    .from('mapping_sources')
+    .update({ confidence: null })
+    .eq('target_field_mapping_id', tfmId)
+  if (error) return { success: false, error: error.message }
+  return { success: true }
+}
+
 // ─── 5.1 updateMappingSourceField ────────────────────────────────────────────
 
 export type UpdateSourceFieldErrorCode =
@@ -4019,13 +4071,8 @@ export type UpdateMappingSourceFieldResult =
 export async function updateMappingSourceField(input: {
   rowId: string
   newSourceFieldId: string
-  newConfidence?: number
 }): Promise<UpdateMappingSourceFieldResult> {
   const { rowId, newSourceFieldId } = input
-  const newConfidence =
-    typeof input.newConfidence === 'number'
-      ? input.newConfidence
-      : FLAT_VIEW_USER_CONFIDENCE
 
   // ── Step 1: input validation ────────────────────────────────────────────
   if (!rowId) {
@@ -4274,12 +4321,18 @@ export async function updateMappingSourceField(input: {
   const stagedRowsReverted = reset.success ? reset.rowsReverted : 0
 
   // ── Step 13: UPDATE the mapping_source row ─────────────────────────────
+  // `confidence` is cleared to null: a user re-mapping the source is an
+  // edit, and an AI confidence number no longer describes the user's
+  // edited pairing (locked model: user edits clear confidence). Step 13b
+  // nulls the TFM's *other* source rows so the MIN-of-mapping_sources
+  // trigger (migration 074) deterministically recomputes TFM.confidence to
+  // null on multi-source TFMs too.
   const { error: msUpdErr } = await supabaseAdmin
     .from('mapping_sources')
     .update({
       source_field_id: newSourceFieldId,
       source_table_id: newSource.table_id,
-      confidence: newConfidence,
+      confidence: null,
       ai_reasoning: 'Manually selected by user (flat view)',
     })
     .eq('id', mappingSourceId)
@@ -4291,14 +4344,28 @@ export async function updateMappingSourceField(input: {
     }
   }
 
+  // ── Step 13b: clear confidence across the TFM ──────────────────────────
+  // Best-effort: the source UPDATE already committed. updateMappingSourceField
+  // only operates on TFMs that have a primary mapping_source (never a VA), so
+  // the helper takes the mapping_sources branch.
+  const confidenceClear = await clearMappingConfidenceForEdit(
+    tfm.id,
+    tfm.combination_type,
+  )
+  if (!confidenceClear.success) {
+    console.warn(
+      '[updateMappingSourceField] confidence clear failed (source UPDATE committed):',
+      confidenceClear.error,
+    )
+  }
+
   // ── Step 14: flip TFM status; clear stale AI reasoning ─────────────────
   // The source field just changed, so the AI's `ai_reasoning` narrative now
   // describes a source→target pairing that no longer exists. Clear it in the
   // same UPDATE as the status flip so partial state never persists. The
   // frozen first-proposal copy survives in `original_ai_reasoning`
   // (migration 083), so this is non-destructive of provenance. `confidence`
-  // is intentionally left to the MIN-of-mapping_sources trigger (migration
-  // 074), which already refreshed it from the Step-13 source UPDATE.
+  // was cleared in Steps 13/13b.
   const { error: tfmUpdErr } = await supabaseAdmin
     .from('target_field_mappings')
     .update({
@@ -4834,6 +4901,25 @@ export async function updateMappingTargetField(input: {
       error: tfmUpdErr.message,
       errorCode: 'INTERNAL',
     }
+  }
+
+  // ── Step 11b: clear stale confidence ───────────────────────────────────
+  // A plain target swap never touches `mapping_sources`, so the
+  // MIN-of-mapping_sources trigger does not fire on its own. Clear
+  // confidence the same as `ai_reasoning` (locked model: user edits clear
+  // confidence). The helper branches on `combination_type` — a VA
+  // (`custom_sql`) reaching this path is cleared by a direct TFM write
+  // since the trigger skips custom_sql. Best-effort: the swap already
+  // committed above.
+  const confidenceClear = await clearMappingConfidenceForEdit(
+    tfm.id,
+    tfm.combination_type,
+  )
+  if (!confidenceClear.success) {
+    console.warn(
+      '[updateMappingTargetField] confidence clear failed (target swap committed):',
+      confidenceClear.error,
+    )
   }
 
   // ── Step 12: clear stale coverage status on the new target ─────────────

@@ -30,8 +30,12 @@
 //   E.  approveFieldMapping does NOT clear `ai_reasoning` — a status
 //       change leaves mapping content untouched (regression guard).
 //
-// `confidence` is intentionally NOT cleared (trigger-derived from
-// MIN(mapping_sources.confidence), migration 074) — see the PR description.
+// `confidence` clearing is the concern of a SEPARATE PR (see
+// clear-confidence-on-mapping-edit.test.ts) which extends the same edit-path
+// surface. That PR renamed the transform-edit helper
+// (clearStaleAiReasoningForTransformEdit → clearStaleAiMetadataForTransformEdit);
+// the slice markers and assertions below track that rename, but the
+// `ai_reasoning` BEHAVIOUR guarded here is unchanged.
 
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -81,7 +85,13 @@ describe('[clear-ai-reasoning] A — updateMappingSourceField', () => {
     expect(noop).not.toMatch(/ai_reasoning/)
   })
 
-  it('A3: does NOT clear confidence — left to the MIN-of-sources trigger', () => {
+  it('A3: clears confidence via mapping_sources, never via a direct target_field_mappings.confidence write', () => {
+    // The clear-confidence PR clears confidence on source swap too — but
+    // through the mapping_sources/MIN-trigger path, never a direct TFM
+    // write (updateMappingSourceField only ever runs on mapped TFMs).
+    // Behavioural assertions live in clear-confidence-on-mapping-edit.test.ts;
+    // this guards the architecture: no `confidence:` key in any
+    // target_field_mappings.update inside updateMappingSourceField.
     const allTfmUpdates = [
       ...SRC_FIELD_BODY.matchAll(
         /from\(['"]target_field_mappings['"]\)\s*\.update\(\{([\s\S]{0,300})\}\)/g,
@@ -157,7 +167,7 @@ describe('[clear-ai-reasoning] C — editMappingSources + merge survivor', () =>
 
 const HELPER_BODY = sliceBetween(
   TRANSFORMS_SRC,
-  'async function clearStaleAiReasoningForTransformEdit(',
+  'async function clearStaleAiMetadataForTransformEdit(',
   '// ─── updateTransformSQL',
 )
 const TX_SQL_BODY = sliceBetween(
@@ -177,11 +187,11 @@ const SAVE_BODY = sliceBetween(
 )
 
 describe('[clear-ai-reasoning] D — transform-edit actions', () => {
-  it('D1: the shared helper guards on non-null, clears the column, and is best-effort', () => {
-    // Non-null guard — a debounced re-save neither re-writes nor re-audits.
-    expect(HELPER_BODY).toMatch(
-      /args\.currentReasoning\s*===\s*null[\s\S]{0,20}return/,
-    )
+  it('D1: the shared helper guards ai_reasoning on non-null, clears the column, and is best-effort', () => {
+    // Non-null guard — a debounced re-save neither re-writes nor re-audits
+    // ai_reasoning. (The confidence clear is independent — see the
+    // clear-confidence test file.)
+    expect(HELPER_BODY).toMatch(/args\.currentReasoning\s*!==\s*null/)
     // Clears the TFM-level narrative.
     expect(HELPER_BODY).toMatch(
       /from\(['"]target_field_mappings['"]\)\s*\.update\(\{\s*ai_reasoning:\s*null/,
@@ -196,20 +206,24 @@ describe('[clear-ai-reasoning] D — transform-edit actions', () => {
   })
 
   it('D2: updateTransformSQL reads ai_reasoning and invokes the clear helper', () => {
-    expect(TX_SQL_BODY).toMatch(/select\(['"]project_id,\s*ai_reasoning['"]\)/)
-    expect(TX_SQL_BODY).toMatch(/clearStaleAiReasoningForTransformEdit\(\{/)
+    expect(TX_SQL_BODY).toMatch(
+      /select\(['"]project_id,\s*ai_reasoning,\s*combination_type['"]\)/,
+    )
+    expect(TX_SQL_BODY).toMatch(/clearStaleAiMetadataForTransformEdit\(\{/)
   })
 
   it('D3: autoSaveTransform reads ai_reasoning and invokes the clear helper', () => {
-    expect(AUTO_SAVE_BODY).toMatch(/select\(['"]project_id,\s*ai_reasoning['"]\)/)
-    expect(AUTO_SAVE_BODY).toMatch(/clearStaleAiReasoningForTransformEdit\(\{/)
+    expect(AUTO_SAVE_BODY).toMatch(
+      /select\(['"]project_id,\s*ai_reasoning,\s*combination_type['"]\)/,
+    )
+    expect(AUTO_SAVE_BODY).toMatch(/clearStaleAiMetadataForTransformEdit\(\{/)
   })
 
   it('D4: saveTransformation (status-only flip) does NOT clear ai_reasoning', () => {
     // Structurally identical to approveFieldMapping — the user accepts the
     // existing value; mapping/transform content is untouched.
     expect(SAVE_BODY).not.toMatch(/ai_reasoning/)
-    expect(SAVE_BODY).not.toMatch(/clearStaleAiReasoningForTransformEdit/)
+    expect(SAVE_BODY).not.toMatch(/clearStaleAiMetadataForTransformEdit/)
   })
 })
 
