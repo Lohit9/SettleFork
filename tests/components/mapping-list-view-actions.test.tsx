@@ -882,6 +882,109 @@ describe('MappingListView — unmapped-source affordance uniformity (feat/mappin
     expect(cell.textContent).toBe('—')
   })
 
+  // ─── fix/flatview-rationale-empty-ack ───────────────────────────────────
+  // The inline Approve on an unmapped-source row persists an empty-string
+  // acknowledgment reason. `deriveRationaleSource` must treat an empty /
+  // whitespace-only ack reason as "absent" and fall back to the static-
+  // config `sourceField.aiReasoning` — a bare `??` kept the `''` and
+  // blanked the cell. See notes/approve-unmap-minor-bugs-investigation.md.
+  // (The `acknowledgmentReason: null` fallback path — a pure unmapped-
+  // source row with no ack — is already covered by the two tests above.)
+
+  it('falls back to sourceField.aiReasoning when an approved source row has an empty acknowledgment reason', () => {
+    const result = makeResult(
+      [],
+      [
+        makeOrphanSourceField({
+          aiReasoning:
+            'Internal numeric primary key from the source system (Prosys).',
+        }),
+      ],
+    )
+    result.sourceFieldAcknowledgments = [
+      {
+        id: 'ack-1',
+        sourceFieldId: 'sf-orphan',
+        reason: '',
+        decision: 'acknowledged',
+      },
+    ]
+    render(
+      <MappingListView
+        filteredResult={result}
+        mutations={makeMutations()}
+        onOpenDrawer={vi.fn()}
+      />,
+    )
+    const cell = within(findRow('ack::source::ack-1')).getByTestId(
+      'flat-cell-rationale',
+    )
+    expect(cell.querySelector('span')?.getAttribute('title')).toBe(
+      'Internal numeric primary key from the source system (Prosys).',
+    )
+  })
+
+  it('falls back to sourceField.aiReasoning when an approved source row has a whitespace-only acknowledgment reason', () => {
+    const result = makeResult(
+      [],
+      [
+        makeOrphanSourceField({
+          aiReasoning:
+            'Internal numeric primary key from the source system (Prosys).',
+        }),
+      ],
+    )
+    result.sourceFieldAcknowledgments = [
+      {
+        id: 'ack-1',
+        sourceFieldId: 'sf-orphan',
+        reason: '   ',
+        decision: 'acknowledged',
+      },
+    ]
+    render(
+      <MappingListView
+        filteredResult={result}
+        mutations={makeMutations()}
+        onOpenDrawer={vi.fn()}
+      />,
+    )
+    const cell = within(findRow('ack::source::ack-1')).getByTestId(
+      'flat-cell-rationale',
+    )
+    expect(cell.querySelector('span')?.getAttribute('title')).toBe(
+      'Internal numeric primary key from the source system (Prosys).',
+    )
+  })
+
+  it('still prefers a non-empty acknowledgment reason over sourceField.aiReasoning (unchanged behavior)', () => {
+    const result = makeResult(
+      [],
+      [makeOrphanSourceField({ aiReasoning: 'Static-config explanation.' })],
+    )
+    result.sourceFieldAcknowledgments = [
+      {
+        id: 'ack-1',
+        sourceFieldId: 'sf-orphan',
+        reason: 'Deliberately retired legacy column',
+        decision: 'acknowledged',
+      },
+    ]
+    render(
+      <MappingListView
+        filteredResult={result}
+        mutations={makeMutations()}
+        onOpenDrawer={vi.fn()}
+      />,
+    )
+    const cell = within(findRow('ack::source::ack-1')).getByTestId(
+      'flat-cell-rationale',
+    )
+    expect(cell.querySelector('span')?.getAttribute('title')).toBe(
+      'Deliberately retired legacy column',
+    )
+  })
+
   it('clicking Approve on an unmapped-source row calls mutations.approveUnmappedSource({pendingKey, sourceFieldId})', async () => {
     const mutations = makeMutations()
     const result = makeResult([], [makeOrphanSourceField()])

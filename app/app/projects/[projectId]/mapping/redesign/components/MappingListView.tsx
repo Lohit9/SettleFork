@@ -41,7 +41,12 @@ function deriveRationaleSource(row: FlatRow): string | null {
   if (row.kind === 'value-assignment') return row.parentRow.aiReasoning
   if (row.kind === 'unmapped-target') return row.parentRow.aiReasoning ?? null
   if (row.kind === 'unmapped-source') {
-    return row.acknowledgmentReason ?? row.sourceField.aiReasoning
+    // "Absent" means null OR empty/whitespace-only: the inline Approve path
+    // persists an empty-string ack reason, and `??` alone would keep that
+    // `''` instead of falling through. Trimming here matches the intent
+    // comment above and `summarizeRationale`'s own trim-before-render.
+    const ackReason = row.acknowledgmentReason?.trim()
+    return ackReason ? ackReason : row.sourceField.aiReasoning
   }
   return null
 }
