@@ -929,40 +929,53 @@ function MappingContentLoaded({
     })
   }, [])
 
-  // Build the post-reject UnmappedRow shape from the current row's
-  // mapped/value-assignment/unmapped identity. PR α₀: rejecting any row
-  // produces an UnmappedRow with status='rejected' (post-PR-γ widened
-  // union — coverage row drives the persisted state on next read).
-  // Pre-PR-γ this emitted status='unmapped'; the new override mirrors
-  // the wire-data shape the translator emits when a coverage row's
-  // status='rejected' (no TFM, kind='unmapped').
+  // Build the post-reject UnmappedRow shape used as a brief optimistic
+  // override. Its ONLY job is to mask the mapped / value-assignment →
+  // unmapped *shape transition* during a reject round-trip: the row's
+  // React key swaps from the TFM id to `unmapped::<targetFieldId>`,
+  // producing an unmount/remount blip that the pre-applied unmapped
+  // shape hides.
+  //
+  // NOT written for rows that are already kind='unmapped' — see the
+  // early return below. Such a row has no shape transition to mask, and
+  // its row id is stable across the reject, so an override would leak
+  // (the cleanup useEffect's drop conditions never match) and mask every
+  // later server read, including a subsequent approve.
+  //
+  // status='needs_review': post-PR-#157, reject is reject-as-reset —
+  // `neutralizeCoverageForReject` lands the target on a neutral
+  // `needs_review`, with no distinct persisted `rejected` state. The
+  // override pre-applies that same end state so the optimistic row
+  // matches what the next server read returns. (Pre-#157 this emitted
+  // 'rejected', mirroring a `coverage.status='rejected'` wire shape the
+  // server no longer produces.)
   //
   // mapping_content='no-source' and statusSetBy='user' match the
   // optimistic intent: the user explicitly clicked reject, so the row
-  // surfaces as user-driven rejection until the server roundtrip
-  // settles. coverageStatus is preserved from the original row when the
+  // surfaces as user-driven until the server roundtrip settles.
+  // coverageStatus is preserved from the original row when the
   // translator already attached one; otherwise null (orphan / target_only
-  // case — no coverage row existed yet, the post-reject UPSERT in the
-  // server action creates one with coverage_status='gap' default).
+  // case — no coverage row existed yet).
   const buildUnmappedOverride = useCallback(
     (rowId: string): MappingRow | null => {
       const row = data.rows.find((r) => r.id === rowId)
       if (!row) return null
 
+      // Already-unmapped rows: no shape transition to mask, and the
+      // override would leak on the stable `unmapped::<id>` row id. Defer
+      // to the server round-trip — fast enough without an override.
+      if (row.kind === 'unmapped') return null
+
+      // `row` is narrowed to mapped | value_assignment by the early
+      // return above — both carry aiReasoning / transformationIntent.
       const confidence = row.confidence ?? null
-      const aiReasoning =
-        row.kind === 'mapped' || row.kind === 'value_assignment'
-          ? row.aiReasoning ?? null
-          : row.aiReasoning ?? null
-      const transformationIntent =
-        row.kind === 'mapped' || row.kind === 'value_assignment'
-          ? row.transformationIntent ?? null
-          : row.transformationIntent ?? null
+      const aiReasoning = row.aiReasoning ?? null
+      const transformationIntent = row.transformationIntent ?? null
       return {
         id: row.id,
         targetField: row.targetField,
         kind: 'unmapped',
-        status: 'rejected',
+        status: 'needs_review',
         confidence,
         aiReasoning,
         transformationIntent,

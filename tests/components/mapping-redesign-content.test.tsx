@@ -1700,3 +1700,97 @@ describe('MappingRedesignContent — Phase 4 empty-state cases', () => {
     expect(screen.queryByTestId('source-schema-sidebar')).toBeNull()
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// fix/unmapped-reject-revert — the optimistic-data override (`buildUnmapped
+// Override` → `optimisticData`) exists solely to mask the mapped /
+// value-assignment → unmapped *shape transition* during a reject. For a row
+// that is ALREADY kind='unmapped', there is no transition to mask, and its
+// row id (`unmapped::<targetFieldId>`) is stable across the reject — so an
+// override written for it never satisfies the cleanup useEffect's drop
+// conditions (id-gone / kind-changed) and leaks permanently, masking every
+// later server read including a subsequent approve (the "reject → approve
+// reverts to rejected" bug). The fix short-circuits `buildUnmappedOverride`
+// for already-unmapped rows.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('MappingRedesignContent — unmapped-target reject does not leak a stale override', () => {
+  const unmappedTargetRow: MappingRow = {
+    kind: 'unmapped',
+    id: 'unmapped::f-a2',
+    targetField: targetField({
+      id: 'f-a2',
+      name: 'balance',
+      targetTable: { id: accountsTable.id, name: accountsTable.name },
+    }),
+    confidence: null,
+    status: 'needs_review',
+    hasTransformation: false,
+    transformationStatus: null,
+    transformationDescription: null,
+    transformationSqlPreview: null,
+  }
+
+  it('inline-rejecting an unmapped-target row leaves its status dot at Needs Review — never flips to Rejected', async () => {
+    renderRedesign('', {
+      rows: [unmappedTargetRow],
+      counts: { total: 1, approved: 0, needsReview: 1, rejected: 0, unmapped: 0 },
+    })
+
+    // Baseline — the row renders as Needs Review.
+    expect(screen.getByLabelText('status: Needs Review')).toBeInTheDocument()
+    expect(screen.queryByLabelText('status: Rejected')).toBeNull()
+
+    // Inline reject: ✗ → confirmation popover → Reject.
+    fireEvent.click(screen.getByTestId('field-mapping-row-reject-button'))
+    fireEvent.click(screen.getByTestId('reject-confirm-popover-confirm'))
+
+    // After the reject round-trip resolves the row must NOT have been
+    // flipped to a 'rejected' optimistic override. Pre-fix,
+    // `buildUnmappedOverride` wrote a status:'rejected' override keyed by
+    // the stable `unmapped::<id>` row id; it never cleared and masked
+    // every later read — the reject→approve revert bug.
+    await waitFor(() => {
+      expect(screen.queryByLabelText('status: Rejected')).toBeNull()
+    })
+    expect(screen.getByLabelText('status: Needs Review')).toBeInTheDocument()
+  })
+})
+
+describe('MappingRedesignContent — mapped-row reject still uses the optimistic unmapped override', () => {
+  it('inline-rejecting a mapped row optimistically morphs it to the unmapped shape at status Needs Review', async () => {
+    // The legitimate use of `buildUnmappedOverride`: a mapped row's
+    // reject DOES change the row kind (mapped → unmapped), so the
+    // override still fires and pre-applies the unmapped shape. The fix's
+    // already-unmapped short-circuit must NOT suppress it here.
+    const mappedRow = mapped({
+      id: 'tfm-mapped-1',
+      status: 'needs_review',
+      targetField: targetField({
+        id: 'f-a2',
+        name: 'balance',
+        targetTable: { id: accountsTable.id, name: accountsTable.name },
+      }),
+    })
+    renderRedesign('', {
+      rows: [mappedRow],
+      counts: { total: 1, approved: 0, needsReview: 1, rejected: 0, unmapped: 0 },
+    })
+
+    // Baseline — a mapped row shows its source field, not the
+    // "No source mapped" placeholder.
+    expect(screen.queryByLabelText('no source mapped')).toBeNull()
+
+    fireEvent.click(screen.getByTestId('field-mapping-row-reject-button'))
+    fireEvent.click(screen.getByTestId('reject-confirm-popover-confirm'))
+
+    // The override fired: the row optimistically morphed to the unmapped
+    // shape ("No source mapped"), pre-applied at status='needs_review'
+    // (reject-as-reset per PR #157) — NOT the stale 'rejected' literal.
+    await waitFor(() => {
+      expect(screen.getByLabelText('no source mapped')).toBeInTheDocument()
+    })
+    expect(screen.getByLabelText('status: Needs Review')).toBeInTheDocument()
+    expect(screen.queryByLabelText('status: Rejected')).toBeNull()
+  })
+})
