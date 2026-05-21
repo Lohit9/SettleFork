@@ -68,18 +68,27 @@ import type { MappingCounts } from '@/lib/types/mappings-for-redesign'
 //     `target.needsReview = total - approved` (PR-7 helper change)
 //     subsumes both — every target-side slot that isn't approved
 //     rolls up into Needs Review.
-//   • Status chip values switched from `MappingsForRedesignResult.counts.*`
-//     to `projectStats.target.{approved,needsReview}`. Pre-PR-7 the
-//     two source paths produced numbers that were one off from each
-//     other (e.g. `Approved 59` vs project-wide `Target Fields 60/72`)
-//     because grid-level `counts.approved` excluded the bare-ack
-//     contribution that project-wide `target.approved` includes.
-//     Single source of truth across the strip — the chips reconcile
-//     with the axes: `Approved + Needs Review = target.total`.
-//   • The `counts: MappingCounts` prop was DROPPED entirely — every
-//     value the strip renders now comes from `projectStats`.
+//   • The axis chips (Source Fields / Target Fields) read from
+//     `projectStats` — project-wide truth.
 //   • `projectStats` is REQUIRED (no longer optional). Test fixtures
 //     and callers pass `null` explicitly to render the empty state.
+//
+// Status-chip source (current — supersedes a since-removed PR-7 note
+// that claimed the `counts` prop was dropped entirely):
+//
+//   • The Approved / Needs Review chips render `counts` when supplied,
+//     falling back to `projectStats.target.{approved,needsReview}`
+//     only when it is absent. `MappingContent` always supplies
+//     `counts` — it passes `effectiveCounts`, the flat-row tally from
+//     `flattenRowsForListView` + `countFlatRowStatuses` — so in
+//     practice the chips render the flat-row counts.
+//   • The flat-row tally is the intended source: it spans all four
+//     row kinds (incl. unmapped-source), whereas `projectStats.target.*`
+//     is target-axis-only and undercounts Needs Review. The
+//     `projectStats` fallback exists purely for defensive rendering
+//     when a caller omits `counts`.
+//   • The Migration Center "Mapping Coverage" card counts over the
+//     same `countFlatRowStatuses` helper, so the two surfaces agree.
 //
 // This replaces both the experimental `WipBanner` (dropped per Q2.1) and
 // the `CountersRow` block. The strip is non-sticky (founder Q8.1) — it
@@ -99,19 +108,20 @@ import type { MappingCounts } from '@/lib/types/mappings-for-redesign'
 // `tests/lib/no-shim-in-redesign-path.test.ts` enforces it at CI time.
 
 interface MappingSummaryStripProps {
-  /** PR-7: `projectStats` is now the SOLE source for everything the strip
-   *  renders — project-wide axes AND status chips. The pre-PR-7 `counts`
-   *  prop (from `MappingsForRedesignResult`) was dropped because its
-   *  grid-level "Approved" / "Needs Review" tallies showed values
-   *  one off from the project-wide ratios on the same strip (e.g.
-   *  `Approved 59` next to `Target Fields 60/72`), reintroducing the
-   *  conceptual muddle PR-7 closes. Single source of truth, chips
-   *  reconcile with axes: `Approved + Needs Review = target.total`.
+  /** Project-wide axes (Source Fields / Target Fields chips) and the
+   *  fallback source for the Approved / Needs Review chips when `counts`
+   *  is absent.
    *
    *  Required (no longer optional) when the strip is rendered for a
    *  populated project. Pass `null` for the defensive empty-state
    *  fallback (renders the awaiting_data label). */
   projectStats: ProjectStats | null
+  /** Flat-row status tally — when supplied, the PRIMARY source for the
+   *  Approved / Needs Review chips (`projectStats.target.*` is the
+   *  fallback). `MappingContent` always passes this as `effectiveCounts`,
+   *  the `flattenRowsForListView` + `countFlatRowStatuses` projection,
+   *  so the chips reflect all four row kinds rather than the
+   *  target-axis-only `projectStats` numbers. */
   counts?: Pick<MappingCounts, 'total' | 'approved' | 'needsReview'>
   /** feat/mapping-list-toggle-and-columns: optional trailing slot
    *  rendered right-aligned on the same horizontal line as the

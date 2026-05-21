@@ -29,6 +29,11 @@ import {
   type ProjectStats,
   type RawProjectStatsData,
 } from '@/lib/quality/project-stats'
+import { getMappingsForRedesignCore } from '@/lib/ai/mapping-engine'
+import {
+  flattenRowsForListView,
+  countFlatRowStatuses,
+} from '@/lib/utils/flatten-rows-for-list-view'
 import type {
   MappingSourceRow,
   SourceFieldAcknowledgmentRow,
@@ -144,6 +149,13 @@ export interface OutputsPageData {
   // directly to surface the source axis and the redefined
   // `transforms.complete` numerator.
   projectStats: ProjectStats
+  // Flat-row status tally — Approved / Needs Review counts derived from
+  // the same `flattenRowsForListView` projection the Mapping page
+  // summary strip counts over. The Migration Center "Mapping Coverage"
+  // card renders these so its two figures match the strip exactly
+  // (the target-axis `projectStats.target.*` numbers do NOT — they
+  // exclude unmapped-source rows). See `countFlatRowStatuses`.
+  mappingFlatCounts: { approved: number; needsReview: number }
 }
 
 export interface GeneratedFile {
@@ -204,6 +216,7 @@ export function emptyOutputsPageData(projectId: string): OutputsPageData {
       transforms: { complete: 0, total: 0 },
       blocking: 0,
     },
+    mappingFlatCounts: { approved: 0, needsReview: 0 },
   }
 }
 
@@ -1267,6 +1280,20 @@ export async function getOutputsPageDataCore(
   }
   const projectStats = rollupProjectStats(projectId, projectStatsRaw)
 
+  // Flat-row status tally for the Migration Center "Mapping Coverage"
+  // card. Counts over the SAME `flattenRowsForListView` projection the
+  // Mapping page summary strip counts over, so the MC card's Approved /
+  // Needs Review figures match the strip exactly. `getMappingsForRedesignCore`
+  // gates on the `projects` row and filters every fetch by `projectId`,
+  // so passing the RLS-bound `client` is scope-safe; a null return
+  // (project gate failed) degrades to zero counts. The aggregate
+  // `projectStats.target.*` numbers deliberately are NOT used here —
+  // they exclude unmapped-source rows and so undercount Needs Review.
+  const mappingResult = await getMappingsForRedesignCore(client, projectId)
+  const mappingFlatCounts = mappingResult
+    ? countFlatRowStatuses(flattenRowsForListView(mappingResult))
+    : { approved: 0, needsReview: 0 }
+
   const stagingCountResults = nonRejectedTMIds.length > 0
     ? await Promise.all(
         nonRejectedTMIds.map((tmId) =>
@@ -1410,5 +1437,6 @@ export async function getOutputsPageDataCore(
     hasSourceData: sourceTables.length > 0,
     hasTargetData: targetTables.length > 0,
     projectStats,
+    mappingFlatCounts,
   }
 }

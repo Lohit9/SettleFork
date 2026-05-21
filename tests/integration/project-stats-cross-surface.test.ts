@@ -399,4 +399,37 @@ describeIf('[integration] project-stats cross-surface alignment', () => {
     expect(restored).toBeTruthy()
     expect(restored!.source.decided).toBe(baseline.source.decided)
   }, 90_000)
+
+  it('Migration Center mappingFlatCounts equals the Mapping page flat-row tally', () => {
+    // feat/mc-mapping-coverage-two-figure — the MC "Mapping Coverage"
+    // card renders `mappingFlatCounts`, which must equal what the
+    // Mapping page summary strip shows. The strip counts `effectiveCounts`
+    // = `countFlatRowStatuses(flattenRowsForListView(...))` over the
+    // SAME `MappingsForRedesignResult`; at rest (no optimistic edits)
+    // `effectiveRows === data.rows`, so the strip's numbers reduce to
+    // the flat-row tally over the server result. This oracle recomputes
+    // that tally independently and pins it against the MC card's value.
+    return (async () => {
+      const { supabaseAdmin } = await import('@/lib/supabase/admin')
+      const { getOutputsPageDataCore } = await import('@/lib/actions/_outputs-core')
+      const { getMappingsForRedesignCore } = await import('@/lib/ai/mapping-engine')
+      const { flattenRowsForListView, countFlatRowStatuses } = await import(
+        '@/lib/utils/flatten-rows-for-list-view'
+      )
+
+      const [outputsData, mappingResult] = await Promise.all([
+        getOutputsPageDataCore(PROJECT_ID, supabaseAdmin),
+        getMappingsForRedesignCore(supabaseAdmin, PROJECT_ID),
+      ])
+
+      expect(mappingResult, `mapping result null for ${PROJECT_ID}`).toBeTruthy()
+      if (!mappingResult) return
+
+      const stripTally = countFlatRowStatuses(
+        flattenRowsForListView(mappingResult),
+      )
+
+      expect(outputsData.mappingFlatCounts).toEqual(stripTally)
+    })()
+  }, 60_000)
 })

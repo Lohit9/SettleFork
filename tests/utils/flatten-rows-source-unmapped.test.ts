@@ -2,10 +2,16 @@ import { describe, it, expect } from 'vitest'
 import type {
   MappingsForRedesignResult,
   MappingRow,
+  MappedRow,
+  UnmappedRow,
+  TargetFieldRef,
   SourceFieldWithState,
   SourceFieldAcknowledgmentSummary,
 } from '@/lib/types/mappings-for-redesign'
-import { flattenRowsForListView } from '@/lib/utils/flatten-rows-for-list-view'
+import {
+  flattenRowsForListView,
+  countFlatRowStatuses,
+} from '@/lib/utils/flatten-rows-for-list-view'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // flatten-rows-for-list-view — source-side row synthesis behavior.
@@ -434,5 +440,139 @@ describe('flattenRowsForListView — source-side rows', () => {
     expect(flat.id).toBe('tfm-single')
     expect(flat.sources.length).toBe(1)
     expect(flat.sources[0].id).toBe('ms-1')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// countFlatRowStatuses — shared status tally.
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Canonical counter for the Mapping page summary strip's Approved /
+// Needs Review chips AND the Migration Center "Mapping Coverage" card.
+// Both surfaces flatten the same result and tally it here, so the two
+// numbers must agree. Pins: rejected folds into needsReview, and all
+// four flat-row kinds (incl. unmapped-source) are counted.
+
+function makeTargetField(overrides: Partial<TargetFieldRef> = {}): TargetFieldRef {
+  return {
+    id: 'tf-default',
+    name: 'tgt_col',
+    dataType: 'VARCHAR(50)',
+    isNullable: false,
+    defaultValue: null,
+    targetTable: { id: 'tt-1', name: 'TGT_TABLE' },
+    ordinalPosition: 1,
+    isPrimaryKey: false,
+    isForeignKey: false,
+    fkReference: null,
+    description: null,
+    sampleValues: [],
+    ...overrides,
+  }
+}
+
+function makeMappedRow(
+  id: string,
+  status: MappedRow['status'],
+  sourceFieldId: string,
+): MappedRow {
+  return {
+    kind: 'mapped',
+    id,
+    targetField: makeTargetField({ id: `tf-${id}` }),
+    confidence: 90,
+    status,
+    hasTransformation: false,
+    transformationStatus: null,
+    sources: [
+      {
+        id: `ms-${id}`,
+        ordinal: 0,
+        confidence: 90,
+        aiReasoning: null,
+        typeCompatibility: null,
+        sourceField: {
+          id: sourceFieldId,
+          name: 'src_col',
+          dataType: 'VARCHAR(50)',
+          isNullable: false,
+        },
+        sourceTable: { id: 'st-1', name: 'SRC_TABLE' },
+        joinAnnotation: null,
+        joinSpec: null,
+        sampleValues: [],
+      },
+    ],
+    combinationType: 'single',
+    combinationSql: null,
+    aiReasoning: null,
+  }
+}
+
+function makeUnmappedTargetRow(
+  id: string,
+  status: UnmappedRow['status'],
+): UnmappedRow {
+  return {
+    kind: 'unmapped',
+    id,
+    targetField: makeTargetField({ id: `tf-${id}` }),
+    confidence: null,
+    status,
+  }
+}
+
+describe('countFlatRowStatuses', () => {
+  it('returns zero counts for an empty projection', () => {
+    expect(countFlatRowStatuses([])).toEqual({ approved: 0, needsReview: 0 })
+  })
+
+  it('counts approved and needs_review across mapped + unmapped-target rows', () => {
+    const result = makeResult({
+      rows: [
+        makeMappedRow('tfm-a', 'approved', 'sf-a'),
+        makeMappedRow('tfm-b', 'needs_review', 'sf-b'),
+        makeUnmappedTargetRow('unm-1', 'approved'),
+        makeUnmappedTargetRow('unm-2', 'needs_review'),
+      ],
+    })
+    expect(countFlatRowStatuses(flattenRowsForListView(result))).toEqual({
+      approved: 2,
+      needsReview: 2,
+    })
+  })
+
+  it('folds rejected rows into needsReview (Reject = reset, no distinct bucket)', () => {
+    const result = makeResult({
+      rows: [
+        makeMappedRow('tfm-a', 'approved', 'sf-a'),
+        makeMappedRow('tfm-r', 'rejected', 'sf-r'),
+      ],
+    })
+    expect(countFlatRowStatuses(flattenRowsForListView(result))).toEqual({
+      approved: 1,
+      needsReview: 1,
+    })
+  })
+
+  it('counts unmapped-source rows — the target-axis-only count would miss these', () => {
+    // A pure unmapped source field flattens to an unmapped-source row
+    // with status 'needs_review'. This is exactly the contribution
+    // `projectStats.target.needsReview` omits — the divergence the
+    // Migration Center card adopts this counter to avoid.
+    const result = makeResult({
+      rows: [makeMappedRow('tfm-a', 'approved', 'sf-mapped')],
+      sourceFields: [
+        makeSourceField({ id: 'sf-mapped' }),
+        makeSourceField({ id: 'sf-orphan-1' }),
+        makeSourceField({ id: 'sf-orphan-2' }),
+      ],
+    })
+    // sf-mapped is referenced by the TFM, so only the two orphans emit
+    // unmapped-source rows — both 'needs_review'.
+    expect(countFlatRowStatuses(flattenRowsForListView(result))).toEqual({
+      approved: 1,
+      needsReview: 2,
+    })
   })
 })

@@ -895,7 +895,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
 
   // ── Computed values ─────────────────────────────────────────────────────
 
-  const { phases, metrics, decisions, outstanding, existingOutputs, projectStats } = data
+  const { phases, metrics, decisions, outstanding, existingOutputs, projectStats, mappingFlatCounts } = data
   // PR-3: state-aware empty for stat widgets (Q4 — Card height preserved
   // across states, no layout shift). When the project hasn't reached
   // `mappings_generated`, the numeric stat in Mapping Coverage and
@@ -940,9 +940,10 @@ export default function OutputsContent({ projectId, projectName, initialData, is
               into Mapping Coverage so the source axis lives alongside
               the target axis in a single card. Final shape: 4 cards
               (Mapping Coverage, Transforms, Quality Issues, Migration
-              Readiness). Mapping Coverage now shows target.approved /
-              target.total + source.decided / source.total + needs-review
-              count in a single tile. State-aware empty (Q4) renders the
+              Readiness). Mapping Coverage shows two headline figures —
+              Approved + Needs Review (flat-row counts that match the
+              Mapping page summary strip) — plus a source/target coverage
+              sub-line. State-aware empty (Q4) renders the
               state label when state ≠ 'mappings_generated'; Card height
               preserved. Q2 numerator note: `transforms.complete` =
               saved + applied (was `metrics.completedTransforms` =
@@ -952,11 +953,16 @@ export default function OutputsContent({ projectId, projectName, initialData, is
             data-testid="mc-stats-grid"
             className="grid grid-cols-2 lg:grid-cols-4 gap-4 items-stretch mb-4"
           >
-            {/* Card 1 — Mapping Coverage (PR-6 merged Source Coverage in;
-                PR-7 restructured the card content to a bare {approved}/{total}
-                headline plus a single source-first sub-line that reconciles
-                both axes — replaces PR-6's two-line layout + needs-review/
-                unmapped caption stack). */}
+            {/* Card 1 — Mapping Coverage. Headline is two figures:
+                Approved + Needs Review, sourced from `mappingFlatCounts`
+                (the `flattenRowsForListView` + `countFlatRowStatuses`
+                projection — the SAME counter the Mapping page summary
+                strip renders, so the two surfaces agree exactly). The
+                earlier `{target.approved}/{target.total}` ratio headline
+                was dropped because it duplicated the sub-line's Target
+                coverage stat and used the target-axis-only count, which
+                undercounts Needs Review vs. the strip. The source-first
+                coverage sub-line below is unchanged. */}
             <div
               data-testid="mc-mapping-coverage"
               data-state={projectStatsState}
@@ -966,15 +972,32 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                 <p className="text-xs text-gray-500 mb-2">Mapping Coverage</p>
                 {isStatsPopulated && projectStats ? (
                   <>
-                    <div className="flex items-baseline gap-1">
-                      <span
-                        data-testid="mc-mapping-approved"
-                        className="text-2xl font-semibold text-settle-slate-900"
-                      >
-                        {projectStats.target.approved}
+                    {/* Two-figure headline — Approved · Needs Review.
+                        `flex-wrap` lets the pair stack gracefully when
+                        the quarter-width card is too narrow for one row. */}
+                    <div className="flex items-baseline gap-x-2 gap-y-1 flex-wrap">
+                      <span className="flex items-baseline gap-1">
+                        <span
+                          data-testid="mc-mapping-approved"
+                          className="text-2xl font-semibold text-settle-slate-900 tabular-nums"
+                        >
+                          {mappingFlatCounts.approved}
+                        </span>
+                        <span className="text-xs text-settle-slate-500">
+                          Approved
+                        </span>
                       </span>
-                      <span className="text-sm text-settle-slate-400">
-                        / {projectStats.target.total}
+                      <span className="text-sm text-settle-slate-300">·</span>
+                      <span className="flex items-baseline gap-1">
+                        <span
+                          data-testid="mc-mapping-needs-review"
+                          className="text-2xl font-semibold text-settle-slate-900 tabular-nums"
+                        >
+                          {mappingFlatCounts.needsReview}
+                        </span>
+                        <span className="text-xs text-settle-slate-500">
+                          Needs Review
+                        </span>
                       </span>
                     </div>
                     {/* PR-7: single sub-line, source coverage first. Replaces
@@ -1005,16 +1028,6 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                         {projectStats.target.approved}/{projectStats.target.total}
                       </span>
                     </p>
-                    {projectStats.target.total > 0 && (
-                      <div className="mt-2 h-0.5 bg-settle-slate-100 rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-settle-slate-400 rounded-full"
-                          style={{
-                            width: `${Math.round((projectStats.target.approved / projectStats.target.total) * 100)}%`,
-                          }}
-                        />
-                      </div>
-                    )}
                   </>
                 ) : (
                   <p
