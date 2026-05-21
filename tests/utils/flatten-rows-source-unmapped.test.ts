@@ -519,6 +519,8 @@ function makeUnmappedTargetRow(
     targetField: makeTargetField({ id: `tf-${id}` }),
     confidence: null,
     status,
+    hasTransformation: false,
+    transformationStatus: null,
   }
 }
 
