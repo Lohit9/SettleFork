@@ -99,7 +99,7 @@ export function fieldSignature(
   }
 }
 
-function sigKey(sig: FieldSignature): string {
+export function sigKey(sig: FieldSignature): string {
   return `${sig.tableName}.${sig.fieldName}|${sig.dataType}|${sig.isNullable}|${sig.isForeignKey}`
 }
 
