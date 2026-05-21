@@ -1794,3 +1794,85 @@ describe('MappingRedesignContent — mapped-row reject still uses the optimistic
     expect(screen.queryByLabelText('status: Rejected')).toBeNull()
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// fix/rejecting-optimistic-leak — `handleRejectConfirm` sets the 'rejecting'
+// optimisticState (slide cue + disabled action buttons) but, pre-fix, never
+// cleared it on the success path: the [data.rows] cleanup effect only clears
+// 'approving'. For a mapped row the stale entry was harmless (the row id dies
+// on reject). For an unmapped-target row the id (`unmapped::<tf>`) is stable,
+// so the row stayed disabled + sliding permanently. The fix clears the state
+// on the same 200ms hook that fires router.refresh.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('MappingRedesignContent — reject clears the rejecting optimistic state', () => {
+  const unmappedTargetRow: MappingRow = {
+    kind: 'unmapped',
+    id: 'unmapped::f-a2',
+    targetField: targetField({
+      id: 'f-a2',
+      name: 'balance',
+      targetTable: { id: accountsTable.id, name: accountsTable.name },
+    }),
+    confidence: null,
+    status: 'needs_review',
+    hasTransformation: false,
+    transformationStatus: null,
+    transformationDescription: null,
+    transformationSqlPreview: null,
+  }
+
+  it('inline-rejecting an unmapped-target row re-enables the row after the 200ms hook clears the rejecting state', async () => {
+    renderRedesign('', {
+      rows: [unmappedTargetRow],
+      counts: { total: 1, approved: 0, needsReview: 1, rejected: 0, unmapped: 0 },
+    })
+
+    fireEvent.click(screen.getByTestId('field-mapping-row-reject-button'))
+    fireEvent.click(screen.getByTestId('reject-confirm-popover-confirm'))
+
+    // During the reject round-trip + 200ms slide cue the row is in the
+    // 'rejecting' optimistic state — its action buttons are disabled.
+    expect(
+      screen.getByTestId('field-mapping-row-reject-button'),
+    ).toBeDisabled()
+
+    // The 200ms success hook clears the 'rejecting' state. Pre-fix it
+    // had no clear path for a stable `unmapped::<id>` row id, so the row
+    // stayed disabled (and sliding) permanently.
+    await waitFor(() => {
+      expect(
+        screen.getByTestId('field-mapping-row-reject-button'),
+      ).not.toBeDisabled()
+    })
+  })
+
+  it('inline-rejecting a mapped row also clears the rejecting state after the 200ms hook (regression for the harmless case)', async () => {
+    const mappedRow = mapped({
+      id: 'tfm-mapped-1',
+      status: 'needs_review',
+      targetField: targetField({
+        id: 'f-a2',
+        name: 'balance',
+        targetTable: { id: accountsTable.id, name: accountsTable.name },
+      }),
+    })
+    renderRedesign('', {
+      rows: [mappedRow],
+      counts: { total: 1, approved: 0, needsReview: 1, rejected: 0, unmapped: 0 },
+    })
+
+    fireEvent.click(screen.getByTestId('field-mapping-row-reject-button'))
+    fireEvent.click(screen.getByTestId('reject-confirm-popover-confirm'))
+
+    expect(
+      screen.getByTestId('field-mapping-row-reject-button'),
+    ).toBeDisabled()
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId('field-mapping-row-reject-button'),
+      ).not.toBeDisabled()
+    })
+  })
+})
