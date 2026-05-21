@@ -34,9 +34,10 @@
 //         MappingRow>` and threads it to FieldMappingRow.
 //   RF8.  FieldMappingRow consumes the override via
 //         `optimisticData?.get(providedRow.id) ?? providedRow`.
-//   RF9.  Negative invariant — `handleRejectConfirm` still has
-//         `setTimeout(() => router.refresh(), 200)` (the fade-out
-//         duration is unchanged; only the data-shape override is new).
+//   RF9.  `handleRejectConfirm`'s 200ms success hook fires
+//         `router.refresh()` AND `clearOptimistic(rowId)` (the fade-out
+//         duration is unchanged; the 'rejecting' optimisticState is
+//         cleared on the same hook since it has no data-driven clear).
 //   RF10. Negative invariant — the `isRejecting` className branch in
 //         FieldMappingRow.tsx must NOT include `opacity-0`. This is
 //         the test that would have caught the PR #58 failure mode:
@@ -103,18 +104,46 @@ describe("[Mapping reject-flash fix] optimistic-data override — invariants", (
     );
   });
 
-  it("RF2 — buildUnmappedOverride returns UnmappedRow shape (kind/status/confidence pinned)", () => {
+  it("RF2 — buildUnmappedOverride returns UnmappedRow shape (kind/status pinned)", () => {
     expect(MAPPING_CONTENT).toMatch(
       /const\s+buildUnmappedOverride\s*=\s*useCallback/,
     );
+    const overrideBody = sliceCallback(
+      MAPPING_CONTENT,
+      "  const buildUnmappedOverride = useCallback",
+    );
     // The returned object literal must carry kind='unmapped' (the wire
     // shape the translator produces when no TFM points at the target)
-    // and status='rejected' (PR α₀ — the new optimistic-reject status,
-    // mirrors the post-PR-γ widened union; pre-α₀ this was the legacy
-    // 'unmapped' status sentinel which is now reserved for fixture
-    // back-compat only).
-    expect(MAPPING_CONTENT).toMatch(/kind:\s*['"]unmapped['"]/);
-    expect(MAPPING_CONTENT).toMatch(/status:\s*['"]rejected['"]/);
+    // and status='needs_review'. Post-PR-#157, reject is reject-as-reset:
+    // `neutralizeCoverageForReject` lands the rejected target on a
+    // neutral `needs_review`, with no distinct persisted `rejected`
+    // state — so the override pre-applies that same end state.
+    expect(overrideBody).toMatch(/kind:\s*['"]unmapped['"]/);
+    expect(overrideBody).toMatch(/status:\s*['"]needs_review['"]/);
+    // Negative — the stale 'rejected' literal must NOT reappear. Pre-fix
+    // it mirrored a `coverage.status='rejected'` wire shape the server no
+    // longer produces; left in place it re-surfaced as the reject→approve
+    // revert bug (a leaked override masking the post-approve read).
+    expect(overrideBody).not.toMatch(/status:\s*['"]rejected['"]/);
+  });
+
+  it("RF12 — buildUnmappedOverride short-circuits (returns null) for already-unmapped rows", () => {
+    // fix/unmapped-reject-revert — the override masks the mapped /
+    // value-assignment → unmapped *shape transition* during a reject. A
+    // row that is already kind='unmapped' has no transition to mask, and
+    // its row id (`unmapped::<targetFieldId>`) is stable across the
+    // reject — so an override written for it never satisfies the cleanup
+    // useEffect's drop conditions (RF6 / RF11: id-gone / kind-changed)
+    // and leaks permanently, masking later server reads including a
+    // subsequent approve. The helper must early-return before building
+    // the override object when the source row is already unmapped.
+    const overrideBody = sliceCallback(
+      MAPPING_CONTENT,
+      "  const buildUnmappedOverride = useCallback",
+    );
+    expect(overrideBody).toMatch(
+      /if\s*\(\s*row\.kind\s*===\s*['"]unmapped['"]\s*\)\s*return null/,
+    );
   });
 
   it("RF3 — handleRejectConfirm calls writeOptimisticData BEFORE setOptimistic('rejecting')", () => {
@@ -199,9 +228,20 @@ describe("[Mapping reject-flash fix] optimistic-data override — invariants", (
     );
   });
 
-  it("RF9 — handleRejectConfirm still uses setTimeout(() => router.refresh(), 200) for fade-out timing", () => {
+  it("RF9 — handleRejectConfirm's 200ms success hook fires router.refresh AND clears the 'rejecting' optimisticState", () => {
+    // The 200ms delay preserves the slide-fade-out timing before the
+    // data swap. `clearOptimistic(rowId)` rides the same hook: unlike
+    // 'approving' — which the [data.rows] effect drops once the row
+    // reads back status='approved' — the 'rejecting' optimisticState
+    // has no data-driven clear. Reject does not always produce an
+    // observable delta: a `needs_review` unmapped-target row rejected
+    // under the post-#157 reject-as-reset semantic stays `needs_review`
+    // at the same stable `unmapped::<id>` row id, so no [data.rows]
+    // effect can detect the reject settled. Without the explicit clear
+    // here the row stays in the disabled, sliding 'rejecting' visual
+    // permanently.
     expect(HANDLE_REJECT_CONFIRM).toMatch(
-      /setTimeout\(\(\)\s*=>\s*router\.refresh\(\)\s*,\s*200\s*\)/,
+      /setTimeout\(\(\)\s*=>\s*\{[\s\S]*?router\.refresh\(\)[\s\S]*?clearOptimistic\(rowId\)[\s\S]*?\}\s*,\s*200\s*\)/,
     );
   });
 
