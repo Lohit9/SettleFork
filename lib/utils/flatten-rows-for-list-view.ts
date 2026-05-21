@@ -252,6 +252,37 @@ export function flattenRowsForListView(
   return out
 }
 
+/**
+ * Status tally over a flat-row projection.
+ *
+ * Canonical counter for the Mapping page summary strip's Approved /
+ * Needs Review chips AND the Migration Center "Mapping Coverage" card.
+ * Both surfaces flatten the same `MappingsForRedesignResult` through
+ * `flattenRowsForListView` and tally it here, so the two numbers are
+ * guaranteed identical for a given project.
+ *
+ * The tally spans all four flat-row kinds (`mapped`, `value-assignment`,
+ * `unmapped-target`, `unmapped-source`). Folding in `unmapped-source`
+ * is the deliberate behavior the Mapping strip relies on — counting
+ * the target-keyed rows alone undercounts Needs Review (the Rootstock
+ * POC undercount: 87 vs. the true total). `rejected` rows are folded
+ * into `needsReview` (post-#157/#158/A2 'rejected' carries no semantic
+ * distinct from 'needs_review' — Reject = reset).
+ */
+export function countFlatRowStatuses(flatRows: FlatRow[]): {
+  approved: number
+  needsReview: number
+} {
+  let approved = 0
+  let needsReview = 0
+  for (const row of flatRows) {
+    if (row.status === 'approved') approved++
+    else if (row.status === 'needs_review' || row.status === 'rejected')
+      needsReview++
+  }
+  return { approved, needsReview }
+}
+
 function normalizeMappedStatus(
   status: 'needs_review' | 'approved' | 'rejected' | 'unmapped',
 ): FlatRowStatus {

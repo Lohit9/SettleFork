@@ -110,7 +110,10 @@ import {
 import { ToastProvider, useToast } from '@/lib/contexts/ToastContext'
 import { CONFIDENCE_THRESHOLD_ROW_HIGH } from '@/lib/utils/confidence-format'
 import { useCollapsedGroups } from '@/lib/hooks/useCollapsedGroups'
-import { flattenRowsForListView } from '@/lib/utils/flatten-rows-for-list-view'
+import {
+  flattenRowsForListView,
+  countFlatRowStatuses,
+} from '@/lib/utils/flatten-rows-for-list-view'
 import type { ProjectStats } from '@/lib/quality/project-stats'
 
 // Phase 4c-1 — high-confidence threshold (mirrors legacy default).
@@ -1980,17 +1983,9 @@ function MappingContentLoaded({
   // both chips. Approved counts only `status === 'approved'`.
   const effectiveCounts = useMemo(() => {
     const flatRows = flattenRowsForListView({ ...data, rows: effectiveRows })
-    let approved = 0
-    let needsReview = 0
-    for (const row of flatRows) {
-      if (row.status === 'approved') approved++
-      else if (row.status === 'needs_review' || row.status === 'rejected')
-        needsReview++
-    }
     return {
       total: flatRows.length,
-      approved,
-      needsReview,
+      ...countFlatRowStatuses(flatRows),
     }
   }, [data, effectiveRows])
 
