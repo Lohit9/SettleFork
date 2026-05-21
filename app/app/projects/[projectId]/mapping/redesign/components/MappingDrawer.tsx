@@ -49,7 +49,6 @@ import {
   approveFieldMapping,
   rejectFieldMapping,
   resetMappingStatus,
-  setUnmappedRowRejected,
 } from '@/lib/actions/mappings-for-redesign'
 import {
   acknowledgeField,
@@ -1089,7 +1088,6 @@ function SourceFieldDrawerStub({
     ? 'approved'
     : 'needs_review'
   const [isApprovePending, startApproveTransition] = useTransition()
-  const [isRejecting, setIsRejecting] = useState(false)
   const [isUnapproving, setIsUnapproving] = useState(false)
   const [footerError, setFooterError] = useState<string | null>(null)
 
@@ -1109,41 +1107,12 @@ function SourceFieldDrawerStub({
     })
   }, [projectId, sf.id, row.id, onActionComplete])
 
-  const handleRejectSource = useCallback(async () => {
-    if (!projectId) return
-    setFooterError(null)
-    setIsRejecting(true)
-    try {
-      const result = await setUnmappedRowRejected({
-        projectId,
-        sourceFieldId: sf.id,
-      })
-      if (!result.success) {
-        setIsRejecting(false)
-        setFooterError(GENERIC_REJECT_ERROR)
-        if (typeof console !== 'undefined') {
-          console.error(
-            '[SourceFieldDrawerStub] setUnmappedRowRejected failed:',
-            result,
-          )
-        }
-        return
-      }
-      // Success — parent closes the drawer + refreshes. Leave
-      // `isRejecting` set; the drawer is about to unmount (mirrors
-      // `handleRejectConfirm`).
-      onActionComplete?.('reject', row.id)
-    } catch (err) {
-      setIsRejecting(false)
-      setFooterError(GENERIC_REJECT_ERROR)
-      if (typeof console !== 'undefined') {
-        console.error(
-          '[SourceFieldDrawerStub] setUnmappedRowRejected threw:',
-          err,
-        )
-      }
-    }
-  }, [projectId, sf.id, row.id, onActionComplete])
+  // feat/reject-to-unmap — the unmapped-source drawer no longer exposes
+  // a reject affordance, so the former `handleRejectSource` callback
+  // (which dispatched `setUnmappedRowRejected`) was removed with the
+  // footer's reject button. The `setUnmappedRowRejected` server action
+  // itself is untouched in `lib/actions/*` — only this UI call site is
+  // gone. See the `feat/reject-to-unmap` PR description.
 
   const handleUnapproveSource = useCallback(async () => {
     if (!projectId) return
@@ -1352,10 +1321,8 @@ function SourceFieldDrawerStub({
         <UnmappedFooterButtons
           status={footerStatus}
           isApprovePending={isApprovePending}
-          isRejecting={isRejecting}
           optimisticallyApproved={false}
           onApprove={handleApproveSource}
-          onRejectClick={handleRejectSource}
           isUnapproving={isUnapproving}
           onUnapproveClick={handleUnapproveSource}
         />
@@ -1374,7 +1341,7 @@ function SourceFieldDrawerStub({
 const GENERIC_APPROVE_ERROR =
   "Couldn't approve this mapping. Please try again."
 const GENERIC_REJECT_ERROR =
-  "Couldn't reject this mapping. Please try again."
+  "Couldn't unmap this mapping. Please try again."
 const GENERIC_UNAPPROVE_ERROR =
   "Couldn't un-approve this mapping. Please try again."
 
@@ -3778,15 +3745,23 @@ interface DrawerFooterProps {
   onUnapproveClick: () => void
 }
 
-// PR 3b commit 3 — DrawerFooter is now Approve / Reject / Un-approve
-// only. The form-active / edit-form-active mode-switches retired with
+// PR 3b commit 3 — DrawerFooter is Approve / Unmap / Un-approve only.
+// The form-active / edit-form-active mode-switches retired with
 // CreateMappingForm. Footer dispatches by row.kind + status:
-//   unmapped + approved → [Un-approve]
-//   unmapped + rejected → [Approve]   (re-approves coverage row)
-//   unmapped + needs_review → no footer affordance — header source ✏
-//     creates the mapping
-//   mapped / VA + needs_review / rejected → [Reject] [Approve]
-//   mapped / VA + approved → [Reject]
+//   unmapped + approved     → [Un-approve]
+//   unmapped + rejected     → [Approve]   (re-approves coverage row)
+//   unmapped + needs_review → [Approve]
+//   mapped / VA + needs_review / rejected → [Unmap] [Approve]
+//   mapped / VA + approved  → [Unmap]
+//
+// feat/reject-to-unmap — unmapped rows carry NO Unmap (formerly
+// "Reject") affordance: on an unmapped row the action is a
+// non-destructive no-op (it only clears AI rationale text), so the
+// unmapped footer is Approve / Un-approve only. The mapped/VA "Reject"
+// button is renamed "Unmap" — same destructive delete-the-TFM
+// behavior, honest verb. (The prior revision of this comment claimed
+// "unmapped + needs_review → no footer affordance"; that was stale —
+// the code rendered approve+reject. It is now Approve-only.)
 function DrawerFooter({
   row,
   errorMessage,
@@ -3820,10 +3795,8 @@ function DrawerFooter({
         <UnmappedFooterButtons
           status={row.status}
           isApprovePending={isApprovePending}
-          isRejecting={isRejecting}
           optimisticallyApproved={optimisticallyApproved}
           onApprove={onApprove}
-          onRejectClick={onRejectClick}
           isUnapproving={isUnapproving}
           onUnapproveClick={onUnapproveClick}
         />
@@ -3844,21 +3817,26 @@ function DrawerFooter({
 interface UnmappedFooterButtonsProps {
   status: 'needs_review' | 'approved' | 'rejected' | 'unmapped'
   isApprovePending: boolean
-  isRejecting: boolean
   optimisticallyApproved: boolean
   onApprove: () => void
-  onRejectClick: () => void
   isUnapproving: boolean
   onUnapproveClick: () => void
 }
 
+// feat/reject-to-unmap — the unmapped-row footer is Approve / Un-approve
+// only. It no longer delegates to `ApproveRejectButtons` (which carries
+// the destructive Unmap button): on an unmapped row "reject" is a
+// non-destructive no-op, so there is nothing to confirm or delete.
+//   approved                → [Un-approve]
+//   rejected (legacy data)  → [Approve]   (Approve re-approves coverage)
+//   needs_review / unmapped → [Approve]
+// When the row is optimistically approved the Approve button is
+// suppressed (the acknowledge mutation is already in flight).
 function UnmappedFooterButtons({
   status,
   isApprovePending,
-  isRejecting,
   optimisticallyApproved,
   onApprove,
-  onRejectClick,
   isUnapproving,
   onUnapproveClick,
 }: UnmappedFooterButtonsProps) {
@@ -3895,28 +3873,26 @@ function UnmappedFooterButtons({
     )
   }
 
-  if (status === 'rejected') {
-    return (
-      <ApproveRejectButtons
-        status={status}
-        isApprovePending={isApprovePending}
-        isRejecting={isRejecting}
-        optimisticallyApproved={optimisticallyApproved}
-        onApprove={onApprove}
-        onRejectClick={onRejectClick}
-      />
-    )
-  }
-
   return (
-    <ApproveRejectButtons
-      status={status}
-      isApprovePending={isApprovePending}
-      isRejecting={isRejecting}
-      optimisticallyApproved={optimisticallyApproved}
-      onApprove={onApprove}
-      onRejectClick={onRejectClick}
-    />
+    <div className="flex items-center justify-end gap-2">
+      {optimisticallyApproved ? null : (
+        <button
+          type="button"
+          data-testid="mapping-drawer-approve-button"
+          aria-label="Approve mapping"
+          onClick={onApprove}
+          disabled={isApprovePending}
+          className={cn(
+            'inline-flex h-9 items-center justify-center rounded-md border px-3 text-sm font-medium transition-colors',
+            'border-blue-600 bg-blue-600 text-white hover:bg-blue-700',
+            'focus:outline-none focus:ring-2 focus:ring-blue-500/40',
+            'disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 disabled:hover:bg-slate-100',
+          )}
+        >
+          Approve
+        </button>
+      )}
+    </div>
   )
 }
 
@@ -3929,10 +3905,12 @@ interface ApproveRejectButtonsProps {
   onRejectClick: () => void
 }
 
-// Drawer redesign — Q11.A lock:
-//   needs_review            → [Reject] [Approve]
-//   approved                → [Reject]                  (Approve hidden — already approved)
-//   rejected (legacy data)  → [Reject] [Approve]        (Approve = un-reject path)
+// Drawer redesign — Q11.A lock (feat/reject-to-unmap renamed the
+// destructive button "Reject" → "Unmap"; behavior is unchanged — it
+// still deletes the TFM):
+//   needs_review            → [Unmap] [Approve]
+//   approved                → [Unmap]                   (Approve hidden — already approved)
+//   rejected (legacy data)  → [Unmap] [Approve]         (Approve = un-reject path)
 function ApproveRejectButtons({
   status,
   isApprovePending,
@@ -3952,7 +3930,7 @@ function ApproveRejectButtons({
       <button
         type="button"
         data-testid="mapping-drawer-reject-button"
-        aria-label="Reject mapping"
+        aria-label="Unmap mapping"
         onClick={onRejectClick}
         disabled={rejectDisabled}
         className={cn(
@@ -3969,10 +3947,10 @@ function ApproveRejectButtons({
               className="h-3.5 w-3.5 animate-spin"
               data-testid="mapping-drawer-reject-spinner"
             />
-            <span>Rejecting…</span>
+            <span>Unmapping…</span>
           </>
         ) : (
-          'Reject'
+          'Unmap'
         )}
       </button>
       {showApprove ? (
@@ -3997,20 +3975,23 @@ function ApproveRejectButtons({
 }
 
 
-// ── Reject confirmation dialog ──────────────────────────────────────────────
+// ── Unmap confirmation dialog ───────────────────────────────────────────────
 //
-// Locked copy (Gap 9 alignment):
+// Locked copy (Gap 9 alignment; feat/reject-to-unmap renamed the verb
+// "Reject" → "Unmap" — the component name `RejectConfirmDialog` stays
+// as an internal API name):
 //
-//   Title:  "Reject this mapping?"
+//   Title:  "Unmap this mapping?"
 //   Body:   "<field_name> will become unmapped. The mapping and any
 //            associated transformation will be deleted. This cannot be
 //            undone."
-//   Buttons: "Cancel" (default) + "Reject" (destructive)
+//   Buttons: "Cancel" (default) + "Unmap" (destructive)
 //
 // The dialog reuses `components/ui/alert-dialog.tsx` (the hand-rolled
 // shadcn AlertDialog used elsewhere in the app — Transform / FK
 // cascade prompts). We force `AlertDialogAction`'s default blue styling
-// to red to signal destructive intent.
+// to red to signal destructive intent (the confirm button stays red —
+// the rename does not change that the action is destructive).
 
 interface RejectConfirmDialogProps {
   open: boolean
@@ -4031,7 +4012,7 @@ function RejectConfirmDialog({
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent data-testid="mapping-drawer-reject-confirm-dialog">
         <AlertDialogHeader>
-          <AlertDialogTitle>Reject this mapping?</AlertDialogTitle>
+          <AlertDialogTitle>Unmap this mapping?</AlertDialogTitle>
           <AlertDialogDescription>
             <span className="font-mono text-slate-900">{targetFieldName}</span>{' '}
             will become unmapped. The mapping and any associated transformation
@@ -4066,10 +4047,10 @@ function RejectConfirmDialog({
                   aria-hidden="true"
                   className="mr-1.5 h-3.5 w-3.5 animate-spin"
                 />
-                Rejecting…
+                Unmapping…
               </>
             ) : (
-              'Reject'
+              'Unmap'
             )}
           </AlertDialogAction>
         </AlertDialogFooter>

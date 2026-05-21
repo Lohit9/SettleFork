@@ -15,9 +15,12 @@ import { cn } from '@/components/ui/utils'
 //   ✓ Approve   green     approve the mapping (TFM-atomic — approving
 //                         one row of a multi-source TFM approves all
 //                         siblings)
-//   ✗ Reject    red       reject the row (per-source: deletes this
-//                         attribution; last-source reject cascades the
-//                         target to unmapped)
+//   ✗ Unmap     red       unmap the row (per-source: deletes this
+//                         attribution; last-source unmap cascades the
+//                         target to unmapped). feat/reject-to-unmap
+//                         renamed this from "Reject"; the `onReject` /
+//                         `rejectTooltip` prop names are internal API
+//                         and stay.
 //   ✏ Edit      neutral   opens the drawer with the matching source
 //                         highlighted (mapped rows only)
 //
@@ -87,8 +90,8 @@ export function FlatRowActions({
       {onReject ? (
         <ActionIconButton
           testId="flat-row-action-reject"
-          ariaLabel="Reject mapping"
-          tooltip={rejectTooltip ?? 'Reject mapping'}
+          ariaLabel="Unmap mapping"
+          tooltip={rejectTooltip ?? 'Unmap mapping'}
           variant="reject"
           disabled={isBusy}
           onClick={onReject}

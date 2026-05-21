@@ -1764,7 +1764,15 @@ describe('MappingRedesignContent — Phase 4 empty-state cases', () => {
 // for already-unmapped rows.
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('MappingRedesignContent — unmapped-target reject does not leak a stale override', () => {
+// feat/reject-to-unmap retired the unmapped-target reject affordance. This
+// describe previously exercised "inline-rejecting an unmapped-target row does
+// not leak a stale optimistic override" (the reject→approve revert bug, fixed
+// by short-circuiting `buildUnmappedOverride` for already-unmapped rows). With
+// the ✗ button removed from unmapped rows that path is unreachable from the
+// UI — `buildUnmappedOverride`'s already-unmapped short-circuit stays in the
+// code, but there is no longer a ✗ to click. The test is reduced to pinning
+// that an unmapped-target row exposes no ✗ Unmap button.
+describe('MappingRedesignContent — unmapped-target row exposes no Unmap button', () => {
   const unmappedTargetRow: MappingRow = {
     kind: 'unmapped',
     id: 'unmapped::f-a2',
@@ -1781,29 +1789,17 @@ describe('MappingRedesignContent — unmapped-target reject does not leak a stal
     transformationSqlPreview: null,
   }
 
-  it('inline-rejecting an unmapped-target row leaves its status dot at Needs Review — never flips to Rejected', async () => {
+  it('an unmapped-target row renders no ✗ Unmap button (feat/reject-to-unmap)', () => {
     renderRedesign('', {
       rows: [unmappedTargetRow],
       counts: { total: 1, approved: 0, needsReview: 1, rejected: 0, unmapped: 0 },
     })
 
-    // Baseline — the row renders as Needs Review.
     expect(screen.getByLabelText('status: Needs Review')).toBeInTheDocument()
-    expect(screen.queryByLabelText('status: Rejected')).toBeNull()
-
-    // Inline reject: ✗ → confirmation popover → Reject.
-    fireEvent.click(screen.getByTestId('field-mapping-row-reject-button'))
-    fireEvent.click(screen.getByTestId('reject-confirm-popover-confirm'))
-
-    // After the reject round-trip resolves the row must NOT have been
-    // flipped to a 'rejected' optimistic override. Pre-fix,
-    // `buildUnmappedOverride` wrote a status:'rejected' override keyed by
-    // the stable `unmapped::<id>` row id; it never cleared and masked
-    // every later read — the reject→approve revert bug.
-    await waitFor(() => {
-      expect(screen.queryByLabelText('status: Rejected')).toBeNull()
-    })
-    expect(screen.getByLabelText('status: Needs Review')).toBeInTheDocument()
+    // feat/reject-to-unmap — no ✗ on unmapped rows.
+    expect(
+      screen.queryByTestId('field-mapping-row-reject-button'),
+    ).toBeNull()
   })
 })
 
@@ -1849,55 +1845,20 @@ describe('MappingRedesignContent — mapped-row reject still uses the optimistic
 // fix/rejecting-optimistic-leak — `handleRejectConfirm` sets the 'rejecting'
 // optimisticState (slide cue + disabled action buttons) but, pre-fix, never
 // cleared it on the success path: the [data.rows] cleanup effect only clears
-// 'approving'. For a mapped row the stale entry was harmless (the row id dies
-// on reject). For an unmapped-target row the id (`unmapped::<tf>`) is stable,
-// so the row stayed disabled + sliding permanently. The fix clears the state
-// on the same 200ms hook that fires router.refresh.
+// 'approving'. The fix clears the state on the same 200ms hook that fires
+// router.refresh.
+//
+// feat/reject-to-unmap retired the unmapped-target reject affordance, so the
+// companion test "inline-rejecting an unmapped-target row re-enables the row"
+// was REMOVED — there is no ✗ on an unmapped row to click. The mapped-row
+// regression below is retained but updated: rejecting a mapped row morphs it
+// to the unmapped shape (reject-as-reset), and feat/reject-to-unmap means the
+// morphed row has no ✗ button — so the observable that the 'rejecting' state
+// cleared is the morphed row's Approve button being interactive again.
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('MappingRedesignContent — reject clears the rejecting optimistic state', () => {
-  const unmappedTargetRow: MappingRow = {
-    kind: 'unmapped',
-    id: 'unmapped::f-a2',
-    targetField: targetField({
-      id: 'f-a2',
-      name: 'balance',
-      targetTable: { id: accountsTable.id, name: accountsTable.name },
-    }),
-    confidence: null,
-    status: 'needs_review',
-    hasTransformation: false,
-    transformationStatus: null,
-    transformationDescription: null,
-    transformationSqlPreview: null,
-  }
-
-  it('inline-rejecting an unmapped-target row re-enables the row after the 200ms hook clears the rejecting state', async () => {
-    renderRedesign('', {
-      rows: [unmappedTargetRow],
-      counts: { total: 1, approved: 0, needsReview: 1, rejected: 0, unmapped: 0 },
-    })
-
-    fireEvent.click(screen.getByTestId('field-mapping-row-reject-button'))
-    fireEvent.click(screen.getByTestId('reject-confirm-popover-confirm'))
-
-    // During the reject round-trip + 200ms slide cue the row is in the
-    // 'rejecting' optimistic state — its action buttons are disabled.
-    expect(
-      screen.getByTestId('field-mapping-row-reject-button'),
-    ).toBeDisabled()
-
-    // The 200ms success hook clears the 'rejecting' state. Pre-fix it
-    // had no clear path for a stable `unmapped::<id>` row id, so the row
-    // stayed disabled (and sliding) permanently.
-    await waitFor(() => {
-      expect(
-        screen.getByTestId('field-mapping-row-reject-button'),
-      ).not.toBeDisabled()
-    })
-  })
-
-  it('inline-rejecting a mapped row also clears the rejecting state after the 200ms hook (regression for the harmless case)', async () => {
+  it('inline-rejecting a mapped row clears the rejecting state after the 200ms hook (regression for the harmless case)', async () => {
     const mappedRow = mapped({
       id: 'tfm-mapped-1',
       status: 'needs_review',
@@ -1915,13 +1876,22 @@ describe('MappingRedesignContent — reject clears the rejecting optimistic stat
     fireEvent.click(screen.getByTestId('field-mapping-row-reject-button'))
     fireEvent.click(screen.getByTestId('reject-confirm-popover-confirm'))
 
+    // Confirm morphs the row to the unmapped shape (reject-as-reset) and
+    // sets the 'rejecting' optimistic state. feat/reject-to-unmap — the
+    // morphed unmapped row has no ✗ button; its Approve button is the
+    // remaining action and is disabled while 'rejecting' is set.
     expect(
-      screen.getByTestId('field-mapping-row-reject-button'),
+      screen.queryByTestId('field-mapping-row-reject-button'),
+    ).toBeNull()
+    expect(
+      screen.getByTestId('field-mapping-row-approve-button'),
     ).toBeDisabled()
 
+    // The 200ms success hook clears the 'rejecting' state — Approve
+    // becomes interactive again (pre-fix it stayed stuck disabled).
     await waitFor(() => {
       expect(
-        screen.getByTestId('field-mapping-row-reject-button'),
+        screen.getByTestId('field-mapping-row-approve-button'),
       ).not.toBeDisabled()
     })
   })

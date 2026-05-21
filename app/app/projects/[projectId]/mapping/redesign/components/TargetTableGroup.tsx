@@ -112,7 +112,7 @@ interface TargetTableGroupProps {
    */
   onApproveAllClick?: (targetTableId: string) => void
   /**
-   * Phase 4c-2 — fired when the user clicks "Reject all needs-review"
+   * Phase 4c-2 — fired when the user clicks "Unmap all needs-review"
    * in the kebab menu. Same shape + disabled-state contract as
    * `onApproveAllClick`. When omitted the reject menu item is
    * skipped entirely (legacy fixtures / storybook can opt out).
@@ -736,7 +736,7 @@ function ColumnHeaderRow() {
 // click-outside-closing menu. Two items in 4c-2:
 //
 //   1. "Approve all needs-review" — primary, gray text.
-//   2. "Reject all needs-review"  — destructive, red text. Separator
+//   2. "Unmap all needs-review"  — destructive, red text. Separator
 //      above. Optional via `onRejectAllClick` so legacy fixtures /
 //      storybook callers can opt out.
 //
@@ -828,9 +828,11 @@ function TargetTableKebabMenu({
                 : `${needsReviewCount} mapping${needsReviewCount === 1 ? '' : 's'} pending`}
             </span>
           </button>
-          {/* Phase 4c-2 — Reject all needs-review. Visual treatment:
-              red text for the destructive verb, separator above,
-              same disabled contract as approve. */}
+          {/* Phase 4c-2 — "Unmap all needs-review" (feat/reject-to-unmap
+              renamed the label from "Reject all needs-review"; the
+              `onRejectAllClick` prop is internal API and is unchanged).
+              Visual treatment: red text for the destructive verb,
+              separator above, same disabled contract as approve. */}
           {onRejectAllClick !== undefined ? (
             <>
               <div
@@ -853,7 +855,7 @@ function TargetTableKebabMenu({
                 }
                 data-testid="target-table-kebab-reject-all"
               >
-                <span className="font-medium">Reject all needs-review</span>
+                <span className="font-medium">Unmap all needs-review</span>
                 <span
                   className={
                     isDisabled ? 'text-xs text-gray-500' : 'text-xs text-red-500/80'

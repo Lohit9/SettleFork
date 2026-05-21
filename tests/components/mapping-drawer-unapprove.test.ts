@@ -122,20 +122,28 @@ describe('[mapping-drawer-unapprove] UN2 — visibility gate', () => {
     expect(approveReject).not.toMatch(/mapping-drawer-unapprove-button/)
   })
 
-  it('UN2c: status=needs_review and status=rejected branches of UnmappedFooterButtons do NOT render the unapprove test-id', () => {
+  it('UN2c: the non-approved (needs_review / rejected) fall-through of UnmappedFooterButtons does NOT render the unapprove test-id', () => {
     const footer = sliceBetween(
       SRC,
       'function UnmappedFooterButtons',
       '\nfunction ',
     )
-    // The needs_review/unmapped default branch (Suggest with AI / Create
-    // mapping) lives after the status='rejected' check. The rejected branch
-    // exposes the Approve button only. Neither should mention the unapprove
-    // test-id.
-    const rejectedBranchStart = footer.indexOf("status === 'rejected'")
-    expect(rejectedBranchStart).toBeGreaterThan(0)
-    const tail = footer.slice(rejectedBranchStart)
+    // feat/reject-to-unmap collapsed the separate needs_review / rejected
+    // branches into a single Approve-only fall-through that follows the
+    // `status === 'approved'` block. Slice from the Approve-only button
+    // (the fall-through) to end-of-function — it must not mention the
+    // unapprove test-id, which belongs solely to the approved branch.
+    const approveOnlyStart = footer.indexOf(
+      'data-testid="mapping-drawer-approve-button"',
+    )
+    expect(approveOnlyStart).toBeGreaterThan(0)
+    const tail = footer.slice(approveOnlyStart)
     expect(tail).not.toMatch(/mapping-drawer-unapprove-button/)
+    // The unapprove test-id appears exactly once overall — in the
+    // approved branch only.
+    const occurrences =
+      footer.split('mapping-drawer-unapprove-button').length - 1
+    expect(occurrences).toBe(1)
   })
 })
 
