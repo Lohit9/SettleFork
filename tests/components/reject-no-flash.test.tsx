@@ -103,18 +103,46 @@ describe("[Mapping reject-flash fix] optimistic-data override — invariants", (
     );
   });
 
-  it("RF2 — buildUnmappedOverride returns UnmappedRow shape (kind/status/confidence pinned)", () => {
+  it("RF2 — buildUnmappedOverride returns UnmappedRow shape (kind/status pinned)", () => {
     expect(MAPPING_CONTENT).toMatch(
       /const\s+buildUnmappedOverride\s*=\s*useCallback/,
     );
+    const overrideBody = sliceCallback(
+      MAPPING_CONTENT,
+      "  const buildUnmappedOverride = useCallback",
+    );
     // The returned object literal must carry kind='unmapped' (the wire
     // shape the translator produces when no TFM points at the target)
-    // and status='rejected' (PR α₀ — the new optimistic-reject status,
-    // mirrors the post-PR-γ widened union; pre-α₀ this was the legacy
-    // 'unmapped' status sentinel which is now reserved for fixture
-    // back-compat only).
-    expect(MAPPING_CONTENT).toMatch(/kind:\s*['"]unmapped['"]/);
-    expect(MAPPING_CONTENT).toMatch(/status:\s*['"]rejected['"]/);
+    // and status='needs_review'. Post-PR-#157, reject is reject-as-reset:
+    // `neutralizeCoverageForReject` lands the rejected target on a
+    // neutral `needs_review`, with no distinct persisted `rejected`
+    // state — so the override pre-applies that same end state.
+    expect(overrideBody).toMatch(/kind:\s*['"]unmapped['"]/);
+    expect(overrideBody).toMatch(/status:\s*['"]needs_review['"]/);
+    // Negative — the stale 'rejected' literal must NOT reappear. Pre-fix
+    // it mirrored a `coverage.status='rejected'` wire shape the server no
+    // longer produces; left in place it re-surfaced as the reject→approve
+    // revert bug (a leaked override masking the post-approve read).
+    expect(overrideBody).not.toMatch(/status:\s*['"]rejected['"]/);
+  });
+
+  it("RF12 — buildUnmappedOverride short-circuits (returns null) for already-unmapped rows", () => {
+    // fix/unmapped-reject-revert — the override masks the mapped /
+    // value-assignment → unmapped *shape transition* during a reject. A
+    // row that is already kind='unmapped' has no transition to mask, and
+    // its row id (`unmapped::<targetFieldId>`) is stable across the
+    // reject — so an override written for it never satisfies the cleanup
+    // useEffect's drop conditions (RF6 / RF11: id-gone / kind-changed)
+    // and leaks permanently, masking later server reads including a
+    // subsequent approve. The helper must early-return before building
+    // the override object when the source row is already unmapped.
+    const overrideBody = sliceCallback(
+      MAPPING_CONTENT,
+      "  const buildUnmappedOverride = useCallback",
+    );
+    expect(overrideBody).toMatch(
+      /if\s*\(\s*row\.kind\s*===\s*['"]unmapped['"]\s*\)\s*return null/,
+    );
   });
 
   it("RF3 — handleRejectConfirm calls writeOptimisticData BEFORE setOptimistic('rejecting')", () => {
