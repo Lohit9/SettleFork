@@ -165,6 +165,17 @@ const ALLOWED_FUNCTIONS_WITHOUT_LOG_AI_EDIT = new Set<string>([
   'updateMappingCombination',
   'bulkApproveFieldMappingsForTargetTable',
   'bulkRejectFieldMappingsForTargetTable',
+  // clearMappingConfidenceForEdit nulls a TFM's confidence as part of a
+  // user edit (locked model: edits clear confidence). Its custom_sql
+  // branch writes target_field_mappings.confidence directly (the
+  // MIN-of-mapping_sources trigger skips value assignments). The clear is
+  // a derived consequence of the edit — the calling action
+  // (updateMappingSourceField / updateMappingTargetField, themselves
+  // allow-listed above) owns the primary audit event; confidence has
+  // never carried a dedicated per-row provenance entry (the pre-existing
+  // source-swap path let the trigger recompute it un-audited). Folds into
+  // the same Phase 0c follow-up bucket as its callers.
+  'clearMappingConfidenceForEdit',
   // Flat (spreadsheet) Mapping view server actions — same Phase 0c
   // follow-up bucket as the sibling redesign wrappers above. These
   // inline-edit actions write to target_field_mappings (status flip
