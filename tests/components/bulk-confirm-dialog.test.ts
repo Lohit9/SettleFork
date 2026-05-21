@@ -81,9 +81,9 @@ describe('[bulk-confirm-dialog] BD3 action button copy', () => {
     expect(SRC).toMatch(/\$\{verb\}\s*\$\{n\}\s*\$\{pluralise\(n,\s*['"]mapping['"]/)
   })
 
-  it("BD3b: loading state replaces the label with 'Approving…' / 'Rejecting…'", () => {
+  it("BD3b: loading state replaces the label with 'Approving…' / 'Unmapping…'", () => {
     expect(SRC).toMatch(/'Approving…'/)
-    expect(SRC).toMatch(/'Rejecting…'/)
+    expect(SRC).toMatch(/'Unmapping…'/)
   })
 
   it('BD3c: pluralise helper covers the "1 mapping" vs. "N mappings" case', () => {

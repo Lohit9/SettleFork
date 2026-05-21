@@ -5,11 +5,15 @@
 // (`tests/components/bulk-confirm-dialog.test.ts`) with reject-specific
 // invariants that ship in 4c-2:
 //
-//   BDR1. Reject-mode title format ("Reject all needs-review on <Table>").
+//   BDR1. Reject-mode title format ("Unmap all needs-review on <Table>").
 //   BDR2. Reject-mode body / consequence copy matches the locked spec
-//         from §5.2 ("Each rejected mapping is deleted permanently…").
-//   BDR3. Reject-mode action button label ("Reject N mappings") and
-//         loading-state copy ("Rejecting…").
+//         from §5.2 ("Unmapping deletes each mapping permanently…").
+//   BDR3. Reject-mode action button label ("Unmap N mappings") and
+//         loading-state copy ("Unmapping…").
+//
+// feat/reject-to-unmap renamed the user-facing verb "Reject" → "Unmap".
+// The `mode: 'reject'` enum value is internal API and is unchanged, so
+// the `mode === 'reject'` regexes below still match.
 //   BDR4. Red destructive styling on the confirm button only in reject
 //         mode (approve keeps the default).
 //   BDR5. `hasTransform` indicator surfaces in preview rows in reject
@@ -32,11 +36,11 @@ const SRC = readFileSync(COMPONENT_PATH, 'utf8')
 // ─────────────────────────────────────────────────────────────────────
 
 describe('[bulk-confirm-dialog-reject] BDR1 title copy', () => {
-  it('BDR1a: reject + table scope title includes "Reject" verb and target table name', () => {
+  it('BDR1a: reject + table scope title includes "Unmap" verb and target table name', () => {
     // Title template uses a `verb` derived from `mode`. Verify the
-    // template substitutes "Reject" through the same path as
+    // template substitutes "Unmap" through the same path as
     // "Approve" (covered by 4c-1 BD2a).
-    expect(SRC).toMatch(/mode\s*===\s*['"]approve['"]\s*\?\s*['"]Approve['"]\s*:\s*['"]Reject['"]/)
+    expect(SRC).toMatch(/mode\s*===\s*['"]approve['"]\s*\?\s*['"]Approve['"]\s*:\s*['"]Unmap['"]/)
     expect(SRC).toMatch(/all needs-review on\s*\$\{targetTableName/)
   })
 })
@@ -46,9 +50,9 @@ describe('[bulk-confirm-dialog-reject] BDR1 title copy', () => {
 // ─────────────────────────────────────────────────────────────────────
 
 describe('[bulk-confirm-dialog-reject] BDR2 consequence copy', () => {
-  it('BDR2a: reject mode renders the explicit "deleted permanently" copy from §5.2', () => {
+  it('BDR2a: reject mode renders the explicit "deletes each mapping permanently" copy from §5.2', () => {
     expect(SRC).toMatch(
-      /Each rejected mapping is deleted permanently\. The target fields will appear as unmapped \(Rule 6\)\. This cannot be undone\./,
+      /Unmapping deletes each mapping permanently\. The target fields will appear as unmapped \(Rule 6\)\. This cannot be undone\./,
     )
   })
 
@@ -60,7 +64,7 @@ describe('[bulk-confirm-dialog-reject] BDR2 consequence copy', () => {
 
   it('BDR2c: consequence copy is selected via mode === "reject" branch', () => {
     expect(SRC).toMatch(
-      /props\.mode\s*===\s*['"]reject['"][\s\S]{0,300}deleted permanently/,
+      /props\.mode\s*===\s*['"]reject['"][\s\S]{0,300}deletes each mapping permanently/,
     )
   })
 })
@@ -70,16 +74,16 @@ describe('[bulk-confirm-dialog-reject] BDR2 consequence copy', () => {
 // ─────────────────────────────────────────────────────────────────────
 
 describe('[bulk-confirm-dialog-reject] BDR3 action button copy', () => {
-  it('BDR3a: action label uses "Reject" verb when mode === "reject"', () => {
+  it('BDR3a: action label uses "Unmap" verb when mode === "reject"', () => {
     // buildActionLabel branches on `mode === 'approve'` for verb.
     expect(SRC).toMatch(
-      /const\s+verb\s*=\s*mode\s*===\s*['"]approve['"]\s*\?\s*['"]Approve['"]\s*:\s*['"]Reject['"]/,
+      /const\s+verb\s*=\s*mode\s*===\s*['"]approve['"]\s*\?\s*['"]Approve['"]\s*:\s*['"]Unmap['"]/,
     )
   })
 
-  it('BDR3b: loading-state action label is "Rejecting…" in reject mode', () => {
+  it('BDR3b: loading-state action label is "Unmapping…" in reject mode', () => {
     // Single quote U+2026 ellipsis matches the source.
-    expect(SRC).toMatch(/['"]Rejecting\u2026['"]/)
+    expect(SRC).toMatch(/['"]Unmapping\u2026['"]/)
   })
 
   it('BDR3c: action label includes the count verbatim ("Reject N mappings")', () => {

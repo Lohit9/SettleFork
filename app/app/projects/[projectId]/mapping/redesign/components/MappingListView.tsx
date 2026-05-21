@@ -888,7 +888,7 @@ function FlatRowView({
         onReject: alreadyRejected
           ? undefined
           : () => void mutations.rejectTfm(row.id),
-        rejectTooltip: 'Reject mapping',
+        rejectTooltip: 'Unmap mapping',
         rejectConsequence: {
           fieldName: row.targetField.name,
           text: 'will become unmapped.',
@@ -911,7 +911,7 @@ function FlatRowView({
         onReject: alreadyRejected
           ? undefined
           : () => void mutations.rejectTfm(row.id),
-        rejectTooltip: 'Reject value assignment',
+        rejectTooltip: 'Unmap value assignment',
         rejectConsequence: {
           fieldName: row.targetField.name,
           text: 'will become unmapped.',
@@ -923,41 +923,45 @@ function FlatRowView({
     if (row.kind === 'unmapped-target') {
       // feat/mapping-table-redesign refinement pass 2: approve renders
       // on unmapped-target rows. The row.id is the synthetic
-      // `unmapped::<targetFieldId>` sentinel; both `approveTfm` and
-      // `rejectTfm` dispatch through `approveFieldMapping` /
-      // `rejectFieldMapping`, which branch on the `unmapped::` prefix
-      // and route to `setCoverageStatus` server-side. Switching reject
-      // off `rejectUnmappedRow` onto `rejectTfm` aligns the flat-view
-      // reject with the target-led view's reject path (both views now
-      // produce identical DB state for the same user intent).
+      // `unmapped::<targetFieldId>` sentinel; `approveTfm` dispatches
+      // through `approveFieldMapping`, which branches on the
+      // `unmapped::` prefix and routes to `setCoverageStatus`
+      // server-side.
+      //
+      // feat/reject-to-unmap — unmapped rows carry NO reject/unmap
+      // affordance. Under the post-#157 model "reject" on an unmapped
+      // row is non-destructive (it only clears AI rationale text), so
+      // it is not worth a button; the destructive Unmap action exists
+      // only on mapped/VA rows. The reject keys stay on the returned
+      // object (set to `undefined`) so the `actions` union shape is
+      // uniform across kinds and the render gates (`actions.onReject`)
+      // simply skip the ✗ button.
       return {
         onApprove: alreadyApproved
           ? undefined
           : () => void mutations.approveTfm(row.id),
         approveTooltip: 'Acknowledge unmapped target',
-        onReject: alreadyRejected
-          ? undefined
-          : () => void mutations.rejectTfm(row.id),
-        rejectTooltip: 'Mark as rejected',
-        rejectConsequence: {
-          fieldName: row.targetField.name,
-          text: 'will be marked as rejected.',
-        },
+        onReject: undefined,
+        rejectTooltip: undefined,
+        rejectConsequence: undefined,
         onEdit: () => onRowBodyClick(row),
         editTooltip: 'Open target field in drawer',
       }
     }
     // unmapped-source
-    // feat/mapping-row-uniformity — source-side rows now surface the
-    // full hover cluster matching every other row kind. Approve
-    // acknowledges the source field will not be migrated (UPSERTs
-    // `source_field_acknowledgments` with `decision='acknowledged'`);
-    // reject sets the same row's `decision='rejected'`. Edit opens
-    // the drawer mounted on a source-only `SourceFieldDrawerRow`
-    // projection. Already-acknowledged / already-rejected rows omit
-    // the corresponding action so the user can't double-fire (the
-    // row's `status` is the projected acknowledgment state, set by
-    // `flattenRowsForListView`).
+    // feat/mapping-row-uniformity — source-side rows surface Approve +
+    // Edit. Approve acknowledges the source field will not be migrated
+    // (UPSERTs `source_field_acknowledgments` with
+    // `decision='acknowledged'`). Edit opens the drawer mounted on a
+    // source-only `SourceFieldDrawerRow` projection. An already-
+    // acknowledged row omits Approve so the user can't double-fire
+    // (the row's `status` is the projected acknowledgment state, set
+    // by `flattenRowsForListView`).
+    //
+    // feat/reject-to-unmap — unmapped-source rows carry NO reject/unmap
+    // affordance (see the unmapped-target branch above for the
+    // rationale). The reject keys stay `undefined` to keep the
+    // `actions` union shape uniform.
     return {
       onApprove: alreadyApproved
         ? undefined
@@ -967,18 +971,9 @@ function FlatRowView({
               sourceFieldId: row.sourceField.id,
             }),
       approveTooltip: 'Acknowledge unmapped source',
-      onReject: alreadyRejected
-        ? undefined
-        : () =>
-            void mutations.rejectUnmappedRow({
-              pendingKey: row.id,
-              target: { sourceFieldId: row.sourceField.id },
-            }),
-      rejectTooltip: 'Mark as rejected',
-      rejectConsequence: {
-        fieldName: row.sourceField.name,
-        text: 'will be marked as rejected.',
-      },
+      onReject: undefined,
+      rejectTooltip: undefined,
+      rejectConsequence: undefined,
       onEdit: () => onRowBodyClick(row),
       editTooltip: 'Open source field in drawer',
     }
@@ -1314,8 +1309,8 @@ function FlatRowView({
             <ActionIconButton
               ref={rejectButtonRef}
               testId="flat-row-action-reject"
-              ariaLabel="Reject mapping"
-              tooltip={actions.rejectTooltip ?? 'Reject mapping'}
+              ariaLabel="Unmap mapping"
+              tooltip={actions.rejectTooltip ?? 'Unmap mapping'}
               variant="reject"
               disabled={isBusy}
               // Reject is destructive — open the confirmation popover
@@ -1349,8 +1344,8 @@ function FlatRowView({
     {rejectConfirmOpen && actions.onReject ? (
       <RejectConfirmPopover
         anchorRef={rejectButtonRef}
-        title="Reject this mapping?"
-        confirmLabel="Reject"
+        title="Unmap this mapping?"
+        confirmLabel="Unmap"
         consequence={actions.rejectConsequence}
         onConfirm={() => {
           // Close first so the popover unmounts before the mutation's

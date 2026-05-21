@@ -1255,20 +1255,25 @@ describe('MappingDrawer — source-field-only drawer (feat/unmapped-source-drawe
 
   // ── Footer (feat/source-drawer-footer) ──────────────────────────────
   //
-  // The source-field drawer now carries an Approve / Reject footer for
-  // parity with the other three drawers. needs_review → [Reject][Approve];
-  // an acknowledged source → [Un-approve] only. The buttons reuse the
-  // presentational `UnmappedFooterButtons`, so the test-ids match the
-  // unmapped-target footer.
+  // The source-field drawer carries an Approve footer. needs_review →
+  // [Approve]; an acknowledged source → [Un-approve] only. The buttons
+  // reuse the presentational `UnmappedFooterButtons`, so the test-ids
+  // match the unmapped-target footer.
+  //
+  // feat/reject-to-unmap: the footer no longer carries a Reject button.
+  // On an unmapped-source row "reject" was a non-destructive no-op, so
+  // the unmapped footer is Approve / Un-approve only — the destructive
+  // Unmap action exists only on mapped/VA rows.
 
-  it('renders the footer with Reject + Approve in needs_review state', () => {
+  it('renders the footer with Approve only (no Reject) in needs_review state', () => {
     renderSourceDrawer(sourceRow(), { projectId: 'proj-1' })
     expect(
       screen.getByTestId('mapping-drawer-source-stub-footer'),
     ).toBeInTheDocument()
+    // feat/reject-to-unmap — no Reject button on an unmapped-source row.
     expect(
-      screen.getByTestId('mapping-drawer-reject-button'),
-    ).toBeInTheDocument()
+      screen.queryByTestId('mapping-drawer-reject-button'),
+    ).toBeNull()
     expect(
       screen.getByTestId('mapping-drawer-approve-button'),
     ).toBeInTheDocument()
@@ -1314,24 +1319,13 @@ describe('MappingDrawer — source-field-only drawer (feat/unmapped-source-drawe
     )
   })
 
-  it('Reject click invokes setUnmappedRowRejected for the source field', async () => {
-    const onActionComplete = vi.fn()
-    renderSourceDrawer(sourceRow(), {
-      projectId: 'proj-1',
-      onActionComplete,
-    })
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('mapping-drawer-reject-button'))
-    })
-    expect(setUnmappedRowRejectedMock).toHaveBeenCalledWith({
-      projectId: 'proj-1',
-      sourceFieldId: 'sf-bom',
-    })
-    expect(onActionComplete).toHaveBeenCalledWith(
-      'reject',
-      'unmapped-source::sf-bom',
-    )
-  })
+  // feat/reject-to-unmap — the test "Reject click invokes
+  // setUnmappedRowRejected for the source field" was REMOVED: the
+  // source-field drawer footer no longer renders a Reject button, so
+  // there is nothing to click. The `setUnmappedRowRejected` server
+  // action is unchanged in the codebase; only this UI call site is
+  // gone. The absence of the Reject button is asserted by "renders the
+  // footer with Approve only (no Reject) in needs_review state" above.
 
   it('Un-approve click invokes removeAcknowledgment for the source field', async () => {
     const onActionComplete = vi.fn()
@@ -2622,7 +2616,7 @@ describe('MappingDrawer Gap 9 — disabled-state matrix (drawer redesign)', () =
     ).toBeInTheDocument()
   })
 
-  it('unmapped row + status=needs_review: footer renders approve + reject', () => {
+  it('unmapped row + status=needs_review: footer renders approve only (feat/reject-to-unmap)', () => {
     render(
       <MappingDrawer
         row={unmapped({ id: 'unmapped::tf-needs-review-1', status: 'needs_review' })}
@@ -2638,20 +2632,21 @@ describe('MappingDrawer Gap 9 — disabled-state matrix (drawer redesign)', () =
       screen.queryByTestId('mapping-drawer-suggest-with-ai-button'),
     ).toBeNull()
     expect(screen.getByTestId('mapping-drawer-approve-button')).toBeInTheDocument()
-    expect(screen.getByTestId('mapping-drawer-reject-button')).toBeInTheDocument()
+    // feat/reject-to-unmap — unmapped rows have no Unmap (reject) button.
+    expect(screen.queryByTestId('mapping-drawer-reject-button')).toBeNull()
   })
 
   // ── INF-57 cleanup — status-driven UnmappedFooterButtons (Option B) ────────
   //
   // Locked design decision 4: when an unmapped row's drawer is open, the
   // footer dispatches by row.status (inside UnmappedFooterButtons):
-  //   needs_review/unmapped → Suggest with AI / Create mapping (form path)
-  //   approved              → [Un-approve] (calls resetMappingStatus)
-  //   rejected              → [Approve] (re-approves coverage row)
+  //   needs_review / unmapped → [Approve]
+  //   approved                → [Un-approve] (calls resetMappingStatus)
+  //   rejected                → [Approve] (re-approves coverage row)
   //
-  // The form-active sub-states (suggest pending / cancel / save) live
-  // inside the form-driven branch and are unchanged — exercised by the
-  // form tests below.
+  // feat/reject-to-unmap — none of these expose a Reject/Unmap button.
+  // On an unmapped row "reject" was a non-destructive no-op; the
+  // destructive Unmap action lives only on mapped/VA rows.
 
   it('unmapped + status=approved: footer renders only the Un-approve control', () => {
     render(
@@ -2677,7 +2672,8 @@ describe('MappingDrawer Gap 9 — disabled-state matrix (drawer redesign)', () =
   it('unmapped + status=rejected: footer renders ONLY [Approve] (re-approve coverage row)', () => {
     // The status='rejected' branch surfaces the standard approve flow
     // alone — clicking it routes through approveFieldMapping (the same
-    // wrapper mapped/VA rejected rows use to un-reject).
+    // wrapper mapped/VA rejected rows use to un-reject). feat/reject-to-
+    // unmap — there is no Unmap (reject) button on an unmapped row.
     render(
       <MappingDrawer
         row={unmapped({ id: 'unmapped::tf-cov-2', status: 'rejected' })}
@@ -2694,10 +2690,10 @@ describe('MappingDrawer Gap 9 — disabled-state matrix (drawer redesign)', () =
     expect(
       screen.queryByTestId('mapping-drawer-create-mapping-button'),
     ).toBeNull()
-    expect(screen.getByTestId('mapping-drawer-reject-button')).toBeInTheDocument()
+    expect(screen.queryByTestId('mapping-drawer-reject-button')).toBeNull()
   })
 
-  it('unmapped + status=needs_review: footer exposes approve + reject', () => {
+  it('unmapped + status=needs_review: footer exposes approve only (feat/reject-to-unmap)', () => {
     render(
       <MappingDrawer
         row={unmapped({ id: 'unmapped::tf-cov-3', status: 'needs_review' })}
@@ -2712,7 +2708,7 @@ describe('MappingDrawer Gap 9 — disabled-state matrix (drawer redesign)', () =
       screen.queryByTestId('mapping-drawer-create-mapping-button'),
     ).toBeNull()
     expect(screen.getByTestId('mapping-drawer-approve-button')).toBeInTheDocument()
-    expect(screen.getByTestId('mapping-drawer-reject-button')).toBeInTheDocument()
+    expect(screen.queryByTestId('mapping-drawer-reject-button')).toBeNull()
   })
 })
 
@@ -2850,7 +2846,7 @@ describe('MappingDrawer Gap 9 — Reject action', () => {
     )
     await user.click(screen.getByTestId('mapping-drawer-reject-button'))
     const dialog = screen.getByTestId('mapping-drawer-reject-confirm-dialog')
-    expect(dialog.textContent).toContain('Reject this mapping?')
+    expect(dialog.textContent).toContain('Unmap this mapping?')
     expect(dialog.textContent).toContain('cool_field')
     expect(dialog.textContent).toContain('will become unmapped')
     expect(dialog.textContent).toContain(
@@ -2970,7 +2966,7 @@ describe('MappingDrawer Gap 9 — Reject action', () => {
       screen.queryByTestId('mapping-drawer-reject-confirm-dialog'),
     ).toBeNull()
     const banner = screen.getByTestId('mapping-drawer-error')
-    expect(banner.textContent).toContain("Couldn't reject this mapping")
+    expect(banner.textContent).toContain("Couldn't unmap this mapping")
   })
 })
 

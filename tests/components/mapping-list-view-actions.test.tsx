@@ -16,15 +16,16 @@ import type {
 // Pins the founder-locked rules from the architecture review:
 //   • Actions are ALWAYS visible (no hover-reveal). Divergence from
 //     target-led FieldMappingRow, justified by Big-4 audit workflow.
-//   • Approve is disabled for already-approved rows; Reject is disabled
-//     for already-rejected rows.
-//   • Single-source mapped row: Approve/Reject route through the TFM id.
+//   • Approve is omitted for already-approved rows; the ✗ Unmap button
+//     is omitted for already-rejected rows.
+//   • Single-source mapped row: Approve/Unmap route through the TFM id.
 //   • Multi-source: parent's actions route through TFM id; child's
-//     reject deletes that contributor only.
-//   • Unmapped-target: Approve disabled; Reject calls
-//     setUnmappedRowRejected({ targetFieldId }).
-//   • Unmapped-source: Approve disabled; Reject calls
-//     setUnmappedRowRejected({ sourceFieldId }).
+//     unmap deletes that contributor only.
+//   • feat/reject-to-unmap — the ✗ button (renamed "Reject" → "Unmap")
+//     is gated to mapped / value_assignment rows. Unmapped-target and
+//     unmapped-source rows surface Approve + Edit only — no ✗. On an
+//     unmapped row "reject" was a non-destructive no-op, so it carries
+//     no button.
 //   • Row body click opens drawer; for split children, the clicked
 //     child's source field id is passed as highlightedSourceFieldId.
 //   • Action button clicks DO NOT bubble to the row's onClick.
@@ -465,14 +466,16 @@ describe('MappingListView — action buttons per row kind', () => {
     expect(onOpenDrawer).toHaveBeenCalledWith('tfm-multi', 'sf-prodsku')
   })
 
-  it('unmapped-target: Approve and Reject both route through the TFM helpers with the unmapped::<targetFieldId> sentinel', async () => {
-    // feat/mapping-table-redesign refinement pass 2 + post-rebase reject
-    // alignment: both approve and reject on the flat-view unmapped-target
-    // dispatch through approveTfm/rejectTfm (the same helpers used for
-    // mapped rows). The server actions `approveFieldMapping` /
-    // `rejectFieldMapping` branch on the `unmapped::` prefix and route to
-    // `setCoverageStatus`. This keeps flat-view reject identical to the
-    // target-led view's reject (which also calls `rejectFieldMapping`).
+  it('unmapped-target: Approve routes through approveTfm; the ✗ Unmap button is NOT rendered (feat/reject-to-unmap)', async () => {
+    // feat/mapping-table-redesign refinement pass 2: approve on the
+    // flat-view unmapped-target dispatches through approveTfm. The
+    // server action `approveFieldMapping` branches on the `unmapped::`
+    // prefix and routes to `setCoverageStatus`.
+    //
+    // feat/reject-to-unmap: the ✗ (Unmap) button is gated to mapped/VA
+    // rows — an unmapped-target row carries no reject affordance. The
+    // `rejectTfm` / `rejectUnmappedRow` hook helpers stay for potential
+    // future use but the flat-view unmapped row never wires them now.
     const mutations = makeMutations()
     const result = makeResult([makeUnmappedTarget()])
     render(
@@ -487,12 +490,9 @@ describe('MappingListView — action buttons per row kind', () => {
     fireEvent.click(within(row).getByTestId('flat-row-action-approve'))
     expect(mutations.approveTfm).toHaveBeenCalledWith('unmapped::tf-9')
 
-    fireEvent.click(within(row).getByTestId('flat-row-action-reject'))
-    fireEvent.click(await screen.findByTestId('reject-confirm-popover-confirm'))
-    expect(mutations.rejectTfm).toHaveBeenCalledWith('unmapped::tf-9')
-    // Reject no longer routes through `rejectUnmappedRow` — that helper
-    // remains in the hook for future use but the flat-view dispatch was
-    // consolidated post-rebase.
+    // No ✗ Unmap button on an unmapped-target row.
+    expect(within(row).queryByTestId('flat-row-action-reject')).toBeNull()
+    expect(mutations.rejectTfm).not.toHaveBeenCalled()
     expect(mutations.rejectUnmappedRow).not.toHaveBeenCalled()
   })
 
@@ -816,9 +816,12 @@ describe('MappingListView — unmapped-source affordance uniformity (feat/mappin
     }
   }
 
-  it('renders the approve / reject / edit hover cluster on unmapped-source rows', () => {
-    // Pre-uniformity these rows rendered no action affordances. Post
-    // feat/mapping-row-uniformity they match every other row kind.
+  it('renders the approve / edit cluster on unmapped-source rows — no ✗ (feat/reject-to-unmap)', () => {
+    // Pre-uniformity these rows rendered no action affordances.
+    // feat/mapping-row-uniformity gave them the full cluster;
+    // feat/reject-to-unmap then removed the ✗ (Unmap) button from
+    // unmapped rows — on an unmapped-source row "reject" was a
+    // non-destructive no-op. So the cluster is Approve + Edit only.
     const result = makeResult([], [makeOrphanSourceField()])
     render(
       <MappingListView
@@ -831,9 +834,7 @@ describe('MappingListView — unmapped-source affordance uniformity (feat/mappin
     expect(
       within(row).getByTestId('flat-row-action-approve'),
     ).toBeInTheDocument()
-    expect(
-      within(row).getByTestId('flat-row-action-reject'),
-    ).toBeInTheDocument()
+    expect(within(row).queryByTestId('flat-row-action-reject')).toBeNull()
     expect(
       within(row).getByTestId('flat-row-action-edit'),
     ).toBeInTheDocument()
@@ -899,24 +900,13 @@ describe('MappingListView — unmapped-source affordance uniformity (feat/mappin
     })
   })
 
-  it('clicking Reject on an unmapped-source row calls mutations.rejectUnmappedRow with the source-side payload', async () => {
-    const mutations = makeMutations()
-    const result = makeResult([], [makeOrphanSourceField()])
-    render(
-      <MappingListView
-        filteredResult={result}
-        mutations={mutations}
-        onOpenDrawer={vi.fn()}
-      />,
-    )
-    const row = findRow('unmapped-source::sf-orphan')
-    fireEvent.click(within(row).getByTestId('flat-row-action-reject'))
-    fireEvent.click(await screen.findByTestId('reject-confirm-popover-confirm'))
-    expect(mutations.rejectUnmappedRow).toHaveBeenCalledWith({
-      pendingKey: 'unmapped-source::sf-orphan',
-      target: { sourceFieldId: 'sf-orphan' },
-    })
-  })
+  // feat/reject-to-unmap — the test "clicking Reject on an unmapped-
+  // source row calls mutations.rejectUnmappedRow" was REMOVED: unmapped
+  // rows no longer render a ✗ button, so there is nothing to click. The
+  // `rejectUnmappedRow` hook helper and the `setUnmappedRowRejected`
+  // server action are unchanged in the codebase; only the flat-view UI
+  // wiring is gone. The absence of the ✗ on unmapped-source is asserted
+  // by "renders the approve / edit cluster … — no ✗" above.
 
   it('clicking Edit on an unmapped-source row opens the drawer keyed on the source-side row id', () => {
     const onOpenDrawer = vi.fn()
@@ -953,10 +943,13 @@ describe('MappingListView — unmapped-source affordance uniformity (feat/mappin
     )
   })
 
-  it('Approve button is omitted on already-acknowledged source rows (status="approved")', () => {
+  it('already-acknowledged source rows (status="approved") render no ✓ approve and no ✗ unmap', () => {
     // Source-side acks render the row with status='approved' (per
     // flatten — decision='acknowledged' → 'approved'); the approve
-    // affordance should drop just like on already-approved TFM rows.
+    // affordance drops just like on already-approved TFM rows.
+    // feat/reject-to-unmap — the ✗ (Unmap) button is also absent on
+    // every unmapped-source row regardless of status. So an acked
+    // source row's action cluster is Edit only.
     const sourceField = makeOrphanSourceField({ id: 'sf-acked' })
     const result = makeResult([], [sourceField])
     // Add an ack to set the row's status to 'approved'.
@@ -979,8 +972,9 @@ describe('MappingListView — unmapped-source affordance uniformity (feat/mappin
     expect(
       within(row).queryByTestId('flat-row-action-approve'),
     ).toBeNull()
+    expect(within(row).queryByTestId('flat-row-action-reject')).toBeNull()
     expect(
-      within(row).getByTestId('flat-row-action-reject'),
+      within(row).getByTestId('flat-row-action-edit'),
     ).toBeInTheDocument()
   })
 })
