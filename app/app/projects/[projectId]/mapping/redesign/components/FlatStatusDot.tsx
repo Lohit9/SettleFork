@@ -10,7 +10,14 @@ import type { FlatRowStatus } from '@/lib/utils/flatten-rows-for-list-view'
 //
 //   approved     → green filled (acknowledgments included)
 //   needs_review → gray filled
-//   rejected     → red filled
+//   rejected     → gray filled (collapsed onto needs_review)
+//
+// Post-#157/#158/A2 the flat view's 'rejected' status no longer carries
+// a semantic distinct from 'needs_review' (Reject = reset). Legacy
+// SimpleLegal mapped+rejected rows therefore render the SAME slate-400
+// dot as needs_review — they visually collapse into the unified
+// needs-review state. The `FlatRowStatus` type keeps its 'rejected'
+// member; only this visual mapping changed.
 //
 // Shipping a sibling component keeps the target-led visual stable while
 // the flat view adopts the simpler 3-bucket scheme. Co-evolution risk
@@ -24,7 +31,7 @@ const FLAT_STATUS_CONFIG: Record<
 > = {
   approved: { label: 'Approved', dotClassName: 'bg-green-500' },
   needs_review: { label: 'Needs Review', dotClassName: 'bg-slate-400' },
-  rejected: { label: 'Rejected', dotClassName: 'bg-red-500' },
+  rejected: { label: 'Rejected', dotClassName: 'bg-slate-400' },
 }
 
 export function FlatStatusDot({
