@@ -206,15 +206,18 @@ describe('[clear-ai-reasoning] D — transform-edit actions', () => {
   })
 
   it('D2: updateTransformSQL reads ai_reasoning and invokes the clear helper', () => {
+    // The select also reads `transformation_intent` (clear-transformation-
+    // intent PR) — `ai_reasoning` and `combination_type` are still present,
+    // the guarded behaviour here is unchanged.
     expect(TX_SQL_BODY).toMatch(
-      /select\(['"]project_id,\s*ai_reasoning,\s*combination_type['"]\)/,
+      /select\(['"]project_id,\s*ai_reasoning,\s*transformation_intent,\s*combination_type['"]\)/,
     )
     expect(TX_SQL_BODY).toMatch(/clearStaleAiMetadataForTransformEdit\(\{/)
   })
 
   it('D3: autoSaveTransform reads ai_reasoning and invokes the clear helper', () => {
     expect(AUTO_SAVE_BODY).toMatch(
-      /select\(['"]project_id,\s*ai_reasoning,\s*combination_type['"]\)/,
+      /select\(['"]project_id,\s*ai_reasoning,\s*transformation_intent,\s*combination_type['"]\)/,
     )
     expect(AUTO_SAVE_BODY).toMatch(/clearStaleAiMetadataForTransformEdit\(\{/)
   })
