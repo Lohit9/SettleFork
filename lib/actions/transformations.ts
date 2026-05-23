@@ -394,7 +394,7 @@ interface ContextField {
   data_type: string
 }
 
-interface TfmContext {
+export interface TfmContext {
   tfm: TargetFieldMappingRow
   projectId: string
   targetField: { id: string; name: string; table_id: string }
@@ -423,7 +423,7 @@ interface TfmContext {
   } | null
 }
 
-async function loadTfmContext(tfmId: string): Promise<TfmContext | null> {
+export async function loadTfmContext(tfmId: string): Promise<TfmContext | null> {
   const { data: tfm } = await supabaseAdmin
     .from('target_field_mappings')
     .select('*')
@@ -526,7 +526,7 @@ async function loadTfmContext(tfmId: string): Promise<TfmContext | null> {
 // Read-only; caller is responsible for prior `requireProjectPermission`
 // gating. Uses `supabaseAdmin` to match `loadTfmContext`'s precedent
 // (perm-gated reads bypass RLS for predictable error envelopes).
-async function loadProjectContextBlocks(
+export async function loadProjectContextBlocks(
   projectId: string,
 ): Promise<{ decisions: ProjectDecisionRow[]; lookupTables: ProjectLookupTableRow[] }> {
   const [{ data: decisions }, { data: lookupTables }] = await Promise.all([
