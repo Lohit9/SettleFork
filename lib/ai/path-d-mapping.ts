@@ -206,6 +206,53 @@ export async function runPathDMapping(
   const admin = args.admin ?? supabaseAdmin
   const client = args.anthropicClient ?? anthropic
 
+  // ── Spec-load suppression (PR γ) ────────────────────────────────────────
+  // Projects whose mappings + transformation intents come from an imported
+  // spec (poc_template set) MUST NOT be overwritten by Path D. Check before
+  // any expensive work — no context build, no Anthropic call, no llm_calls
+  // row written. Returns success+tfmCount=0 so existing callers
+  // (generateMappings, pathDSseStreamHandler) handle it as a no-op rather
+  // than a 5xx-style error banner.
+  const { data: projectGate, error: projectGateErr } = await admin
+    .from('projects')
+    .select('poc_template')
+    .eq('id', projectId)
+    .single()
+  if (projectGateErr) {
+    return {
+      success: false,
+      error: `Failed to read project (poc_template check): ${projectGateErr.message}`,
+      errorCode: 'INTERNAL',
+    }
+  }
+  if (projectGate?.poc_template) {
+    console.log(
+      `[path-d-mapping] suppressed: project ${projectId} has imported spec ` +
+        `(poc_template='${projectGate.poc_template}'); Path D is a no-op for ` +
+        `spec-loaded projects.`,
+    )
+    const skipped = {
+      status: 'skipped' as const,
+      reason: `spec_loaded:${projectGate.poc_template}`,
+    }
+    return {
+      success: true,
+      runId: randomUUID(),
+      summary: {
+        data_quality: skipped,
+        mappings: skipped,
+        mapping_sources: skipped,
+        table_mappings: skipped,
+        coverage: skipped,
+        lookup_tables: skipped,
+        inferred_targets: skipped,
+        decisions: skipped,
+        project_notes: skipped,
+      },
+      tfmCount: 0,
+    }
+  }
+
   // Wrapped event emitter — swallows observer errors so a misbehaving
   // callback can never fail the run. Production callsite passes no
   // observer; the wrapper is a no-op in that case.
