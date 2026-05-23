@@ -81,6 +81,7 @@ import { requireProjectPermission } from '@/lib/actions/role-resolution'
 import { assertMappingWritesEnabled } from '@/lib/auth/mapping-writes'
 import { removeAcknowledgment } from '@/lib/actions/field-acknowledgments'
 import { resetFieldTransform } from '@/lib/actions/transformations'
+import { regenerateTfmMetadata } from '@/lib/actions/tfm-regenerate'
 import { runMappingSuggestion } from '@/lib/ai/mapping-engine'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { decodeShimmedRowId } from '@/lib/compat/mapping-shim'
@@ -2056,6 +2057,21 @@ export async function editMappingSources(input: {
     if (existingTm?.id) {
       await recomputeTableMappingStatus(supabase, existingTm.id as string)
     }
+  }
+
+  // ── Step 15b: regenerate AI metadata (PR δ) ──────────────────────────────
+  // Pilot-gated on projects.poc_template inside regenerateTfmMetadata. No-op
+  // for non-pilot projects. Awaited within try-catch — a regenerate failure
+  // is logged but does NOT fail the user-facing edit response (the edit's
+  // DB writes are already committed).
+  try {
+    await regenerateTfmMetadata(tfm.id, { triggerSource: 'source_set_edit', userId: user.id })
+  } catch (regenErr) {
+    console.error(
+      `[editMappingSources] regenerateTfmMetadata threw — edit committed, ` +
+        `metadata stale. tfmId=${tfm.id}`,
+      regenErr,
+    )
   }
 
   // ── Step 16: revalidate ──────────────────────────────────────────────────
@@ -4438,6 +4454,21 @@ export async function updateMappingSourceField(input: {
     }
   }
 
+  // ── Step 16b: regenerate AI metadata (PR δ) ────────────────────────────
+  // Pilot-gated on projects.poc_template inside regenerateTfmMetadata. No-op
+  // for non-pilot projects. Awaited within try-catch — a regenerate failure
+  // is logged but does NOT fail the user-facing edit response (the edit's
+  // DB writes are already committed).
+  try {
+    await regenerateTfmMetadata(tfm.id, { triggerSource: 'source_swap', userId: user.id })
+  } catch (regenErr) {
+    console.error(
+      `[updateMappingSourceField] regenerateTfmMetadata threw — edit committed, ` +
+        `metadata stale. tfmId=${tfm.id}`,
+      regenErr,
+    )
+  }
+
   // ── Step 17: revalidate ────────────────────────────────────────────────
   revalidatePath(`/app/projects/${projectId}/mapping`)
   revalidatePath(`/app/projects/${projectId}/transform`)
@@ -4977,6 +5008,21 @@ export async function updateMappingTargetField(input: {
     }
   }
 
+  // ── Step 13b: regenerate AI metadata (PR δ) ────────────────────────────
+  // Pilot-gated on projects.poc_template inside regenerateTfmMetadata. No-op
+  // for non-pilot projects. Awaited within try-catch — a regenerate failure
+  // is logged but does NOT fail the user-facing edit response (the edit's
+  // DB writes are already committed).
+  try {
+    await regenerateTfmMetadata(tfm.id, { triggerSource: 'target_swap', userId: user.id })
+  } catch (regenErr) {
+    console.error(
+      `[updateMappingTargetField] regenerateTfmMetadata threw — edit committed, ` +
+        `metadata stale. tfmId=${tfm.id}`,
+      regenErr,
+    )
+  }
+
   // ── Step 14: revalidate ────────────────────────────────────────────────
   revalidatePath(`/app/projects/${projectId}/mapping`)
   revalidatePath(`/app/projects/${projectId}/transform`)
@@ -5428,6 +5474,24 @@ export async function createMappingFromUnmapped(input: {
         ackDelErr.message,
       )
     }
+  }
+
+  // ── Step 9: regenerate AI metadata (PR δ) ──────────────────────────────
+  // Pilot-gated on projects.poc_template inside regenerateTfmMetadata. No-op
+  // for non-pilot projects. Awaited within try-catch — a regenerate failure
+  // is logged but does NOT fail the user-facing edit response (the TFM is
+  // already created and approved).
+  try {
+    await regenerateTfmMetadata(createResult.tfmId, {
+      triggerSource: 'create_from_unmapped',
+      userId: user.id,
+    })
+  } catch (regenErr) {
+    console.error(
+      `[createMappingFromUnmapped] regenerateTfmMetadata threw — TFM created, ` +
+        `metadata stale. tfmId=${createResult.tfmId}`,
+      regenErr,
+    )
   }
 
   // createFieldMapping already revalidates and logs `mapping_created`.

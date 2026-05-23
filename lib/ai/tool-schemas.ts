@@ -1982,3 +1982,52 @@ export const EMIT_CRITIQUE_TOOL: Tool = {
     required: ['critiques'],
   },
 }
+
+/**
+ * EMIT_TFM_METADATA_TOOL — PR δ.
+ *
+ * Used by `regenerateTfmMetadata` (lib/actions/tfm-regenerate.ts) to produce
+ * fresh AI metadata for a single `target_field_mappings` row after a user
+ * edit has cleared `ai_reasoning` + `transformation_intent`. One tool emit
+ * per call; the four output fields land on the TFM row (confidence routes
+ * through `mapping_sources` for mapped TFMs, direct on the TFM for VAs).
+ *
+ * Strict mode + `additionalProperties: false` per the file's standing
+ * convention (see header comment). `transformation_intent` accepts null so
+ * straight-passthrough mappings can signal "no transformation needed."
+ */
+export const EMIT_TFM_METADATA_TOOL: Tool = {
+  name: 'emit_tfm_metadata',
+  description:
+    'Emit structured AI metadata for a single target_field_mapping row after a user edit. Inputs available in the prompt: the current source/target field(s), the table mapping, project context blocks (lookup tables, decisions, documentation), and (when present) the authoritative POC answer key. Output four fields: ai_reasoning (prose, ≤500 chars, explains why this source→target pairing makes sense in the current edited state), transformation_intent (NL description of what transformation if any should be applied; emit null for straight passthroughs needing no transformation), needs_transformation (boolean — true iff the Transform tab should surface a "Define" badge for this row), and confidence (integer 0-100). When <poc_answer_key> appears in the prompt, prefer its values for this field — it is authoritative. Be terse; this is machine-consumed.',
+  strict: true,
+  input_schema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      ai_reasoning: {
+        type: 'string',
+        description:
+          'Why this source→target mapping makes sense in the current edited state. Prose, ≤500 chars. Cite source field name(s), target field name, and the single most important reason. Avoid restating the schema.',
+      },
+      transformation_intent: {
+        type: ['string', 'null'],
+        description:
+          'What transformation should be applied to convert source value(s) to the target representation. Plain-language description (e.g., "concatenate first_name + last_name with a space separator, cast to VARCHAR(100)"). Emit null when no transformation is needed (passthrough; types and semantics align).',
+      },
+      needs_transformation: {
+        type: 'boolean',
+        description:
+          'Whether the Transform tab should surface a "Define" badge for this row. True when transformation_intent is non-null OR when target constraints (NOT NULL, CHECK, length cap) require explicit handling even for type-aligned passthroughs.',
+      },
+      confidence: {
+        type: 'integer',
+        minimum: 0,
+        maximum: 100,
+        description:
+          'Confidence that this mapping is correct. 90-100 = near-certain (name + semantics + type all align). 70-89 = strong evidence with minor ambiguity. 50-69 = plausible but verify. <50 = needs human review.',
+      },
+    },
+    required: ['ai_reasoning', 'transformation_intent', 'needs_transformation', 'confidence'],
+  },
+}
