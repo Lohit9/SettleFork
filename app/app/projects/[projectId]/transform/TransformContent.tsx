@@ -2405,8 +2405,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
                   </div>
 
                   {/* Why Transform? — collapsible reference block, collapsed by default */}
-                  {(selectedContext.field.aiReasoning
-                    || selectedContext.field.transformationIntent
+                  {(selectedContext.field.transformationIntent
                     || selectedContext.field.isValueAssignment
                     || selectedContext.field.typeCompatibility
                     || selectedContext.field.confidence != null
@@ -2430,11 +2429,6 @@ export default function TransformContent({ projectId, projectName, initialData, 
                       </button>
                       {whyExpanded && (
                         <div className="px-4 pb-4 pt-0 border-t border-gray-100 bg-amber-50/40">
-                          {selectedContext.field.aiReasoning && (
-                            <p className="text-sm text-amber-900 mt-3">
-                              {selectedContext.field.aiReasoning}
-                            </p>
-                          )}
                           {selectedContext.field.transformationIntent && (
                             <p className="text-sm text-amber-900 mt-3">
                               <span className="font-medium">Transformation suggestion.</span>{' '}
