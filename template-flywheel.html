@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Settle — The Template Flywheel</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif; background: #0f172a; color: #e2e8f0; padding: 40px; max-width: 960px; margin: 0 auto; }
+  h1 { font-size: 22px; color: #1d9e75; margin-bottom: 4px; }
+  .sub { color: #64748b; font-size: 13px; margin-bottom: 32px; }
+  h2 { font-size: 14px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.12em; margin: 36px 0 14px; }
+
+  /* flywheel animation */
+  .flywheel { position: relative; width: 100%; padding: 30px 0; }
+  .step { display: grid; grid-template-columns: 56px 1fr; gap: 0; margin-bottom: 0; position: relative; }
+  .step .num-col { display: flex; flex-direction: column; align-items: center; }
+  .step .num { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 15px; flex-shrink: 0; z-index: 1; }
+  .step .line { width: 2px; flex: 1; min-height: 20px; }
+  .step:last-child .line { display: none; }
+  .step .content { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 14px 18px; margin-bottom: 8px; }
+  .step .content .title { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+  .step .content .desc { font-size: 12px; color: #94a3b8; line-height: 1.5; }
+  .step .content .highlight { color: #1d9e75; font-weight: 600; }
+  .step .content .cost { font-family: 'JetBrains Mono', monospace; font-size: 11px; margin-top: 6px; padding: 4px 8px; border-radius: 4px; display: inline-block; }
+
+  /* step colors */
+  .s1 .num { background: #1d9e75; color: #fff; }
+  .s1 .line { background: linear-gradient(#1d9e75, #3b82f6); }
+  .s2 .num { background: #3b82f6; color: #fff; }
+  .s2 .line { background: linear-gradient(#3b82f6, #a855f7); }
+  .s3 .num { background: #a855f7; color: #fff; }
+  .s3 .line { background: linear-gradient(#a855f7, #f59e0b); }
+  .s4 .num { background: #f59e0b; color: #0f172a; }
+  .s4 .line { background: linear-gradient(#f59e0b, #1d9e75); }
+  .s5 .num { background: #1d9e75; color: #fff; }
+  .s5 .line { background: linear-gradient(#1d9e75, #ef4444); }
+  .s6 .num { background: #ef4444; color: #fff; }
+  .s6 .line { background: linear-gradient(#ef4444, #1d9e75); }
+  .s7 .num { background: #1d9e75; color: #fff; border: 2px solid #86efac; box-shadow: 0 0 12px rgba(29,158,117,0.4); }
+
+  /* coverage bars */
+  .coverage-row { display: flex; align-items: center; gap: 12px; margin: 8px 0; }
+  .coverage-row .label { font-size: 11px; color: #64748b; width: 90px; text-align: right; flex-shrink: 0; }
+  .coverage-row .bar-wrap { flex: 1; height: 20px; background: #334155; border-radius: 4px; overflow: hidden; position: relative; }
+  .coverage-row .bar-fill { height: 100%; border-radius: 4px; transition: width 0.6s ease; display: flex; align-items: center; padding-left: 8px; font-size: 10px; font-weight: 600; color: #0f172a; }
+  .coverage-row .bar-fill.template { background: #1d9e75; }
+  .coverage-row .bar-fill.ai { background: #f59e0b; }
+  .coverage-row .bar-fill.human { background: #3b82f6; }
+  .coverage-row .pct { font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 700; width: 40px; color: #e2e8f0; }
+
+  /* override section */
+  .override-box { background: #1e293b; border: 1px solid #ef4444; border-radius: 8px; padding: 16px 20px; margin: 16px 0; }
+  .override-box h3 { font-size: 13px; color: #fca5a5; margin-bottom: 8px; }
+  .override-box .desc { font-size: 12px; color: #94a3b8; line-height: 1.6; }
+
+  /* the wow box */
+  .wow { text-align: center; margin: 40px 0 20px; padding: 28px; border: 2px solid #1d9e75; border-radius: 10px; background: linear-gradient(135deg, rgba(29,158,117,0.08), rgba(59,130,246,0.05)); }
+  .wow .big { font-size: 28px; font-weight: 800; color: #1d9e75; letter-spacing: -0.02em; }
+  .wow .med { font-size: 14px; color: #94a3b8; margin-top: 8px; line-height: 1.5; }
+  .wow .takeaway { font-size: 12px; color: #64748b; margin-top: 12px; font-style: italic; }
+
+  /* comparison */
+  .compare-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 20px 0; }
+  .compare-card { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 16px; }
+  .compare-card .head { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 10px; }
+  .compare-card .head.old { color: #f87171; }
+  .compare-card .head.new { color: #4ade80; }
+  .compare-card .stat { font-family: 'JetBrains Mono', monospace; font-size: 24px; font-weight: 700; }
+  .compare-card .stat.old { color: #f87171; }
+  .compare-card .stat.new { color: #4ade80; }
+  .compare-card .label { font-size: 11px; color: #64748b; margin-top: 2px; }
+</style>
+</head>
+<body>
+
+<h1>The Template Flywheel</h1>
+<p class="sub">Every completed migration makes the next one cheaper. This is how Settle builds an unbeatable moat.</p>
+
+<!-- LAYMAN EXPLANATION -->
+<div class="wow" style="margin-top:0">
+  <div class="big">Each migration teaches the system.</div>
+  <div class="med">
+    The first time a customer migrates Salesforce → HubSpot, AI maps every field from scratch.<br>
+    The second time? 70% of the work is already done — the system remembers what worked.<br>
+    By the tenth migration, it's 95% automatic. Competitors start from zero every time.
+  </div>
+  <div class="takeaway">This is like Google Search getting better with every query. Except for enterprise data migration.</div>
+</div>
+
+<!-- STEP BY STEP FLYWHEEL -->
+<h2>How It Works: One Migration at a Time</h2>
+
+<div class="flywheel">
+
+  <div class="step s1">
+    <div class="num-col"><div class="num">1</div><div class="line"></div></div>
+    <div class="content">
+      <div class="title">Client #1 completes migration</div>
+      <div class="desc">RCB Industries migrates Prosys → Rootstock. 108 field mappings manually reviewed and approved by their team. Transformations written, validated, exported.</div>
+      <div class="cost" style="background:#7f1d1d;color:#fca5a5">AI cost: ~$50 · Human time: ~40 hours · Total fields: 108</div>
+    </div>
+  </div>
+
+  <div class="step s2">
+    <div class="num-col"><div class="num">2</div><div class="line"></div></div>
+    <div class="content">
+      <div class="title">System extracts a template</div>
+      <div class="desc">On export, <span class="highlight">extractTemplate()</span> captures every approved mapping as a <span class="highlight">field signature</span> — table name + field name + data type + constraints. This is stored as a reusable template keyed to "Prosys → Rootstock".</div>
+      <div class="cost" style="background:#14532d;color:#86efac">Stored: 108 mapping entries + load order + transformation SQL</div>
+    </div>
+  </div>
+
+  <div class="step s3">
+    <div class="num-col"><div class="num">3</div><div class="line"></div></div>
+    <div class="content">
+      <div class="title">Client #2 starts same migration</div>
+      <div class="desc">Acme Manufacturing also uses Prosys, also moving to Rootstock. They upload their schemas. System detects: "We have a template for this pair."</div>
+    </div>
+  </div>
+
+  <div class="step s4">
+    <div class="num-col"><div class="num">4</div><div class="line"></div></div>
+    <div class="content">
+      <div class="title" style="color:#f59e0b">Template auto-maps 70% of fields</div>
+      <div class="desc"><span class="highlight">applyTemplate()</span> matches field signatures: exact match (same table + field + type) covers 75/108 fields instantly. The remaining 33 fields go to AI. The pre-mapped fields cost <span class="highlight">$0 in AI calls</span>.</div>
+      <div class="cost" style="background:#14532d;color:#86efac">AI cost: ~$15 (33 fields only) · Human time: ~12 hours · Pre-mapped: 75 fields FREE</div>
+    </div>
+  </div>
+
+  <div class="step s5">
+    <div class="num-col"><div class="num">5</div><div class="line"></div></div>
+    <div class="content">
+      <div class="title">Client #2 finishes — template gets smarter</div>
+      <div class="desc"><span class="highlight">mergeIntoTemplate()</span> folds their approved mappings back in. The template now has 108 + 33 = 141 mapping entries. Fields that matched keep their confidence. New fields get added. Overrides replace bad suggestions.</div>
+    </div>
+  </div>
+
+  <div class="step s6">
+    <div class="num-col"><div class="num">6</div><div class="line"></div></div>
+    <div class="content">
+      <div class="title" style="color:#fca5a5">Self-correction: bad mappings die automatically</div>
+      <div class="desc">If Client #2's human overrode a template mapping, the <span class="highlight">overrideCount</span> increments. When overrides exceed reuses, the template replaces the bad mapping with the human's correction. No manual curation needed.</div>
+    </div>
+  </div>
+
+  <div class="step s7">
+    <div class="num-col"><div class="num">7</div><div class="line"></div></div>
+    <div class="content">
+      <div class="title" style="color:#86efac">Client #10: 95% pre-mapped, near-zero AI cost</div>
+      <div class="desc">By the tenth Prosys → Rootstock migration, the template covers almost everything. AI runs only on the rare custom fields unique to that client. The migration that used to take a Deloitte team 4 months now takes an afternoon.</div>
+      <div class="cost" style="background:#14532d;color:#86efac">AI cost: ~$3 · Human time: ~2 hours · Template coverage: 95%</div>
+    </div>
+  </div>
+
+</div>
+
+<!-- COVERAGE GROWTH CHART -->
+<h2>Template Coverage Over Time</h2>
+
+<div style="background:#1e293b;border:1px solid #334155;border-radius:8px;padding:20px;margin:16px 0">
+  <div class="coverage-row">
+    <div class="label">Migration #1</div>
+    <div class="bar-wrap">
+      <div class="bar-fill ai" style="width:100%">100% AI</div>
+    </div>
+    <div class="pct" style="color:#f59e0b">0%</div>
+  </div>
+  <div class="coverage-row">
+    <div class="label">Migration #2</div>
+    <div class="bar-wrap">
+      <div class="bar-fill template" style="width:70%">70% template</div>
+      <div class="bar-fill ai" style="width:30%;position:absolute;left:70%;top:0">30% AI</div>
+    </div>
+    <div class="pct" style="color:#1d9e75">70%</div>
+  </div>
+  <div class="coverage-row">
+    <div class="label">Migration #3</div>
+    <div class="bar-wrap">
+      <div class="bar-fill template" style="width:85%">85% template</div>
+    </div>
+    <div class="pct" style="color:#1d9e75">85%</div>
+  </div>
+  <div class="coverage-row">
+    <div class="label">Migration #5</div>
+    <div class="bar-wrap">
+      <div class="bar-fill template" style="width:92%">92% template</div>
+    </div>
+    <div class="pct" style="color:#1d9e75">92%</div>
+  </div>
+  <div class="coverage-row">
+    <div class="label">Migration #10</div>
+    <div class="bar-wrap">
+      <div class="bar-fill template" style="width:95%">95% template</div>
+    </div>
+    <div class="pct" style="color:#1d9e75">95%</div>
+  </div>
+  <div style="font-size:10px;color:#475569;margin-top:10px;text-align:center">Green = pre-mapped from template ($0). Gold = AI-generated ($0.50/field). Each bar represents a new customer migrating the same system pair.</div>
+</div>
+
+<!-- COST COMPARISON -->
+<h2>What This Means for Unit Economics</h2>
+
+<div class="compare-grid">
+  <div class="compare-card">
+    <div class="head old">Without templates (competitors)</div>
+    <div class="stat old">$50</div>
+    <div class="label">AI cost per migration (every time)</div>
+    <div style="margin-top:12px"><span class="stat old" style="font-size:18px">40 hrs</span></div>
+    <div class="label">Human review time (every time)</div>
+    <div style="margin-top:12px"><span class="stat old" style="font-size:18px">Linear</span></div>
+    <div class="label">Cost scales linearly with customers</div>
+  </div>
+  <div class="compare-card">
+    <div class="head new">With template flywheel (Settle)</div>
+    <div class="stat new">$3</div>
+    <div class="label">AI cost by migration #10</div>
+    <div style="margin-top:12px"><span class="stat new" style="font-size:18px">2 hrs</span></div>
+    <div class="label">Human review by migration #10</div>
+    <div style="margin-top:12px"><span class="stat new" style="font-size:18px">Asymptotic</span></div>
+    <div class="label">Cost approaches zero as templates mature</div>
+  </div>
+</div>
+
+<!-- OVERRIDE BOX -->
+<div class="override-box">
+  <h3>The Self-Correcting Secret</h3>
+  <div class="desc">
+    Every template mapping tracks two counters: <strong>reuseCount</strong> (how many times it was accepted as-is) and <strong>overrideCount</strong> (how many times a human changed it).
+    <br><br>
+    When overrides exceed reuses, the mapping was wrong — the template automatically replaces it with what humans keep choosing instead. No manual curation, no stale templates. The system learns from corrections naturally.
+    <br><br>
+    This means Settle's templates get <strong>more accurate over time without anyone maintaining them</strong>. A competitor who copies the template idea but skips override tracking will have stale templates within months.
+  </div>
+</div>
+
+<!-- MOAT SUMMARY -->
+<div class="wow">
+  <div class="big">The moat isn't the AI. The moat is the templates.</div>
+  <div class="med">
+    Anyone can call Claude to match fields. Nobody else has 10 completed<br>
+    Prosys→Rootstock migrations teaching their system what "correct" looks like.<br>
+    Each customer makes the next customer's migration cheaper and more accurate.
+  </div>
+  <div class="takeaway">Settle's value = (migrations completed)² — a quadratic advantage over any new entrant.</div>
+</div>
+
+</body>
+</html>
