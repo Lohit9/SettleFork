@@ -54,6 +54,7 @@ import { inferFkCandidates } from '@/lib/utils/fk-inference'
 // call time, not at module-load time.
 import { runSingleAgentMappingLoop } from '@/lib/ai/single-agent-mapping'
 import { runMultiAgentMappingPipeline } from '@/lib/ai/multi-agent-orchestrator'
+import { validateMappingBatch, type MappingProposal } from '@/lib/validation/mapping-validator'
 import {
   getStaticSuggestionForTarget,
   resolveStaticSourceUnmappedRationale,
@@ -2090,6 +2091,49 @@ ${otherSourcesList}
         fieldMappings: tm.field_mappings ?? [],
         sourceTableId: srcTable.id,
       })
+
+      // Deterministic validation pass — runs on schema metadata only (no
+      // profiling stats at this callsite). Issues are logged under the
+      // [validation] tag in Vercel. No DB writes yet: persisting to a
+      // dedicated table requires a migration that's blocked on Supabase
+      // env access (alex/deterministic-validation branch TODO).
+      {
+        const srcFMap = sourceFieldsByTable.get(srcTable.id) ?? new Map()
+        const tgtFMap = targetFieldsByTable.get(tgtTable.id) ?? new Map()
+        const proposals: MappingProposal[] = []
+        for (const fm of tm.field_mappings ?? []) {
+          const srcF = srcFMap.get(bareTableName(fm.source_field))
+          const tgtF = tgtFMap.get(bareTableName(fm.target_field))
+          if (!srcF || !tgtF) continue
+          proposals.push({
+            sourceFields: [{
+              name: srcF.name,
+              dataType: srcF.data_type ?? srcF.inferred_type ?? 'unknown',
+              isNullable: srcF.is_nullable ?? true,
+            }],
+            targetField: {
+              name: tgtF.name,
+              dataType: tgtF.data_type ?? tgtF.inferred_type ?? 'unknown',
+              isNullable: tgtF.is_nullable ?? true,
+              isPrimaryKey: tgtF.is_primary_key ?? false,
+              isUnique: false, // not in fields query; conservative default
+              isForeignKey: tgtF.is_foreign_key ?? false,
+              fkReference: tgtF.fk_reference ?? null,
+            },
+          })
+        }
+        if (proposals.length > 0) {
+          const batchResults = validateMappingBatch(proposals)
+          for (const [targetName, vr] of batchResults) {
+            if (!vr.valid || vr.counts.warnings > 0) {
+              console.warn(
+                `[validation] ${srcTable.name}→${tgtTable.name} target=${targetName}`,
+                JSON.stringify({ valid: vr.valid, counts: vr.counts, issues: vr.issues }),
+              )
+            }
+          }
+        }
+      }
     }
 
     if (storedCount === 0) {
