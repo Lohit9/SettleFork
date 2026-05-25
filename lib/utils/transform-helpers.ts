@@ -204,6 +204,21 @@ export function wrapFieldRefsInJsonb(
         const dotIdx = inner.indexOf('.')
         const fieldPart = dotIdx !== -1 ? inner.slice(dotIdx + 1) : inner
         if (fieldSet.has(fieldPart)) return `(row_data->>'${fieldPart}')`
+        // PR ζ.1: A "Table.Field" token in same-table SQL whose field is
+        // NOT in this TFM's source field set indicates the AI emitted
+        // cross-table output but apply routed to the same-table branch —
+        // most often because buildJoinSpec returned `spec:null` via the
+        // contributor-dedup early-return at transform-cross-table.ts.
+        // Silent pass-through here would land "Table.Field" in the RPC
+        // payload and Postgres would crash with "column does not exist".
+        // Throw to surface the routing mismatch with an actionable
+        // message.
+        if (dotIdx !== -1) {
+          const tablePart = inner.slice(0, dotIdx)
+          throw new Error(
+            `Field "${fieldPart}" from table "${tablePart}" is not part of this same-table TFM's source fields. Check that mapping_sources for this TFM lists every contributing table; if a contributor's source_table_id was deduped against the dominant, buildJoinSpec returns null spec and the cross-table apply path is skipped.`,
+          )
+        }
         return token
       }
       if (fieldSet.has(token)) return `(row_data->>'${token}')`
@@ -218,6 +233,28 @@ export function wrapFieldRefsInJsonb(
   const allFieldNames = new Set<string>()
   for (const entry of fieldsByTableName.values()) {
     for (const name of entry.fieldNames) allFieldNames.add(name)
+  }
+
+  // PR ζ.1: Shared helper for auto-qualify-by-bare-name. Used in two
+  // places — (1) when a bare/quoted-no-dot ident matches a known field
+  // name (Pass 3, ~bottom of loop), and (2) when a quoted "Table.Field"
+  // token's prefix doesn't resolve but its bare field name does (Pass
+  // 1 fall-through). Returns the owning table's alias on unique match;
+  // throws the QUALIFIED_REQUIRED_MESSAGE with colliding tables named
+  // on multi-table collision. Caller verifies allFieldNames.has(field)
+  // before invoking — this assumes ≥1 owning table.
+  const resolveOwningAlias = (fieldName: string): string => {
+    const owningTables: Array<{ tableName: string; alias: string }> = []
+    for (const [tableName, e] of fieldsByTableName.entries()) {
+      if (e.fieldNames.has(fieldName)) {
+        owningTables.push({ tableName, alias: e.alias })
+      }
+    }
+    if (owningTables.length === 1) return owningTables[0].alias
+    const colliding = owningTables.map((o) => o.tableName).join(', ')
+    throw new Error(
+      `${QUALIFIED_REQUIRED_MESSAGE} (Ambiguous bare reference "${fieldName}" — appears in: ${colliding}. Qualify as "<table>.${fieldName}".)`,
+    )
   }
 
   // Two-pass strategy:
@@ -262,7 +299,23 @@ export function wrapFieldRefsInJsonb(
         })
         continue
       }
-      // Unknown qualifier — leave alone (might be an unrelated identifier).
+      // PR ζ.1: Prefix didn't match a known table OR field isn't in
+      // that table's field set. Before silently passing through (which
+      // lands the literal "Table.Field" in the RPC payload and crashes
+      // Postgres with "column does not exist"), try to auto-qualify
+      // the bare field name against the rest of the map.
+      if (allFieldNames.has(fieldName)) {
+        const alias = resolveOwningAlias(fieldName)
+        replacements.push({
+          start: t.start,
+          end: t.end,
+          text: `(${alias}.row_data->>'${fieldName}')`,
+        })
+        continue
+      }
+      // Unknown qualifier AND unknown field — leave alone (likely a
+      // schema-qualified function name like pg_catalog.now or an
+      // unrelated identifier).
       continue
     }
 
@@ -299,29 +352,17 @@ export function wrapFieldRefsInJsonb(
 
     // Bare or quoted unqualified identifier matching a known field name.
     // PR ζ: attempt auto-qualification before falling back to the strict
-    // throw. If the bare name appears in exactly ONE source table, silently
-    // rewrite to that table's alias. If it appears in 2+ tables, the
-    // rewrite would be ambiguous — throw with the colliding tables named.
+    // throw. PR ζ.1: shared with the Pass 1 fall-through via
+    // resolveOwningAlias above — unique match rewrites silently, multi-
+    // table match throws with colliding tables named.
     if (allFieldNames.has(inner)) {
-      const owningTables: Array<{ tableName: string; alias: string }> = []
-      for (const [tableName, entry] of fieldsByTableName.entries()) {
-        if (entry.fieldNames.has(inner)) {
-          owningTables.push({ tableName, alias: entry.alias })
-        }
-      }
-      if (owningTables.length === 1) {
-        const { alias } = owningTables[0]
-        replacements.push({
-          start: t.start,
-          end: t.end,
-          text: `(${alias}.row_data->>'${inner}')`,
-        })
-        continue
-      }
-      const colliding = owningTables.map((o) => o.tableName).join(', ')
-      throw new Error(
-        `${QUALIFIED_REQUIRED_MESSAGE} (Ambiguous bare reference "${inner}" — appears in: ${colliding}. Qualify as "<table>.${inner}".)`,
-      )
+      const alias = resolveOwningAlias(inner)
+      replacements.push({
+        start: t.start,
+        end: t.end,
+        text: `(${alias}.row_data->>'${inner}')`,
+      })
+      continue
     }
     // Unknown identifier (SQL keyword, function, etc.) — leave alone.
   }
@@ -335,4 +376,42 @@ export function wrapFieldRefsInJsonb(
     out = out.slice(0, start) + text + out.slice(end)
   }
   return out
+}
+
+// ── DML blocklist (client-side hot-fix) ──────────────────────────────────────
+//
+// The Postgres RPCs that execute transform SQL (migration 074 for the
+// preview RPCs and migration 104 for the apply RPCs) gate every
+// expression with a blocklist regex of the shape
+// `\y(insert|update|delete|drop|alter|create|truncate|grant|revoke|copy|execute)\y`
+// applied to `lower(trim(<expression>))` — i.e. the raw SQL with
+// single-quoted SQL string literals NOT stripped. That means data
+// values containing a DML keyword as a substring (e.g. an iccomcod
+// SKU literal `'2_RCB-APPAREL-DROP'`) false-positive and the apply
+// rejects the transform with `Transform expression cannot contain
+// data modification statements`.
+//
+// `assertNoDml` is the PR ζ.1 client-side hot-fix: it strips
+// single-quoted literals first (reusing the TOKEN_RE classifier that
+// already handles `''`-escape inside literals), then runs the same
+// blocklist regex against the non-literal residue. Short-circuits
+// before the RPC sees the SQL with a clearer error message. The
+// structural fix — adding `regexp_replace` literal-stripping inside
+// the five RPC bodies — is deferred to PR ζ.2 (migration 105).
+
+export function stripSqlLiterals(sql: string): string {
+  return sql.replace(TOKEN_RE, (token) => (token.startsWith("'") ? "''" : token))
+}
+
+const DML_KEYWORDS =
+  /\b(update|delete|insert|drop|alter|create|truncate|grant|revoke|copy|execute|exec)\b/i
+
+export function assertNoDml(sql: string): void {
+  const stripped = stripSqlLiterals(sql)
+  const match = stripped.match(DML_KEYWORDS)
+  if (match) {
+    throw new Error(
+      `Transform contains a DML keyword in a non-literal position: ${match[1].toUpperCase()}`,
+    )
+  }
 }
