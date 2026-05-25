@@ -82,11 +82,21 @@ export interface ProjectStatsTargetAxis {
    *  TFMs + unacknowledged unmapped target fields. Aligns the chip math
    *  on the Mapping page strip — `Approved + Needs Review = total`. */
   needsReview: number
-  /** Distinct target_field_id count across primary TFMs (non-rejected,
-   *  non-bare-ack). Answers "how many target fields are used in at least
-   *  one real mapping?" — status-agnostic across `needs_review` and
-   *  `approved`. Numerator for the Mapping page strip's "Target Fields"
-   *  chip alongside `schemaTotal`. Always <= `schemaTotal`. */
+  /** Distinct target_field_id count across primary TFMs that actually
+   *  deliver a value — non-rejected, non-bare-ack TFMs that EITHER have an
+   *  MS row with `source_field_id IS NOT NULL` (mapped from source data)
+   *  OR carry a non-empty `combination_sql` (fixed-value VA literal).
+   *  Answers "how many target fields receive a value from the migration?"
+   *  Status-agnostic across `needs_review` and `approved`. Numerator for
+   *  the Mapping page strip's "Target Fields" chip alongside
+   *  `schemaTotal`. Always <= `schemaTotal`.
+   *
+   *  PR ε (2026-05-24): tightened from "every primary TFM" to "every
+   *  primary TFM that delivers a value". Blank value-assignments
+   *  (combination_type='custom_sql' with NULL/empty combination_sql and
+   *  no MS rows) no longer inflate the chip numerator — they're
+   *  placeholders, not data flow. Aligns target-side semantics with the
+   *  source side (which already counted only fields contributing data). */
   usedInMapping: number
   /** Schema-wide target-field count (`datasets.role='target'`). Distinct
    *  from `total`, which counts addressable mapping slots (primary TFMs
@@ -155,6 +165,11 @@ interface RawProjectStatsData {
     status: 'needs_review' | 'approved' | 'rejected'
     is_acknowledged: boolean
     combination_type: string | null
+    /** PR ε — surfaced so `computeProjectStats` can distinguish a completed
+     *  value-assignment (non-empty SQL → delivers a fixed value) from a
+     *  blank placeholder, tightening the `target.usedInMapping` chip
+     *  numerator. */
+    combination_sql: string | null
     needs_transformation: boolean | null
     va_dismissed: boolean | null
   }>
@@ -264,7 +279,10 @@ export async function fetchProjectStatsData(
     client
       .from('target_field_mappings')
       .select(
-        'id, project_id, target_field_id, confidence, status, is_acknowledged, combination_type, needs_transformation, va_dismissed',
+        // PR ε added `combination_sql` so the canonical formula can
+        // distinguish a completed VA literal from a blank placeholder
+        // when computing `targetFieldsUsedInMapping`.
+        'id, project_id, target_field_id, confidence, status, is_acknowledged, combination_type, combination_sql, needs_transformation, va_dismissed',
         { count: 'exact' },
       )
       .in('project_id', projectIds)
