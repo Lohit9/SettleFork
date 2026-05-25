@@ -284,6 +284,14 @@ export interface TransformPageData {
 const MAINTENANCE_GUARD_MESSAGE =
   'Mapping writes are temporarily disabled for scheduled maintenance'
 
+// PR ζ.1 diagnostic heuristic — matches any double-quoted token that
+// contains a dot, e.g. `"Engineering BOM Masters.Assy Desc"`. Used at
+// applyTransform / testTransformation entry points to surface the
+// silent-degrade where the AI produced cross-table-qualified SQL but
+// buildJoinSpec returned `spec:null` (same-table fallback path).
+// Investigation: /tmp/pr-zeta-1-investigation.md §1.
+const QUALIFIED_REF_HEURISTIC = /"[^"]+\.[^"]+"/
+
 export type TransformWriteErrorCode =
   | 'MAINTENANCE_MODE'
   | 'NOT_FOUND'
@@ -2148,6 +2156,13 @@ export async function testTransformation(
         errorCode: crossTableJoinSpec.errorCode,
       }
     }
+    // PR ζ.1 diagnostic — see applyTransform for context.
+    if (!crossTableJoinSpec.spec && QUALIFIED_REF_HEURISTIC.test(sql)) {
+      console.warn('[testTransformation] buildJoinSpec returned null spec for qualified-ref SQL', {
+        tfmId: ctx.tfm.id,
+        sqlPreview: sql.slice(0, 200),
+      })
+    }
   }
 
   // Source table: same resolution as runFullTransformTest.
@@ -2518,6 +2533,17 @@ export async function applyTransform(
         error: joinSpec.error,
         errorCode: joinSpec.errorCode,
       }
+    }
+    // PR ζ.1 diagnostic: AI emitted qualified "Table.Field" refs but
+    // buildJoinSpec returned null spec — apply will route to same-table
+    // fallback which can't resolve the qualifier. Surfaces the
+    // silent-degrade described in /tmp/pr-zeta-1-investigation.md §1
+    // (Path B). Remove once Rootstock loader is confirmed correct.
+    if (!joinSpec.spec && QUALIFIED_REF_HEURISTIC.test(sql)) {
+      console.warn('[applyTransform] buildJoinSpec returned null spec for qualified-ref SQL', {
+        tfmId: ctx.tfm.id,
+        sqlPreview: sql.slice(0, 200),
+      })
     }
   }
 

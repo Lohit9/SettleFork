@@ -139,6 +139,17 @@ describe('wrapFieldRefsInJsonb — same-table overload', () => {
   it('returns the original SQL when the field list is empty', () => {
     expect(wrapFieldRefsInJsonb(`SELECT 1`, [])).toBe(`SELECT 1`)
   })
+
+  it('PR ζ.1: throws on quoted-with-dot ref pointing to a field not in scope (catches routing-mismatch silent-degrade)', () => {
+    // The AI emitted "Products.ProductName" but apply routed to the
+    // same-table branch (because buildJoinSpec returned null spec).
+    // Previously this token silently passed through and Postgres
+    // crashed with "column does not exist"; the throw makes the
+    // routing mismatch visible with an actionable message.
+    expect(() =>
+      wrapFieldRefsInJsonb(`COALESCE("Products.ProductName", "STATUS")`, ['STATUS']),
+    ).toThrow(/Field "ProductName" from table "Products" is not part of this same-table TFM's source fields/)
+  })
 })
 
 // ─── wrapFieldRefsInJsonb — cross-table overload ─────────────────────────────
@@ -293,6 +304,56 @@ describe('wrapFieldRefsInJsonb — cross-table overload', () => {
     )
     expect(out).toBe(
       `CASE WHEN (d.row_data->>'Assy Desc') IS NULL OR TRIM((d.row_data->>'Assy Desc')::text) = '' THEN NULL ELSE COALESCE(NULLIF(TRIM((j0.row_data->>'ProductName')), ''), TRIM((d.row_data->>'Assy Desc'))) END`,
+    )
+  })
+
+  it('PR ζ.1: auto-qualifies a quoted-with-dot ref whose table prefix is unknown but field name is unique to a known table', () => {
+    // PR ζ.1 smoke failure (Defect 1, Path A): the AI emitted
+    // "Products.ProductName" but Pass 1's prefix lookup missed (e.g.
+    // because the loader stored the table under a different name, or
+    // the field appeared via a renamed projection). Fall-through to
+    // the bare-field auto-qualifier must rescue when the field is
+    // unique across the map.
+    const out = wrapFieldRefsInJsonb(
+      `"WrongTable.ProductName" || "Engineering BOM Masters.Assy Desc"`,
+      buildFieldMap([
+        ['Engineering BOM Masters', { alias: 'd', fieldNames: ['Assy Desc', 'Assy Item'] }],
+        ['Products', { alias: 'j0', fieldNames: ['ProductName'] }],
+      ]),
+    )
+    expect(out).toBe(
+      `(j0.row_data->>'ProductName') || (d.row_data->>'Assy Desc')`,
+    )
+  })
+
+  it('PR ζ.1: throws on quoted-with-dot ref whose bare field name collides across multiple tables', () => {
+    // When Pass 1's prefix lookup misses AND the bare field name is
+    // ambiguous, the fall-through must throw with the colliding
+    // tables named — same message shape as the bare-ref ambiguity
+    // throw at the bottom of the cross-table overload.
+    const ambiguousMap = buildFieldMap([
+      ['T1', { alias: 'd', fieldNames: ['STATUS'] }],
+      ['T2', { alias: 'j0', fieldNames: ['STATUS'] }],
+    ])
+    expect(() => wrapFieldRefsInJsonb(`UPPER("WrongTable.STATUS")`, ambiguousMap)).toThrow(
+      /table-qualified field references/i,
+    )
+    expect(() => wrapFieldRefsInJsonb(`UPPER("WrongTable.STATUS")`, ambiguousMap)).toThrow(
+      /T1, T2/,
+    )
+  })
+
+  it('PR ζ.1: leaves unknown qualifier.unknown-field alone (e.g. schema-qualified function refs unchanged)', () => {
+    // Regression guard: if neither the prefix nor the bare field name
+    // match, the token must pass through unchanged. Protects existing
+    // schema-qualified function references like "some_schema.helper".
+    const fmap = buildFieldMap([['T1', { alias: 'd', fieldNames: ['STATUS'] }]])
+    const out = wrapFieldRefsInJsonb(
+      `"some_schema.unknown_helper" || "T1.STATUS"`,
+      fmap,
+    )
+    expect(out).toBe(
+      `"some_schema.unknown_helper" || (d.row_data->>'STATUS')`,
     )
   })
 
