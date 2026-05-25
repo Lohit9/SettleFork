@@ -114,7 +114,7 @@ import {
 } from '@/lib/ai/project-context-blocks'
 import { composeTransformUserMessage } from '@/lib/ai/transform-prompt'
 import { TRANSFORM_SYSTEM_PROMPT } from '@/lib/ai/transform-system-prompt'
-import { fieldNeedsTransform, wrapFieldRefsInJsonb } from '@/lib/utils/transform-helpers'
+import { assertNoDml, fieldNeedsTransform, wrapFieldRefsInJsonb } from '@/lib/utils/transform-helpers'
 import { buildJoinSpec } from '@/lib/utils/transform-cross-table'
 import { resolveTransformationIntent } from '@/lib/utils/transformation-intent'
 import { logActivity } from '@/lib/actions/activity-log'
@@ -2165,6 +2165,18 @@ export async function testTransformation(
     }
   }
 
+  // PR ζ.1 client-side hot-fix: see applyTransform for context. Runs
+  // before any RPC call so iccomcod-style literals containing "DROP"
+  // are accepted instead of bouncing through the RPC's
+  // not-literal-aware blocklist.
+  try {
+    assertNoDml(sql.trim())
+  } catch (e) {
+    const msg =
+      e instanceof Error ? e.message : 'Transform contains a DML keyword in a non-literal position'
+    return { success: false, error: msg }
+  }
+
   // Source table: same resolution as runFullTransformTest.
   let sourceTableId: string | null = srcField?.table_id ?? null
   if (!sourceTableId) {
@@ -2555,6 +2567,16 @@ export async function applyTransform(
       // ── Mapped TFM — single call via the joined RPC ─────────────────────────
       const srcField = ctx.primarySource!.sourceField!
       const cleaned = sql.replace(/;+$/, '').trim()
+      // PR ζ.1 client-side hot-fix: short-circuit DML false-positives
+      // from data literals containing keywords like "DROP". RPC-side
+      // structural fix deferred to PR ζ.2 (migration 105).
+      try {
+        assertNoDml(cleaned)
+      } catch (e) {
+        const msg =
+          e instanceof Error ? e.message : 'Transform contains a DML keyword in a non-literal position'
+        return { success: false, rowsAffected: 0, error: msg }
+      }
       const okSpec = joinSpec as Extract<typeof joinSpec, { ok: true }>
 
       let wrappedSql: string

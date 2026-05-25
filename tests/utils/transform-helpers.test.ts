@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
+  assertNoDml,
   fieldNeedsTransform,
+  stripSqlLiterals,
   wrapFieldRefsInJsonb,
   type CrossTableFieldEntry,
 } from '@/lib/utils/transform-helpers'
@@ -376,5 +378,64 @@ describe('wrapFieldRefsInJsonb — cross-table overload', () => {
     expect(out).toBe(
       `COALESCE(NULLIF(TRIM((j0.row_data->>'ProductName')), ''), TRIM((d.row_data->>'Assy Desc')))`,
     )
+  })
+})
+
+// ─── stripSqlLiterals ────────────────────────────────────────────────────────
+//
+// PR ζ.1 hot-fix support — strips single-quoted SQL string literals so
+// downstream blocklist checks (assertNoDml below) don't false-positive on
+// data values containing DML keywords (e.g. `'2_RCB-APPAREL-DROP'`).
+
+describe('stripSqlLiterals', () => {
+  it('removes single-quoted strings, preserves surrounding structure', () => {
+    expect(stripSqlLiterals(`'foo' || 'bar'`)).toBe(`'' || ''`)
+  })
+
+  it("collapses SQL '' escape inside a single-quoted literal", () => {
+    // `'a''b'` is a single SQL literal whose value is `a'b`. The TOKEN_RE
+    // greedy `'(?:[^']|'')*'` consumes the whole token; strip replaces
+    // it with an empty literal.
+    expect(stripSqlLiterals(`'a''b'`)).toBe(`''`)
+  })
+
+  it('leaves bare identifiers and double-quoted identifiers untouched', () => {
+    expect(stripSqlLiterals(`UPPER("Field") = 'x'`)).toBe(`UPPER("Field") = ''`)
+  })
+})
+
+// ─── assertNoDml ─────────────────────────────────────────────────────────────
+//
+// PR ζ.1 client-side hot-fix — see lib/utils/transform-helpers.ts for the
+// rationale + the deferred PR ζ.2 migration that adds the same
+// literal-stripping to all five RPC bodies.
+
+describe('assertNoDml', () => {
+  it('accepts a CASE whose output literal contains "DROP" (iccomcod regression)', () => {
+    // The iccomcod TFM emits this exact shape. RPC-side blocklist
+    // false-positives on \ydrop\y inside the literal value; the
+    // client-side guard strips literals first and lets it through.
+    expect(() =>
+      assertNoDml(`CASE WHEN x = 'y' THEN '2_RCB-APPAREL-DROP' ELSE NULL END`),
+    ).not.toThrow()
+  })
+
+  it('rejects a bare DROP keyword in expression position', () => {
+    expect(() => assertNoDml(`DROP TABLE x`)).toThrow(/DML keyword.*DROP/)
+  })
+
+  it('accepts UPDATE inside a literal, rejects UPDATE in expression position', () => {
+    expect(() => assertNoDml(`'UPDATE me' || 'now'`)).not.toThrow()
+    expect(() => assertNoDml(`UPDATE x SET y = 'z'`)).toThrow(/DML keyword.*UPDATE/)
+  })
+
+  it("handles SQL '' escape inside a literal containing DROP", () => {
+    expect(() => assertNoDml(`'don''t DROP' || 'me'`)).not.toThrow()
+  })
+
+  it('passes a no-op same-table transform expression', () => {
+    expect(() =>
+      assertNoDml(`COALESCE(NULLIF(TRIM(row_data->>'STATUS'), ''), 'UNKNOWN')`),
+    ).not.toThrow()
   })
 })

@@ -377,3 +377,41 @@ export function wrapFieldRefsInJsonb(
   }
   return out
 }
+
+// ── DML blocklist (client-side hot-fix) ──────────────────────────────────────
+//
+// The Postgres RPCs that execute transform SQL (migration 074 for the
+// preview RPCs and migration 104 for the apply RPCs) gate every
+// expression with a blocklist regex of the shape
+// `\y(insert|update|delete|drop|alter|create|truncate|grant|revoke|copy|execute)\y`
+// applied to `lower(trim(<expression>))` — i.e. the raw SQL with
+// single-quoted SQL string literals NOT stripped. That means data
+// values containing a DML keyword as a substring (e.g. an iccomcod
+// SKU literal `'2_RCB-APPAREL-DROP'`) false-positive and the apply
+// rejects the transform with `Transform expression cannot contain
+// data modification statements`.
+//
+// `assertNoDml` is the PR ζ.1 client-side hot-fix: it strips
+// single-quoted literals first (reusing the TOKEN_RE classifier that
+// already handles `''`-escape inside literals), then runs the same
+// blocklist regex against the non-literal residue. Short-circuits
+// before the RPC sees the SQL with a clearer error message. The
+// structural fix — adding `regexp_replace` literal-stripping inside
+// the five RPC bodies — is deferred to PR ζ.2 (migration 105).
+
+export function stripSqlLiterals(sql: string): string {
+  return sql.replace(TOKEN_RE, (token) => (token.startsWith("'") ? "''" : token))
+}
+
+const DML_KEYWORDS =
+  /\b(update|delete|insert|drop|alter|create|truncate|grant|revoke|copy|execute|exec)\b/i
+
+export function assertNoDml(sql: string): void {
+  const stripped = stripSqlLiterals(sql)
+  const match = stripped.match(DML_KEYWORDS)
+  if (match) {
+    throw new Error(
+      `Transform contains a DML keyword in a non-literal position: ${match[1].toUpperCase()}`,
+    )
+  }
+}
