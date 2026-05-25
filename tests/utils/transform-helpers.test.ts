@@ -143,13 +143,16 @@ describe('wrapFieldRefsInJsonb — same-table overload', () => {
 
 // ─── wrapFieldRefsInJsonb — cross-table overload ─────────────────────────────
 //
-// Phase 4a-6 §4-OQ-A: cross-table TFMs MUST use table-qualified field
-// references (Table.Field). The new overload accepts a Map keyed by
-// table name with `{ alias, fieldNames }` entries, and:
+// Phase 4a-6 §4-OQ-A: cross-table TFMs SHOULD use table-qualified field
+// references (Table.Field). The overload accepts a Map keyed by table
+// name with `{ alias, fieldNames }` entries, and:
 //   • rewrites quoted "Table.Field" and the 2-token "Table"."Field" form
 //     to `(<alias>.row_data->>'Field')`
-//   • errors on bare/unqualified field references (would otherwise be
-//     ambiguous — two source tables can share a column name)
+//   • PR ζ: auto-qualifies bare/single-quoted refs whose name appears in
+//     EXACTLY ONE source table (restores apply-time robustness when the
+//     AI emits bare names under the legacy prompt)
+//   • errors on bare refs whose name collides across 2+ tables (a silent
+//     rewrite would bind to whichever table happens to win)
 //   • leaves SQL string literals untouched
 //   • leaves unknown identifiers (functions, keywords, custom names)
 //     alone
@@ -191,19 +194,46 @@ describe('wrapFieldRefsInJsonb — cross-table overload', () => {
     )
   })
 
-  it('throws on bare/unqualified field reference (cross-table cannot disambiguate)', () => {
-    // CIF_TYPE without a qualifier — could come from any joined table that
-    // happens to have that column. The helper must refuse rather than
-    // silently bind to the first match.
-    expect(() => wrapFieldRefsInJsonb(`UPPER(CIF_TYPE)`, fieldMap)).toThrow(
-      /table-qualified field references/i,
+  it('auto-qualifies a bare reference when its name appears in exactly one source table', () => {
+    // PR ζ — restores apply-time robustness when the AI emits bare names
+    // under the legacy prompt. CIF_TYPE is unique to CIF_MASTER, so the
+    // helper resolves it to that table's alias rather than throwing.
+    const out = wrapFieldRefsInJsonb(`UPPER(CIF_TYPE)`, fieldMap)
+    expect(out).toBe(`UPPER((j0.row_data->>'CIF_TYPE'))`)
+  })
+
+  it('auto-qualifies a quoted unqualified reference too ("CIF_TYPE")', () => {
+    const out = wrapFieldRefsInJsonb(`UPPER("CIF_TYPE")`, fieldMap)
+    expect(out).toBe(`UPPER((j0.row_data->>'CIF_TYPE'))`)
+  })
+
+  it('auto-qualifies multiple distinct bare refs in the same expression (COALESCE shape)', () => {
+    // CIF_NAME → CIF_MASTER (j0); LOAN_TYPE → LOAN_MASTER (d). Both are
+    // unique across the map; both auto-resolve.
+    const out = wrapFieldRefsInJsonb(
+      `COALESCE(NULLIF(TRIM(CIF_NAME), ''), TRIM(LOAN_TYPE))`,
+      fieldMap,
+    )
+    expect(out).toBe(
+      `COALESCE(NULLIF(TRIM((j0.row_data->>'CIF_NAME')), ''), TRIM((d.row_data->>'LOAN_TYPE')))`,
     )
   })
 
-  it('throws on quoted unqualified reference too ("CIF_TYPE")', () => {
-    expect(() =>
-      wrapFieldRefsInJsonb(`UPPER("CIF_TYPE")`, fieldMap),
-    ).toThrow(/table-qualified field references/i)
+  it('throws on a bare reference whose name collides across multiple source tables (ambiguous)', () => {
+    // STATUS is in both tables — auto-qualification cannot pick one
+    // without guessing. The strict throw remains, and the message names
+    // the colliding tables so the operator can fix the AI output.
+    const ambiguousMap = buildFieldMap([
+      ['LOAN_MASTER', { alias: 'd', fieldNames: ['STATUS'] }],
+      ['CIF_MASTER', { alias: 'j0', fieldNames: ['STATUS'] }],
+    ])
+    expect(() => wrapFieldRefsInJsonb(`UPPER(STATUS)`, ambiguousMap)).toThrow(
+      /table-qualified field references/i,
+    )
+    // Extended message must surface both colliding tables.
+    expect(() => wrapFieldRefsInJsonb(`UPPER(STATUS)`, ambiguousMap)).toThrow(
+      /LOAN_MASTER, CIF_MASTER/,
+    )
   })
 
   it("preserves single-quoted string literals untouched even when they contain field-name tokens", () => {
@@ -242,6 +272,48 @@ describe('wrapFieldRefsInJsonb — cross-table overload', () => {
     )
     expect(out).toBe(
       `COALESCE((d.row_data->>'LOAN_TYPE'), NULLIF((j0.row_data->>'CIF_TYPE'), ''))`,
+    )
+  })
+
+  it('Rootstock-shape: qualified "Source Table.Field" refs with spaces (Item Description shape)', () => {
+    // The Rootstock POC's failing TFMs use field names with spaces
+    // (Assy Desc, Assy Item) and source table names with spaces
+    // (Engineering BOM Masters). Exercise the COALESCE shape that the
+    // updated prompt teaches the AI to emit.
+    const rootstockMap = buildFieldMap([
+      [
+        'Engineering BOM Masters',
+        { alias: 'd', fieldNames: ['Assy Item', 'Assy Desc', 'Part #'] },
+      ],
+      ['Products', { alias: 'j0', fieldNames: ['ProductName', 'ProductSKU'] }],
+    ])
+    const out = wrapFieldRefsInJsonb(
+      `CASE WHEN "Engineering BOM Masters.Assy Desc" IS NULL OR TRIM("Engineering BOM Masters.Assy Desc"::text) = '' THEN NULL ELSE COALESCE(NULLIF(TRIM("Products.ProductName"), ''), TRIM("Engineering BOM Masters.Assy Desc")) END`,
+      rootstockMap,
+    )
+    expect(out).toBe(
+      `CASE WHEN (d.row_data->>'Assy Desc') IS NULL OR TRIM((d.row_data->>'Assy Desc')::text) = '' THEN NULL ELSE COALESCE(NULLIF(TRIM((j0.row_data->>'ProductName')), ''), TRIM((d.row_data->>'Assy Desc'))) END`,
+    )
+  })
+
+  it('Rootstock-shape: bare refs auto-qualify when distinct across tables (heritage AI output)', () => {
+    // When the AI emits the legacy bare-name form (rule-6 pre-PR-ζ) and
+    // both names happen to be unique across the cross-table map, the
+    // auto-qualifier silently rewrites — apply succeeds instead of
+    // bouncing back to the user with the qualification error.
+    const rootstockMap = buildFieldMap([
+      [
+        'Engineering BOM Masters',
+        { alias: 'd', fieldNames: ['Assy Item', 'Assy Desc'] },
+      ],
+      ['Products', { alias: 'j0', fieldNames: ['ProductName'] }],
+    ])
+    const out = wrapFieldRefsInJsonb(
+      `COALESCE(NULLIF(TRIM("ProductName"), ''), TRIM("Assy Desc"))`,
+      rootstockMap,
+    )
+    expect(out).toBe(
+      `COALESCE(NULLIF(TRIM((j0.row_data->>'ProductName')), ''), TRIM((d.row_data->>'Assy Desc')))`,
     )
   })
 })
