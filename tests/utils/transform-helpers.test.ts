@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
+  assertNoDml,
   fieldNeedsTransform,
+  stripSqlLiterals,
   wrapFieldRefsInJsonb,
   type CrossTableFieldEntry,
 } from '@/lib/utils/transform-helpers'
@@ -138,6 +140,17 @@ describe('wrapFieldRefsInJsonb — same-table overload', () => {
 
   it('returns the original SQL when the field list is empty', () => {
     expect(wrapFieldRefsInJsonb(`SELECT 1`, [])).toBe(`SELECT 1`)
+  })
+
+  it('PR ζ.1: throws on quoted-with-dot ref pointing to a field not in scope (catches routing-mismatch silent-degrade)', () => {
+    // The AI emitted "Products.ProductName" but apply routed to the
+    // same-table branch (because buildJoinSpec returned null spec).
+    // Previously this token silently passed through and Postgres
+    // crashed with "column does not exist"; the throw makes the
+    // routing mismatch visible with an actionable message.
+    expect(() =>
+      wrapFieldRefsInJsonb(`COALESCE("Products.ProductName", "STATUS")`, ['STATUS']),
+    ).toThrow(/Field "ProductName" from table "Products" is not part of this same-table TFM's source fields/)
   })
 })
 
@@ -296,6 +309,56 @@ describe('wrapFieldRefsInJsonb — cross-table overload', () => {
     )
   })
 
+  it('PR ζ.1: auto-qualifies a quoted-with-dot ref whose table prefix is unknown but field name is unique to a known table', () => {
+    // PR ζ.1 smoke failure (Defect 1, Path A): the AI emitted
+    // "Products.ProductName" but Pass 1's prefix lookup missed (e.g.
+    // because the loader stored the table under a different name, or
+    // the field appeared via a renamed projection). Fall-through to
+    // the bare-field auto-qualifier must rescue when the field is
+    // unique across the map.
+    const out = wrapFieldRefsInJsonb(
+      `"WrongTable.ProductName" || "Engineering BOM Masters.Assy Desc"`,
+      buildFieldMap([
+        ['Engineering BOM Masters', { alias: 'd', fieldNames: ['Assy Desc', 'Assy Item'] }],
+        ['Products', { alias: 'j0', fieldNames: ['ProductName'] }],
+      ]),
+    )
+    expect(out).toBe(
+      `(j0.row_data->>'ProductName') || (d.row_data->>'Assy Desc')`,
+    )
+  })
+
+  it('PR ζ.1: throws on quoted-with-dot ref whose bare field name collides across multiple tables', () => {
+    // When Pass 1's prefix lookup misses AND the bare field name is
+    // ambiguous, the fall-through must throw with the colliding
+    // tables named — same message shape as the bare-ref ambiguity
+    // throw at the bottom of the cross-table overload.
+    const ambiguousMap = buildFieldMap([
+      ['T1', { alias: 'd', fieldNames: ['STATUS'] }],
+      ['T2', { alias: 'j0', fieldNames: ['STATUS'] }],
+    ])
+    expect(() => wrapFieldRefsInJsonb(`UPPER("WrongTable.STATUS")`, ambiguousMap)).toThrow(
+      /table-qualified field references/i,
+    )
+    expect(() => wrapFieldRefsInJsonb(`UPPER("WrongTable.STATUS")`, ambiguousMap)).toThrow(
+      /T1, T2/,
+    )
+  })
+
+  it('PR ζ.1: leaves unknown qualifier.unknown-field alone (e.g. schema-qualified function refs unchanged)', () => {
+    // Regression guard: if neither the prefix nor the bare field name
+    // match, the token must pass through unchanged. Protects existing
+    // schema-qualified function references like "some_schema.helper".
+    const fmap = buildFieldMap([['T1', { alias: 'd', fieldNames: ['STATUS'] }]])
+    const out = wrapFieldRefsInJsonb(
+      `"some_schema.unknown_helper" || "T1.STATUS"`,
+      fmap,
+    )
+    expect(out).toBe(
+      `"some_schema.unknown_helper" || (d.row_data->>'STATUS')`,
+    )
+  })
+
   it('Rootstock-shape: bare refs auto-qualify when distinct across tables (heritage AI output)', () => {
     // When the AI emits the legacy bare-name form (rule-6 pre-PR-ζ) and
     // both names happen to be unique across the cross-table map, the
@@ -315,5 +378,64 @@ describe('wrapFieldRefsInJsonb — cross-table overload', () => {
     expect(out).toBe(
       `COALESCE(NULLIF(TRIM((j0.row_data->>'ProductName')), ''), TRIM((d.row_data->>'Assy Desc')))`,
     )
+  })
+})
+
+// ─── stripSqlLiterals ────────────────────────────────────────────────────────
+//
+// PR ζ.1 hot-fix support — strips single-quoted SQL string literals so
+// downstream blocklist checks (assertNoDml below) don't false-positive on
+// data values containing DML keywords (e.g. `'2_RCB-APPAREL-DROP'`).
+
+describe('stripSqlLiterals', () => {
+  it('removes single-quoted strings, preserves surrounding structure', () => {
+    expect(stripSqlLiterals(`'foo' || 'bar'`)).toBe(`'' || ''`)
+  })
+
+  it("collapses SQL '' escape inside a single-quoted literal", () => {
+    // `'a''b'` is a single SQL literal whose value is `a'b`. The TOKEN_RE
+    // greedy `'(?:[^']|'')*'` consumes the whole token; strip replaces
+    // it with an empty literal.
+    expect(stripSqlLiterals(`'a''b'`)).toBe(`''`)
+  })
+
+  it('leaves bare identifiers and double-quoted identifiers untouched', () => {
+    expect(stripSqlLiterals(`UPPER("Field") = 'x'`)).toBe(`UPPER("Field") = ''`)
+  })
+})
+
+// ─── assertNoDml ─────────────────────────────────────────────────────────────
+//
+// PR ζ.1 client-side hot-fix — see lib/utils/transform-helpers.ts for the
+// rationale + the deferred PR ζ.2 migration that adds the same
+// literal-stripping to all five RPC bodies.
+
+describe('assertNoDml', () => {
+  it('accepts a CASE whose output literal contains "DROP" (iccomcod regression)', () => {
+    // The iccomcod TFM emits this exact shape. RPC-side blocklist
+    // false-positives on \ydrop\y inside the literal value; the
+    // client-side guard strips literals first and lets it through.
+    expect(() =>
+      assertNoDml(`CASE WHEN x = 'y' THEN '2_RCB-APPAREL-DROP' ELSE NULL END`),
+    ).not.toThrow()
+  })
+
+  it('rejects a bare DROP keyword in expression position', () => {
+    expect(() => assertNoDml(`DROP TABLE x`)).toThrow(/DML keyword.*DROP/)
+  })
+
+  it('accepts UPDATE inside a literal, rejects UPDATE in expression position', () => {
+    expect(() => assertNoDml(`'UPDATE me' || 'now'`)).not.toThrow()
+    expect(() => assertNoDml(`UPDATE x SET y = 'z'`)).toThrow(/DML keyword.*UPDATE/)
+  })
+
+  it("handles SQL '' escape inside a literal containing DROP", () => {
+    expect(() => assertNoDml(`'don''t DROP' || 'me'`)).not.toThrow()
+  })
+
+  it('passes a no-op same-table transform expression', () => {
+    expect(() =>
+      assertNoDml(`COALESCE(NULLIF(TRIM(row_data->>'STATUS'), ''), 'UNKNOWN')`),
+    ).not.toThrow()
   })
 })
