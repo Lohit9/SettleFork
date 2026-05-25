@@ -64,8 +64,8 @@ import type { ProjectStats } from '@/lib/quality/project-stats'
 function projectStats(overrides: Partial<ProjectStats> = {}): ProjectStats {
   return {
     state: 'mappings_generated',
-    target: { approved: 52, total: 68, unmapped: 16, needsReview: 0, usedInMapping: 52, schemaTotal: 68 },
-    source: { decided: 57, total: 70, usedInMapping: 57 },
+    target: { approved: 52, total: 68, unmapped: 16, needsReview: 0, usedInMapping: 52, schemaTotal: 68, tables: 3 },
+    source: { decided: 57, total: 70, usedInMapping: 57, tables: 5 },
     transforms: { complete: 15, total: 51 },
     blocking: 0,
     ...overrides,
@@ -199,8 +199,8 @@ describe('ProjectCard — dropped stats signals', () => {
         project={project({
           projectStats: projectStats({
             state: 'awaiting_data',
-            target: { approved: 0, total: 0, unmapped: 0, needsReview: 0, usedInMapping: 0, schemaTotal: 0 },
-            source: { decided: 0, total: 0, usedInMapping: 0 },
+            target: { approved: 0, total: 0, unmapped: 0, needsReview: 0, usedInMapping: 0, schemaTotal: 0, tables: 0 },
+            source: { decided: 0, total: 0, usedInMapping: 0, tables: 0 },
             transforms: { complete: 0, total: 0 },
           }),
         })}
