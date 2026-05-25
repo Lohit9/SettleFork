@@ -114,7 +114,7 @@ import {
 } from '@/lib/ai/project-context-blocks'
 import { composeTransformUserMessage } from '@/lib/ai/transform-prompt'
 import { TRANSFORM_SYSTEM_PROMPT } from '@/lib/ai/transform-system-prompt'
-import { fieldNeedsTransform, wrapFieldRefsInJsonb } from '@/lib/utils/transform-helpers'
+import { assertNoDml, fieldNeedsTransform, wrapFieldRefsInJsonb } from '@/lib/utils/transform-helpers'
 import { buildJoinSpec } from '@/lib/utils/transform-cross-table'
 import { resolveTransformationIntent } from '@/lib/utils/transformation-intent'
 import { logActivity } from '@/lib/actions/activity-log'
@@ -283,6 +283,14 @@ export interface TransformPageData {
 
 const MAINTENANCE_GUARD_MESSAGE =
   'Mapping writes are temporarily disabled for scheduled maintenance'
+
+// PR ζ.1 diagnostic heuristic — matches any double-quoted token that
+// contains a dot, e.g. `"Engineering BOM Masters.Assy Desc"`. Used at
+// applyTransform / testTransformation entry points to surface the
+// silent-degrade where the AI produced cross-table-qualified SQL but
+// buildJoinSpec returned `spec:null` (same-table fallback path).
+// Investigation: /tmp/pr-zeta-1-investigation.md §1.
+const QUALIFIED_REF_HEURISTIC = /"[^"]+\.[^"]+"/
 
 export type TransformWriteErrorCode =
   | 'MAINTENANCE_MODE'
@@ -2148,6 +2156,25 @@ export async function testTransformation(
         errorCode: crossTableJoinSpec.errorCode,
       }
     }
+    // PR ζ.1 diagnostic — see applyTransform for context.
+    if (!crossTableJoinSpec.spec && QUALIFIED_REF_HEURISTIC.test(sql)) {
+      console.warn('[testTransformation] buildJoinSpec returned null spec for qualified-ref SQL', {
+        tfmId: ctx.tfm.id,
+        sqlPreview: sql.slice(0, 200),
+      })
+    }
+  }
+
+  // PR ζ.1 client-side hot-fix: see applyTransform for context. Runs
+  // before any RPC call so iccomcod-style literals containing "DROP"
+  // are accepted instead of bouncing through the RPC's
+  // not-literal-aware blocklist.
+  try {
+    assertNoDml(sql.trim())
+  } catch (e) {
+    const msg =
+      e instanceof Error ? e.message : 'Transform contains a DML keyword in a non-literal position'
+    return { success: false, error: msg }
   }
 
   // Source table: same resolution as runFullTransformTest.
@@ -2519,6 +2546,17 @@ export async function applyTransform(
         errorCode: joinSpec.errorCode,
       }
     }
+    // PR ζ.1 diagnostic: AI emitted qualified "Table.Field" refs but
+    // buildJoinSpec returned null spec — apply will route to same-table
+    // fallback which can't resolve the qualifier. Surfaces the
+    // silent-degrade described in /tmp/pr-zeta-1-investigation.md §1
+    // (Path B). Remove once Rootstock loader is confirmed correct.
+    if (!joinSpec.spec && QUALIFIED_REF_HEURISTIC.test(sql)) {
+      console.warn('[applyTransform] buildJoinSpec returned null spec for qualified-ref SQL', {
+        tfmId: ctx.tfm.id,
+        sqlPreview: sql.slice(0, 200),
+      })
+    }
   }
 
   return guardWrites(ctx.projectId, async () => {
@@ -2529,6 +2567,16 @@ export async function applyTransform(
       // ── Mapped TFM — single call via the joined RPC ─────────────────────────
       const srcField = ctx.primarySource!.sourceField!
       const cleaned = sql.replace(/;+$/, '').trim()
+      // PR ζ.1 client-side hot-fix: short-circuit DML false-positives
+      // from data literals containing keywords like "DROP". RPC-side
+      // structural fix deferred to PR ζ.2 (migration 105).
+      try {
+        assertNoDml(cleaned)
+      } catch (e) {
+        const msg =
+          e instanceof Error ? e.message : 'Transform contains a DML keyword in a non-literal position'
+        return { success: false, rowsAffected: 0, error: msg }
+      }
       const okSpec = joinSpec as Extract<typeof joinSpec, { ok: true }>
 
       let wrappedSql: string
