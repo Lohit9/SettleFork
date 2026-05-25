@@ -43,3 +43,6 @@ next-env.d.ts
 # Editor/sed backups of env files
 .env*.bak
 .env*.swp
+
+# Prototype/whiteboard HTML artifacts — use Obsidian or Notion for docs
+*.html
