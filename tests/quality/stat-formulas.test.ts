@@ -114,6 +114,14 @@ function buildInputs(overrides: Partial<ComputeProjectStatsInputs> = {}): Comput
       status: 'approved',
       is_acknowledged: false,
       combination_type: 'custom_sql',
+      // PR ε — completed VA: non-empty combination_sql is the canonical
+      // "delivers a fixed value" signal. Pre-PR every primary VA TFM
+      // counted toward `targetFieldsUsedInMapping` regardless of SQL
+      // content; post-PR only TFMs that deliver a value count, so this
+      // field is now load-bearing for the `=== 4` assertions below.
+      // Test cases that exercise the blank-VA branch construct a
+      // separate fixture with combination_sql: null/'   '.
+      combination_sql: "'TENANT_XYZ'::uuid",
       needs_transformation: null,
     },
   ]
@@ -274,12 +282,15 @@ describe('computeProjectStats — targetFieldsUsedInMapping', () => {
   })
 
   it('deduplicates when multiple primary TFMs share a target_field_id', () => {
-    // Append a second primary TFM also pointing at t_id. Both are primaries
-    // (non-rejected, non-bare-ack); the distinct set must collapse to one
-    // entry for t_id. (NB: in production the UNIQUE constraint on
-    // `target_field_mappings.target_field_id` per project would prevent
-    // this row coexistence; the test pins the formula's defensive DISTINCT,
-    // which mirrors what the Set semantics produce.)
+    // Append a second primary TFM also pointing at t_id, AND an MS row so
+    // it passes the PR ε "delivers a value" filter — otherwise the dedup
+    // would be obscured by the new filter dropping the extra outright
+    // (which would still arrive at 4, but for the wrong reason). Both
+    // TFMs are primaries (non-rejected, non-bare-ack); the distinct set
+    // must collapse to one entry for t_id. (NB: in production the UNIQUE
+    // constraint on `target_field_mappings.target_field_id` per project
+    // would prevent this row coexistence; the test pins the formula's
+    // defensive DISTINCT, which mirrors what the Set semantics produce.)
     const base = buildInputs()
     const inputs = buildInputs({
       tfms: [
@@ -292,6 +303,15 @@ describe('computeProjectStats — targetFieldsUsedInMapping', () => {
           is_acknowledged: false,
           combination_type: null,
           needs_transformation: null,
+        },
+      ],
+      mappingSources: [
+        ...base.mappingSources,
+        {
+          target_field_mapping_id: 'tfm-extra',
+          source_field_id: 's_id',
+          ordinal: 0,
+          type_compatibility: 'direct compatible',
         },
       ],
     })
@@ -313,6 +333,46 @@ describe('computeProjectStats — targetFieldsUsedInMapping', () => {
     })
     const stats = computeProjectStats(inputs)
     expect(stats.targetFieldsUsedInMapping).toBe(4)
+  })
+
+  // PR ε — "delivers a value" guard. The baseline tfm6 (VA) has
+  // combination_sql set and counts; a clone of tfm6 with NULL combination_sql
+  // and no MS rows is a blank placeholder and must NOT count toward the
+  // chip numerator. Pre-PR the count was 4 here (tfm6 included blindly);
+  // post-PR it drops to 3 (tfm1, tfm2, tfm3 still deliver via MS rows).
+  // If this assertion regresses, the chip will start inflating on any
+  // project that loads placeholder VA rows (e.g. Rootstock POC).
+  it('excludes a VA with combination_type=custom_sql AND combination_sql is null', () => {
+    const base = buildInputs()
+    const inputs = buildInputs({
+      tfms: [
+        ...base.tfms.filter((t) => t.id !== 'tfm6'),
+        {
+          ...base.tfms.find((t) => t.id === 'tfm6')!,
+          combination_sql: null,
+        },
+      ],
+    })
+    const stats = computeProjectStats(inputs)
+    expect(stats.targetFieldsUsedInMapping).toBe(3)
+  })
+
+  // Defensive: empty/whitespace strings collapse to the same "no value"
+  // signal as null, matching the codebase's existing combination_sql
+  // predicate (see tests/actions/transformations-context.test.ts:282).
+  it('excludes a VA with combination_sql that is whitespace-only', () => {
+    const base = buildInputs()
+    const inputs = buildInputs({
+      tfms: [
+        ...base.tfms.filter((t) => t.id !== 'tfm6'),
+        {
+          ...base.tfms.find((t) => t.id === 'tfm6')!,
+          combination_sql: '   ',
+        },
+      ],
+    })
+    const stats = computeProjectStats(inputs)
+    expect(stats.targetFieldsUsedInMapping).toBe(3)
   })
 })
 

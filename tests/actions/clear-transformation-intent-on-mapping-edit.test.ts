@@ -1,40 +1,44 @@
 // @vitest-environment node
 //
-// "Clear confidence on all user mapping edits".
+// "Clear transformation_intent on all user mapping edits".
 //
-// Locked product model: a user edit clears both `ai_reasoning` AND
-// `confidence`. An AI confidence number ("92%") describes the AI's confidence
-// in its original proposal, not the user's edited version — so every edit
-// path clears it. Approve does NOT clear (it preserves AI commentary as
-// documentation of endorsed work).
+// Locked product model: a user edit clears the AI commentary on the TFM.
+// `target_field_mappings.transformation_intent` is the Path D mapping-pass
+// recipe (migration 093) — free-form AI prose describing the AI's intended
+// transformation for the original pairing. Once the user edits the mapping
+// (source/target swap, source-set edit) or hand-edits the transform SQL, that
+// recipe no longer describes the live mapping, so every edit path clears it.
+// Approve does NOT clear (it preserves AI commentary as documentation of
+// endorsed work) — same locked decision as `ai_reasoning` (PR A2) and
+// `confidence`.
 //
-// `target_field_mappings.confidence` is trigger-derived from
-// MIN(mapping_sources.confidence) (migration 074) for non-custom_sql,
-// non-acknowledged TFMs. The implementation works WITH the trigger:
-//   • mapped TFMs   → null every mapping_sources row; the trigger recomputes
-//                     TFM.confidence = MIN(all-null) = null.
-//   • custom_sql VA → the trigger skips it; write target_field_mappings
-//                     .confidence = null directly.
+// Unlike `ai_reasoning` (frozen in `original_ai_reasoning`, migration 083)
+// there is no `original_transformation_intent` column — the clear is
+// destructive of the mapping-phase recipe by design (investigation found no
+// provenance-preservation use case; see
+// notes/clear-transformation-prose-on-edit-investigation.md).
 //
-// Strategy mirrors clear-ai-reasoning-on-mapping-edit.test.ts: the write
-// paths touch Supabase auth, the permission check, the maintenance gate, and
-// several RPCs hostile to mocking — so we read the action source files and
-// assert the call-site shape locks the decision in place.
+// Strategy mirrors clear-ai-reasoning-on-mapping-edit.test.ts /
+// clear-confidence-on-mapping-edit.test.ts: the write paths touch Supabase
+// auth, the permission check, the maintenance gate, and several RPCs hostile
+// to mocking — so we read the action source files and assert the call-site
+// shape locks the decision in place.
 //
 // Scope locked here as regression guards:
-//   A.  Source swap (updateMappingSourceField) — clears confidence.
-//   B.  Target swap (updateMappingTargetField, non-merge) — clears confidence.
+//   A.  Source swap (updateMappingSourceField) — clears transformation_intent
+//       in the same UPDATE as the status flip. No-op short-circuit does NOT.
+//   B.  Target swap (updateMappingTargetField, plain + bare-ack) — clears.
+//       No-op short-circuit does NOT.
 //   C.  Target swap merge case (mergeTargetFieldMappings) — survivor cleared
-//       via editMappingSources.
-//   D.  editMappingSources — clears confidence deterministically regardless
-//       of source composition.
-//   E.  updateTransformSQL — clears confidence.
-//   F.  autoSaveTransform — clears confidence.
-//   G.  saveTransformation — does NOT clear confidence (status-only flip).
-//   H.  approveFieldMapping — does NOT clear confidence (locked product
-//       decision: approve preserves AI commentary).
-//   I.  bulkApproveFieldMappingsForTargetTable — does NOT clear confidence.
-//   J.  The branch-by-combination_type helpers.
+//       via editMappingSources; the merge executor adds no separate write.
+//   D.  editMappingSources — clears in the Step-13 TFM update.
+//   E.  updateTransformSQL — clears via clearStaleAiMetadataForTransformEdit.
+//   F.  autoSaveTransform — clears via the same helper.
+//   G.  saveTransformation — does NOT clear (status-only flip).
+//   H.  approveFieldMapping — does NOT clear (locked: approve preserves AI
+//       commentary).
+//   I.  bulkApproveFieldMappingsForTargetTable — does NOT clear.
+//   J.  The shared transform-edit helper — guarded clear + best-effort.
 
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -62,11 +66,6 @@ function sliceBetween(src: string, startMarker: string, endMarker: string): stri
 // Sliced action bodies
 // ─────────────────────────────────────────────────────────────────────
 
-const CONFIDENCE_HELPER = sliceBetween(
-  REDESIGN_SRC,
-  'async function clearMappingConfidenceForEdit(',
-  '// ─── 5.1 updateMappingSourceField',
-)
 const SRC_FIELD_BODY = sliceBetween(
   REDESIGN_SRC,
   'export async function updateMappingSourceField(',
@@ -120,37 +119,27 @@ const SAVE_BODY = sliceBetween(
 )
 
 // ─────────────────────────────────────────────────────────────────────
-// J — branch-by-combination_type helpers
+// J — shared transform-edit helper
 // ─────────────────────────────────────────────────────────────────────
 
-describe('[clear-confidence] J — helpers branch by combination_type', () => {
-  it('J1: clearMappingConfidenceForEdit — custom_sql writes TFM.confidence directly, else nulls mapping_sources', () => {
-    // custom_sql (value assignment) branch — trigger skips it; direct write.
-    expect(CONFIDENCE_HELPER).toMatch(
-      /combinationType\s*===\s*['"]custom_sql['"]/,
+describe('[clear-transformation-intent] J — clearStaleAiMetadataForTransformEdit', () => {
+  it('J1: accepts currentTransformationIntent and clears the TFM column under a non-null guard', () => {
+    // The arg is threaded so the guard can short-circuit a debounced re-save
+    // (mirrors the currentReasoning guard).
+    expect(TX_HELPER_BODY).toMatch(/currentTransformationIntent:\s*string\s*\|\s*null/)
+    expect(TX_HELPER_BODY).toMatch(
+      /args\.currentTransformationIntent\s*!==\s*null/,
     )
-    expect(CONFIDENCE_HELPER).toMatch(
-      /from\(['"]target_field_mappings['"]\)\s*\.update\(\{\s*confidence:\s*null/,
-    )
-    // mapped branch — null every mapping_sources row, let the trigger recompute.
-    expect(CONFIDENCE_HELPER).toMatch(
-      /from\(['"]mapping_sources['"]\)\s*\.update\(\{\s*confidence:\s*null\s*\}\)\s*\.eq\(['"]target_field_mapping_id['"]/,
+    expect(TX_HELPER_BODY).toMatch(
+      /from\(['"]target_field_mappings['"]\)\s*\.update\(\{\s*transformation_intent:\s*null/,
     )
   })
 
-  it('J2: clearStaleAiMetadataForTransformEdit branches the same way', () => {
-    expect(TX_HELPER_BODY).toMatch(
-      /combinationType\s*===\s*['"]custom_sql['"]/,
-    )
-    expect(TX_HELPER_BODY).toMatch(
-      /from\(['"]target_field_mappings['"]\)\s*\.update\(\{\s*confidence:\s*null/,
-    )
-    expect(TX_HELPER_BODY).toMatch(
-      /from\(['"]mapping_sources['"]\)\s*\.update\(\{\s*confidence:\s*null\s*\}\)\s*\.eq\(['"]target_field_mapping_id['"]/,
-    )
-    // Best-effort: failures are logged, never surfaced as action failures.
+  it('J2: the clear is best-effort and emits a transformation_intent provenance entry', () => {
     expect(TX_HELPER_BODY).toMatch(/console\.warn/)
     expect(TX_HELPER_BODY).not.toMatch(/success:\s*false/)
+    expect(TX_HELPER_BODY).toMatch(/fieldPath:\s*['"]transformation_intent['"]/)
+    expect(TX_HELPER_BODY).toMatch(/entityType:\s*['"]target_field_mapping['"]/)
   })
 })
 
@@ -158,34 +147,21 @@ describe('[clear-confidence] J — helpers branch by combination_type', () => {
 // A — source swap
 // ─────────────────────────────────────────────────────────────────────
 
-describe('[clear-confidence] A — updateMappingSourceField', () => {
-  it('A1: the swapped mapping_sources row is written with confidence: null', () => {
+describe('[clear-transformation-intent] A — updateMappingSourceField', () => {
+  it('A1: clears transformation_intent in the same TFM UPDATE as the status flip', () => {
     expect(SRC_FIELD_BODY).toMatch(
-      /source_field_id:\s*newSourceFieldId,[\s\S]{0,160}confidence:\s*null/,
+      /from\(['"]target_field_mappings['"]\)\s*\.update\(\{[\s\S]{0,200}status:\s*['"]approved['"],\s*ai_reasoning:\s*null,\s*transformation_intent:\s*null/,
     )
   })
 
-  it('A2: the legacy "100" / FLAT_VIEW_USER_CONFIDENCE confidence write is gone', () => {
-    expect(SRC_FIELD_BODY).not.toMatch(/confidence:\s*newConfidence/)
-    expect(SRC_FIELD_BODY).not.toMatch(/FLAT_VIEW_USER_CONFIDENCE/)
-    // The now-meaningless `newConfidence` input parameter is removed.
-    expect(SRC_FIELD_BODY).not.toMatch(/newConfidence/)
-  })
-
-  it('A3: invokes clearMappingConfidenceForEdit so multi-source TFMs clear deterministically', () => {
-    expect(SRC_FIELD_BODY).toMatch(
-      /clearMappingConfidenceForEdit\(\s*tfm\.id,\s*tfm\.combination_type/,
-    )
-  })
-
-  it('A4: the no-op short-circuit (source unchanged) does NOT clear confidence', () => {
+  it('A2: the no-op short-circuit (source unchanged) does NOT clear transformation_intent', () => {
+    // Affirmation is not an edit — the heritage no-op path must stay inert.
     const noop = sliceBetween(
       SRC_FIELD_BODY,
       'currentSourceFieldId === newSourceFieldId',
       'Step 10',
     )
-    expect(noop).not.toMatch(/confidence/)
-    expect(noop).not.toMatch(/clearMappingConfidenceForEdit/)
+    expect(noop).not.toMatch(/transformation_intent/)
   })
 })
 
@@ -193,20 +169,20 @@ describe('[clear-confidence] A — updateMappingSourceField', () => {
 // B — target swap (non-merge)
 // ─────────────────────────────────────────────────────────────────────
 
-describe('[clear-confidence] B — updateMappingTargetField (plain swap)', () => {
-  it('B1: plain swap invokes clearMappingConfidenceForEdit after the TFM update', () => {
+describe('[clear-transformation-intent] B — updateMappingTargetField (plain swap)', () => {
+  it('B1: plain swap clears transformation_intent in the same UPDATE as the target swap', () => {
     expect(TGT_FIELD_BODY).toMatch(
-      /clearMappingConfidenceForEdit\(\s*tfm\.id,\s*tfm\.combination_type/,
+      /\.update\(\{[\s\S]{0,200}target_field_id:\s*newTargetFieldId,\s*status:\s*['"]approved['"],\s*ai_reasoning:\s*null,\s*transformation_intent:\s*null/,
     )
   })
 
-  it('B2: the no-op short-circuit (target unchanged) does NOT clear confidence', () => {
+  it('B2: the no-op short-circuit (target unchanged) does NOT clear transformation_intent', () => {
     const noop = sliceBetween(
       TGT_FIELD_BODY,
       'tfm.target_field_id === newTargetFieldId',
       'Step 9',
     )
-    expect(noop).not.toMatch(/clearMappingConfidenceForEdit/)
+    expect(noop).not.toMatch(/transformation_intent/)
   })
 })
 
@@ -214,14 +190,13 @@ describe('[clear-confidence] B — updateMappingTargetField (plain swap)', () =>
 // C — target swap merge case
 // ─────────────────────────────────────────────────────────────────────
 
-describe('[clear-confidence] C — mergeTargetFieldMappings survivor', () => {
+describe('[clear-transformation-intent] C — mergeTargetFieldMappings survivor', () => {
   it('C1: merge folds sources via editMappingSources, so the survivor is cleared for free', () => {
     // The survivor gains the folded sources through editMappingSources,
-    // which clears confidence (D1/D2). The merge executor adds no separate
-    // confidence write of its own.
+    // which clears transformation_intent (D1). The merge executor adds no
+    // separate transformation_intent write of its own.
     expect(MERGE_BODY).toMatch(/editMappingSources\(/)
-    expect(MERGE_BODY).not.toMatch(/confidence:\s*null/)
-    expect(MERGE_BODY).not.toMatch(/clearMappingConfidenceForEdit/)
+    expect(MERGE_BODY).not.toMatch(/transformation_intent/)
   })
 })
 
@@ -229,19 +204,10 @@ describe('[clear-confidence] C — mergeTargetFieldMappings survivor', () => {
 // D — editMappingSources
 // ─────────────────────────────────────────────────────────────────────
 
-describe('[clear-confidence] D — editMappingSources', () => {
-  it('D1: every replacement mapping_sources row is written with confidence: null', () => {
-    expect(EDIT_SOURCES_BODY).toMatch(/confidence:\s*null\s+as\s+number\s*\|\s*null/)
-    // The legacy hardcoded 100 is gone.
-    expect(EDIT_SOURCES_BODY).not.toMatch(/confidence:\s*100/)
-  })
-
-  it('D2: the Step-13 TFM update also writes confidence: null (covers VA→mapped conversion)', () => {
-    // For a normal mapped→mapped edit the trigger handles it; the direct
-    // write additionally covers the custom_sql→single conversion, where the
-    // trigger skips the TFM during the source-replacement RPC.
+describe('[clear-transformation-intent] D — editMappingSources', () => {
+  it('D1: the Step-13 TFM update writes transformation_intent: null', () => {
     expect(EDIT_SOURCES_BODY).toMatch(
-      /from\(['"]target_field_mappings['"]\)\s*\.update\(\{[\s\S]{0,200}confidence:\s*null/,
+      /from\(['"]target_field_mappings['"]\)\s*\.update\(\{[\s\S]{0,260}transformation_intent:\s*null/,
     )
   })
 })
@@ -250,25 +216,22 @@ describe('[clear-confidence] D — editMappingSources', () => {
 // E / F — transform-edit actions
 // ─────────────────────────────────────────────────────────────────────
 
-describe('[clear-confidence] E/F — transform-edit actions', () => {
-  it('E1: updateTransformSQL reads combination_type and passes it to the clear helper', () => {
-    // The select also reads `transformation_intent` (clear-transformation-
-    // intent PR) — `combination_type` is still present and still passed to
-    // the helper, the confidence behaviour guarded here is unchanged.
+describe('[clear-transformation-intent] E/F — transform-edit actions', () => {
+  it('E1: updateTransformSQL reads transformation_intent and passes it to the clear helper', () => {
     expect(TX_SQL_BODY).toMatch(
       /select\(['"]project_id,\s*ai_reasoning,\s*transformation_intent,\s*combination_type['"]\)/,
     )
     expect(TX_SQL_BODY).toMatch(
-      /clearStaleAiMetadataForTransformEdit\(\{[\s\S]{0,260}combinationType:\s*tfmRow\.combination_type/,
+      /clearStaleAiMetadataForTransformEdit\(\{[\s\S]{0,260}currentTransformationIntent:\s*tfmRow\.transformation_intent/,
     )
   })
 
-  it('F1: autoSaveTransform reads combination_type and passes it to the clear helper', () => {
+  it('F1: autoSaveTransform reads transformation_intent and passes it to the clear helper', () => {
     expect(AUTO_SAVE_BODY).toMatch(
       /select\(['"]project_id,\s*ai_reasoning,\s*transformation_intent,\s*combination_type['"]\)/,
     )
     expect(AUTO_SAVE_BODY).toMatch(
-      /clearStaleAiMetadataForTransformEdit\(\{[\s\S]{0,260}combinationType:\s*tfmRow\.combination_type/,
+      /clearStaleAiMetadataForTransformEdit\(\{[\s\S]{0,260}currentTransformationIntent:\s*tfmRow\.transformation_intent/,
     )
   })
 })
@@ -277,10 +240,10 @@ describe('[clear-confidence] E/F — transform-edit actions', () => {
 // G — saveTransformation excluded (status-only flip)
 // ─────────────────────────────────────────────────────────────────────
 
-describe('[clear-confidence] G — saveTransformation (regression)', () => {
-  it('G1: saveTransformation does NOT clear confidence — status-only flip', () => {
+describe('[clear-transformation-intent] G — saveTransformation (regression)', () => {
+  it('G1: saveTransformation does NOT clear transformation_intent — status-only flip', () => {
     expect(SAVE_BODY).not.toMatch(/clearStaleAiMetadataForTransformEdit/)
-    expect(SAVE_BODY).not.toMatch(/confidence:\s*null/)
+    expect(SAVE_BODY).not.toMatch(/transformation_intent/)
   })
 })
 
@@ -288,21 +251,12 @@ describe('[clear-confidence] G — saveTransformation (regression)', () => {
 // H / I — approve paths unaffected (locked product decision)
 // ─────────────────────────────────────────────────────────────────────
 
-describe('[clear-confidence] H/I — approve paths (regression guards)', () => {
-  it('H1: approveFieldMapping does NOT clear confidence — approve preserves AI commentary', () => {
-    expect(APPROVE_BODY).not.toMatch(/clearMappingConfidenceForEdit/)
-    expect(APPROVE_BODY).not.toMatch(/confidence:\s*null/)
-    expect(APPROVE_BODY).not.toMatch(
-      /from\(['"]mapping_sources['"]\)\s*\.update/,
-    )
+describe('[clear-transformation-intent] H/I — approve paths (regression guards)', () => {
+  it('H1: approveFieldMapping does NOT clear transformation_intent — approve preserves AI commentary', () => {
+    expect(APPROVE_BODY).not.toMatch(/transformation_intent/)
   })
 
-  it('I1: bulkApproveFieldMappingsForTargetTable does NOT clear confidence', () => {
-    expect(BULK_APPROVE_BODY).not.toMatch(/clearMappingConfidenceForEdit/)
-    expect(BULK_APPROVE_BODY).not.toMatch(/confidence:\s*null/)
-    // Approve is a TFM-status-only write — it never touches mapping_sources.
-    expect(BULK_APPROVE_BODY).not.toMatch(
-      /from\(['"]mapping_sources['"]\)\s*\.update/,
-    )
+  it('I1: bulkApproveFieldMappingsForTargetTable does NOT clear transformation_intent', () => {
+    expect(BULK_APPROVE_BODY).not.toMatch(/transformation_intent/)
   })
 })

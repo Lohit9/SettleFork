@@ -70,6 +70,13 @@ function addMapping(
     status?: 'approved' | 'needs_review' | 'rejected'
     isAck?: boolean
     combinationType?: string | null
+    /** PR ε — populate `combination_sql` so tests can distinguish
+     *  completed VAs (non-empty SQL → delivers a fixed value) from
+     *  blank placeholders. Defaults to null, which is the right
+     *  default for mapped TFMs (they don't carry combination_sql)
+     *  and for blank-VA fixtures that want to exercise the new
+     *  filter. */
+    combinationSql?: string | null
     needsTransformation?: boolean | null
     vaDismissed?: boolean | null
     confidence?: number
@@ -82,6 +89,7 @@ function addMapping(
     status = 'approved',
     isAck = false,
     combinationType = null,
+    combinationSql = null,
     needsTransformation = null,
     vaDismissed = null,
     confidence = 80,
@@ -94,6 +102,7 @@ function addMapping(
     status,
     is_acknowledged: isAck,
     combination_type: combinationType,
+    combination_sql: combinationSql,
     needs_transformation: needsTransformation,
     va_dismissed: vaDismissed,
   })
@@ -286,6 +295,74 @@ describe('rollupProjectStats — source.usedInMapping', () => {
   })
 })
 
+// ─── PR θ — table-inventory counts on each axis ────────────────────────────
+//
+// PR θ added `source.tables` and `target.tables` to `ProjectStats` so the
+// Mapping page summary strip can render an inventory body ("N tables · M
+// fields") on the project-wide chips instead of a coverage ratio. The
+// counts are pure schema inventory — distinct `tables.id` rows whose
+// `dataset_id` is in the project's `role='source'` / `role='target'`
+// datasets — and do NOT filter by usage, coverage, or mapping status.
+
+describe('rollupProjectStats — source.tables + target.tables (PR θ)', () => {
+  it('counts distinct source-role tables in scope', () => {
+    const raw = emptyRaw()
+    raw.datasets.push({ id: 'ds-src', project_id: PROJECT_A, role: 'source' })
+    raw.datasets.push({ id: 'ds-tgt', project_id: PROJECT_A, role: 'target' })
+    raw.tables.push({ id: 't-src-1', dataset_id: 'ds-src' })
+    raw.tables.push({ id: 't-src-2', dataset_id: 'ds-src' })
+    raw.tables.push({ id: 't-src-3', dataset_id: 'ds-src' })
+    raw.tables.push({ id: 't-tgt-1', dataset_id: 'ds-tgt' })
+    expect(rollupProjectStats(PROJECT_A, raw).source.tables).toBe(3)
+  })
+
+  it('counts distinct target-role tables in scope', () => {
+    const raw = emptyRaw()
+    raw.datasets.push({ id: 'ds-src', project_id: PROJECT_A, role: 'source' })
+    raw.datasets.push({ id: 'ds-tgt', project_id: PROJECT_A, role: 'target' })
+    raw.tables.push({ id: 't-src-1', dataset_id: 'ds-src' })
+    raw.tables.push({ id: 't-tgt-1', dataset_id: 'ds-tgt' })
+    raw.tables.push({ id: 't-tgt-2', dataset_id: 'ds-tgt' })
+    raw.tables.push({ id: 't-tgt-3', dataset_id: 'ds-tgt' })
+    expect(rollupProjectStats(PROJECT_A, raw).target.tables).toBe(3)
+  })
+
+  it('does not leak tables across the source/target boundary', () => {
+    // 2 source tables + 5 target tables → counts must remain split, not
+    // combined into 7 on either side.
+    const raw = emptyRaw()
+    raw.datasets.push({ id: 'ds-src', project_id: PROJECT_A, role: 'source' })
+    raw.datasets.push({ id: 'ds-tgt', project_id: PROJECT_A, role: 'target' })
+    for (let i = 0; i < 2; i++) {
+      raw.tables.push({ id: `t-src-${i}`, dataset_id: 'ds-src' })
+    }
+    for (let i = 0; i < 5; i++) {
+      raw.tables.push({ id: `t-tgt-${i}`, dataset_id: 'ds-tgt' })
+    }
+    const stats = rollupProjectStats(PROJECT_A, raw)
+    expect(stats.source.tables).toBe(2)
+    expect(stats.target.tables).toBe(5)
+  })
+
+  it('returns zero on each axis for an empty project', () => {
+    const stats = rollupProjectStats(PROJECT_A, emptyRaw())
+    expect(stats.source.tables).toBe(0)
+    expect(stats.target.tables).toBe(0)
+  })
+
+  it('ignores tables from other projects', () => {
+    // The rollup filters datasets by `project_id`. A table whose dataset
+    // belongs to another project must not inflate this project's count.
+    const raw = emptyRaw()
+    raw.datasets.push({ id: 'ds-src', project_id: PROJECT_A, role: 'source' })
+    raw.datasets.push({ id: 'ds-other', project_id: 'proj-other', role: 'source' })
+    raw.tables.push({ id: 't-src-1', dataset_id: 'ds-src' })
+    raw.tables.push({ id: 't-other-1', dataset_id: 'ds-other' })
+    raw.tables.push({ id: 't-other-2', dataset_id: 'ds-other' })
+    expect(rollupProjectStats(PROJECT_A, raw).source.tables).toBe(1)
+  })
+})
+
 // ─── Target axis (delegates to computeProjectStats; light verification) ────
 
 describe('rollupProjectStats — target axis', () => {
@@ -339,6 +416,7 @@ describe('rollupProjectStats — target axis', () => {
       status: 'rejected',
       is_acknowledged: false,
       combination_type: null,
+      combination_sql: null,
       needs_transformation: false,
       va_dismissed: false,
     })
@@ -429,10 +507,47 @@ describe('rollupProjectStats — target.usedInMapping + schemaTotal', () => {
       status: 'needs_review',
       is_acknowledged: true,
       combination_type: null,
+      combination_sql: null,
       needs_transformation: null,
       va_dismissed: null,
     })
     expect(rollupProjectStats(PROJECT_A, raw).target.usedInMapping).toBe(0)
+  })
+
+  // PR ε — public-surface pin for the "delivers a value" tightening. A
+  // VA TFM with combination_type='custom_sql', NULL combination_sql, and
+  // NO mapping_sources row is a blank placeholder. Pre-PR it counted
+  // toward `target.usedInMapping`; post-PR the chip-driving figure
+  // excludes it so the Mapping page "Target Fields X/Y" reflects data
+  // flow rather than mere TFM-row presence.
+  it('usedInMapping excludes a blank VA (custom_sql + null combination_sql + no MS)', () => {
+    const raw = withSourceTarget(emptyRaw(), { sourceFields: 5, targetFields: 5 })
+    addMapping(raw, {
+      tfmId: 'tfm-blank-va',
+      targetFieldId: 'tf-0',
+      sourceFieldId: null,
+      status: 'approved',
+      combinationType: 'custom_sql',
+      combinationSql: null,
+    })
+    expect(rollupProjectStats(PROJECT_A, raw).target.usedInMapping).toBe(0)
+  })
+
+  // Counterpart: a completed VA (no MS row, but combination_sql is set to
+  // a literal) IS data flow — the user has authored a fixed value — and
+  // must count. Without this pin, a future refactor that tightens the
+  // filter to "MS row required" would silently drop legitimate VAs.
+  it('usedInMapping INCLUDES a completed VA (combination_sql set, no MS)', () => {
+    const raw = withSourceTarget(emptyRaw(), { sourceFields: 5, targetFields: 5 })
+    addMapping(raw, {
+      tfmId: 'tfm-va',
+      targetFieldId: 'tf-0',
+      sourceFieldId: null,
+      status: 'approved',
+      combinationType: 'custom_sql',
+      combinationSql: "'TENANT_XYZ'::uuid",
+    })
+    expect(rollupProjectStats(PROJECT_A, raw).target.usedInMapping).toBe(1)
   })
 
   it('schemaTotal counts every target field in the schema (independent of TFM presence)', () => {
@@ -591,12 +706,14 @@ describe('rollupProjectStats — output shape', () => {
       'approved',
       'needsReview',
       'schemaTotal',
+      'tables',
       'total',
       'unmapped',
       'usedInMapping',
     ])
     expect(Object.keys(stats.source).sort()).toEqual([
       'decided',
+      'tables',
       'total',
       'usedInMapping',
     ])
@@ -607,8 +724,8 @@ describe('rollupProjectStats — output shape', () => {
     const stats = rollupProjectStats(PROJECT_A, emptyRaw())
     expect(stats).toEqual({
       state: 'awaiting_data',
-      target: { approved: 0, total: 0, unmapped: 0, needsReview: 0, usedInMapping: 0, schemaTotal: 0 },
-      source: { decided: 0, total: 0, usedInMapping: 0 },
+      target: { approved: 0, total: 0, unmapped: 0, needsReview: 0, usedInMapping: 0, schemaTotal: 0, tables: 0 },
+      source: { decided: 0, total: 0, usedInMapping: 0, tables: 0 },
       transforms: { complete: 0, total: 0 },
       blocking: 0,
     })
@@ -626,6 +743,7 @@ describe('rollupProjectStats — output shape', () => {
       status: 'approved',
       is_acknowledged: false,
       combination_type: null,
+      combination_sql: null,
       needs_transformation: null,
       va_dismissed: null,
     })

@@ -189,16 +189,31 @@ export function MappingSummaryStrip({
             decided?" (mapped ∪ acknowledged); target side answers
             "what's the migration scope?". Both render dot-less because
             they're denominator-style truth, not filter chips. */}
+        {/* PR ε — every chip carries a native `title=` tooltip explaining
+            the metric in customer-facing terms (Joanna/Greg pilot). Native
+            title= chosen over Radix to avoid a new dep and match the
+            codebase's existing hover-hint pattern (see FieldMappingRow.tsx
+            + MappingListView.tsx).
+
+            PR θ — the project-wide Source/Target chips switched from a
+            coverage ratio (`X/Y`) to a schema-inventory body
+            (`N tables · M fields`). The progress number lives on the
+            tooltip: Source appends `· K mapped` (source.usedInMapping),
+            Target appends `· K set` (target.usedInMapping — the PR ε
+            "delivers a value" semantic, mapped or fixed VA). Approved /
+            Needs Review chips below remain BYTE-IDENTICAL. */}
         <SummaryChip
           testId="mapping-summary-chip-project-source"
-          label="Source Fields"
-          ratio={`${projectStats.source.usedInMapping}/${projectStats.source.total}`}
+          label="Source"
+          ratio={`${fmt(projectStats.source.tables)} ${pluralize(projectStats.source.tables, 'table')} · ${fmt(projectStats.source.total)} ${pluralize(projectStats.source.total, 'field')}`}
+          tooltip={`${fmt(projectStats.source.tables)} ${pluralize(projectStats.source.tables, 'table')} · ${fmt(projectStats.source.total)} ${pluralize(projectStats.source.total, 'field')} · ${fmt(projectStats.source.usedInMapping)} mapped`}
         />
         <SummaryChipDivider />
         <SummaryChip
           testId="mapping-summary-chip-project-target"
-          label="Target Fields"
-          ratio={`${projectStats.target.usedInMapping}/${projectStats.target.schemaTotal}`}
+          label="Target"
+          ratio={`${fmt(projectStats.target.tables)} ${pluralize(projectStats.target.tables, 'table')} · ${fmt(projectStats.target.schemaTotal)} ${pluralize(projectStats.target.schemaTotal, 'field')}`}
+          tooltip={`${fmt(projectStats.target.tables)} ${pluralize(projectStats.target.tables, 'table')} · ${fmt(projectStats.target.schemaTotal)} ${pluralize(projectStats.target.schemaTotal, 'field')} · ${fmt(projectStats.target.usedInMapping)} set`}
         />
         <SummaryChipBlockDivider />
         {/* Status chips read row-status counts. Post-#157/#158/A2
@@ -212,12 +227,14 @@ export function MappingSummaryStrip({
           label="Approved"
           value={approvedCount}
           dotClassName="bg-emerald-500 ring-2 ring-emerald-500/25"
+          tooltip="Mapping decisions you've reviewed and approved."
         />
         <SummaryChipDivider />
         <SummaryChip
           label="Needs Review"
           value={needsReviewCount}
           dotClassName="bg-slate-400 ring-2 ring-slate-400/25"
+          tooltip="Mapping decisions awaiting your review."
         />
       </div>
       {trailing ? (
@@ -238,6 +255,7 @@ function SummaryChip({
   value,
   ratio,
   dotClassName,
+  tooltip,
 }: {
   /** Override the default `mapping-summary-chip-<label>` test id —
    *  the consolidated PR-6 project-wide chips use stable testids so
@@ -252,6 +270,12 @@ function SummaryChip({
   /** Optional colored dot — project-wide chips are dot-less, status
    *  chips carry a hue. */
   dotClassName?: string
+  /** PR ε — native `title=` hover tooltip forwarded to the outer
+   *  span. Used to explain each chip's metric in customer-facing
+   *  terms (pilot demo). When set, the chip also picks up
+   *  `cursor-help` as a visual affordance. Omit for chips that
+   *  don't need a tooltip — falls back to no `title` attribute. */
+  tooltip?: string
 }) {
   const resolvedTestId =
     testId ?? `mapping-summary-chip-${label.toLowerCase().replace(/\s+/g, '-')}`
@@ -272,13 +296,21 @@ function SummaryChip({
     )
   if (!dotClassName) {
     return (
-      <span data-testid={resolvedTestId}>
+      <span
+        data-testid={resolvedTestId}
+        title={tooltip}
+        className={tooltip ? 'cursor-help' : undefined}
+      >
         {label} {valueNode}
       </span>
     )
   }
   return (
-    <span className="flex items-center gap-1.5" data-testid={resolvedTestId}>
+    <span
+      className={`flex items-center gap-1.5${tooltip ? ' cursor-help' : ''}`}
+      data-testid={resolvedTestId}
+      title={tooltip}
+    >
       <span
         aria-hidden="true"
         className={`w-2 h-2 rounded-full ${dotClassName}`}
@@ -292,6 +324,21 @@ function SummaryChip({
 
 function SummaryChipDivider() {
   return <span aria-hidden="true" className="text-settle-slate-300">·</span>
+}
+
+// PR θ — honest pluralization for the inventory chip body
+// ("1 table · 1 field" vs "3 tables · 87 fields"). Inline to avoid a
+// shared i18n util for one component's two chips.
+function pluralize(n: number, word: string): string {
+  return n === 1 ? word : `${word}s`
+}
+
+// PR θ — locale-aware thousands separator so large schema counts read
+// as "1,247 fields" rather than "1247 fields" in both the chip body
+// and the tooltip's appended progress number. `toLocaleString()`
+// follows the runtime locale; en-US default produces the comma form.
+function fmt(n: number): string {
+  return n.toLocaleString()
 }
 
 // PR-6: heavier separator between the project-wide axis pair and the

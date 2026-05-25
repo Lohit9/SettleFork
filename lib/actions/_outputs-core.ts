@@ -211,8 +211,8 @@ export function emptyOutputsPageData(projectId: string): OutputsPageData {
     hasTargetData: false,
     projectStats: {
       state: 'awaiting_data',
-      target: { approved: 0, total: 0, unmapped: 0, needsReview: 0, usedInMapping: 0, schemaTotal: 0 },
-      source: { decided: 0, total: 0, usedInMapping: 0 },
+      target: { approved: 0, total: 0, unmapped: 0, needsReview: 0, usedInMapping: 0, schemaTotal: 0, tables: 0 },
+      source: { decided: 0, total: 0, usedInMapping: 0, tables: 0 },
       transforms: { complete: 0, total: 0 },
       blocking: 0,
     },
@@ -1073,7 +1073,12 @@ export async function getOutputsPageDataCore(
     client
       .from('target_field_mappings')
       .select(
-        'id, target_field_id, confidence, status, ai_reasoning, is_acknowledged, combination_type, needs_transformation, va_dismissed, created_at',
+        // PR ε — `combination_sql` is now required on `RawProjectStatsData.tfms`
+        // so the canonical formula can distinguish completed VA literals from
+        // blank placeholders. Added here purely to satisfy the typed projection
+        // at line ~1235; the Migration Center surface itself doesn't render
+        // `targetFieldsUsedInMapping`, so no user-visible behavior changes.
+        'id, target_field_id, confidence, status, ai_reasoning, is_acknowledged, combination_type, combination_sql, needs_transformation, va_dismissed, created_at',
       )
       .eq('project_id', projectId),
     // PR-4 followup-A: project filter via embedded inner-join. The prior
@@ -1136,6 +1141,10 @@ export async function getOutputsPageDataCore(
     ai_reasoning: string | null
     is_acknowledged: boolean
     combination_type: string | null
+    /** PR ε — surfaced so the canonical formula can distinguish a completed
+     *  VA literal from a blank placeholder when downstream consumers compute
+     *  `targetFieldsUsedInMapping` via `RawProjectStatsData`. */
+    combination_sql: string | null
     needs_transformation: boolean | null
     va_dismissed: boolean | null
     created_at: string
@@ -1240,6 +1249,7 @@ export async function getOutputsPageDataCore(
       status: t.status,
       is_acknowledged: t.is_acknowledged,
       combination_type: t.combination_type,
+      combination_sql: t.combination_sql,
       needs_transformation: t.needs_transformation,
       va_dismissed: t.va_dismissed,
     })),

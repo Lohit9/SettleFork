@@ -1452,7 +1452,7 @@ export const EMIT_SQL_QUERY_TOOL: Tool = {
 export const EMIT_TRANSFORM_SQL_TOOL: Tool = {
   name: 'emit_transform_sql',
   description:
-    "Emit ONE PostgreSQL expression that transforms a source field's value into the target field's representation. This is an EXPRESSION (no SELECT keyword, no FROM clause) — it will be wrapped into a project-wide INSERT...SELECT statement by the downstream pipeline.\n\nThe expression operates on JSONB-extracted values: source fields are accessed via `row_data->>'FieldName'` (text extraction). The target type drives the output: when the target is numeric, end with `::numeric` (or the specific numeric subtype); when boolean, end with `::boolean` or a CASE expression; when text, plain string-typed expression.\n\nREQUIRED:\n• A single SQL expression with no leading/trailing keywords (no SELECT, no FROM, no WHERE)\n• All source field accesses use `row_data->>'<bare field name>'` — never qualified table.field\n• Numeric casts are regex-guarded when the source field's profile shows format issues: `WHEN row_data->>'X' ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (row_data->>'X')::numeric ELSE NULL END`\n• Date parsing handles mixed formats via CASE+regex when the source profile shows format_issues_count > 0\n• String truncation for VARCHAR(N) targets is explicit: `LEFT(row_data->>'X', N)` when the source max_length exceeds N\n• Boolean normalization expands the canonical Y/N/yes/no/1/0/true/false set: CASE-WHEN with case-insensitive matching\n\nFORBIDDEN:\n• DDL/DML keywords (this is an expression context — SELECT/INSERT/UPDATE/DELETE/CREATE/ALTER/DROP all rejected at the wrapper)\n• References to tables other than the implicit source row context\n• Window functions (ROW_NUMBER, RANK, etc.) — the wrapping INSERT...SELECT does not allow window functions in this position; use a deterministic CASE/CAST instead\n• Cross-row references — each transformation operates on a single row's data\n\nThe `sql` property carries the expression. The `description` property is a one-line plain-English summary of what the transformation does, used in audit logs. The `source_columns` array names every source field referenced in the expression. The `target_column` is the bare target field name being populated. The `joins` property is reserved for future cross-table flows; today it is omitted.",
+    "Emit ONE PostgreSQL expression that transforms a source field's value into the target field's representation. This is an EXPRESSION (no SELECT keyword, no FROM clause) — it will be wrapped into a project-wide INSERT...SELECT statement by the downstream pipeline.\n\nThe expression operates on JSONB-extracted values: source fields are accessed via `row_data->>'FieldName'` (text extraction). The target type drives the output: when the target is numeric, end with `::numeric` (or the specific numeric subtype); when boolean, end with `::boolean` or a CASE expression; when text, plain string-typed expression.\n\nREQUIRED:\n• A single SQL expression with no leading/trailing keywords (no SELECT, no FROM, no WHERE)\n• Field reference style depends on the contributing-source-fields block in the user message:\n   - SAME-TABLE TFM (no <contributing_source_fields> block, OR a single \"Source table:\" heading): use `row_data->>'<bare field name>'` — never qualified table.field\n   - CROSS-TABLE TFM (two or more \"Source table:\" headings): use the QUALIFIED `\"<Source Table>.<Field>\"` form (double-quoted, exact table name from the heading) — aliases (d, j0, j1) are NEVER hand-written; the wrapper translates table names to LATERAL aliases downstream\n• Numeric casts are regex-guarded when the source field's profile shows format issues: `WHEN row_data->>'X' ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (row_data->>'X')::numeric ELSE NULL END`\n• Date parsing handles mixed formats via CASE+regex when the source profile shows format_issues_count > 0\n• String truncation for VARCHAR(N) targets is explicit: `LEFT(row_data->>'X', N)` when the source max_length exceeds N\n• Boolean normalization expands the canonical Y/N/yes/no/1/0/true/false set: CASE-WHEN with case-insensitive matching\n\nFORBIDDEN:\n• DDL/DML keywords (this is an expression context — SELECT/INSERT/UPDATE/DELETE/CREATE/ALTER/DROP all rejected at the wrapper)\n• References to tables other than the implicit source row context (same-table TFMs)\n• Window functions (ROW_NUMBER, RANK, etc.) — the wrapping INSERT...SELECT does not allow window functions in this position; use a deterministic CASE/CAST instead\n• Cross-row references — each transformation operates on a single row's data\n\nThe `sql` property carries the expression. The `description` property is a one-line plain-English summary of what the transformation does, used in audit logs. The `source_columns` array names every source field referenced in the expression. The `target_column` is the bare target field name being populated. The `joins` property is reserved; cross-table joins are handled deterministically downstream from the contributing-source-fields heading structure — leave `joins` omitted.",
   strict: true,
   input_schema: {
     type: 'object',
@@ -1980,5 +1980,54 @@ export const EMIT_CRITIQUE_TOOL: Tool = {
       },
     },
     required: ['critiques'],
+  },
+}
+
+/**
+ * EMIT_TFM_METADATA_TOOL — PR δ.
+ *
+ * Used by `regenerateTfmMetadata` (lib/actions/tfm-regenerate.ts) to produce
+ * fresh AI metadata for a single `target_field_mappings` row after a user
+ * edit has cleared `ai_reasoning` + `transformation_intent`. One tool emit
+ * per call; the four output fields land on the TFM row (confidence routes
+ * through `mapping_sources` for mapped TFMs, direct on the TFM for VAs).
+ *
+ * Strict mode + `additionalProperties: false` per the file's standing
+ * convention (see header comment). `transformation_intent` accepts null so
+ * straight-passthrough mappings can signal "no transformation needed."
+ */
+export const EMIT_TFM_METADATA_TOOL: Tool = {
+  name: 'emit_tfm_metadata',
+  description:
+    'Emit structured AI metadata for a single target_field_mapping row after a user edit. Inputs available in the prompt: the current source/target field(s), the table mapping, project context blocks (lookup tables, decisions, documentation), and (when present) the authoritative POC answer key. Output four fields: ai_reasoning (prose, ≤500 chars, explains why this source→target pairing makes sense in the current edited state), transformation_intent (NL description of what transformation if any should be applied; emit null for straight passthroughs needing no transformation), needs_transformation (boolean — true iff the Transform tab should surface a "Define" badge for this row), and confidence (integer 0-100). When <poc_answer_key> appears in the prompt, prefer its values for this field — it is authoritative. Be terse; this is machine-consumed.',
+  strict: true,
+  input_schema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      ai_reasoning: {
+        type: 'string',
+        description:
+          'Why this source→target mapping makes sense in the current edited state. Prose, ≤500 chars. Cite source field name(s), target field name, and the single most important reason. Avoid restating the schema.',
+      },
+      transformation_intent: {
+        type: ['string', 'null'],
+        description:
+          'What transformation should be applied to convert source value(s) to the target representation. Plain-language description (e.g., "concatenate first_name + last_name with a space separator, cast to VARCHAR(100)"). Emit null when no transformation is needed (passthrough; types and semantics align).',
+      },
+      needs_transformation: {
+        type: 'boolean',
+        description:
+          'Whether the Transform tab should surface a "Define" badge for this row. True when transformation_intent is non-null OR when target constraints (NOT NULL, CHECK, length cap) require explicit handling even for type-aligned passthroughs.',
+      },
+      confidence: {
+        type: 'integer',
+        minimum: 0,
+        maximum: 100,
+        description:
+          'Confidence that this mapping is correct. 90-100 = near-certain (name + semantics + type all align). 70-89 = strong evidence with minor ambiguity. 50-69 = plausible but verify. <50 = needs human review.',
+      },
+    },
+    required: ['ai_reasoning', 'transformation_intent', 'needs_transformation', 'confidence'],
   },
 }

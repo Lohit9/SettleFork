@@ -32,24 +32,27 @@ function projectStats(overrides: Partial<ProjectStats> = {}): ProjectStats {
       total: 72,
       unmapped: 12,
       needsReview: 12,
-      // Chip ratio source — distinct count of target fields used in any
-      // primary (non-rejected, non-bare-ack) TFM. Defaults to `approved`
-      // here so the legacy `Target Fields 60/72` ratio assertion below
-      // still reads identically.
+      // Distinct count of target fields used in any primary (non-rejected,
+      // non-bare-ack) TFM. Kept on the fixture even though PR θ retired
+      // the chip ratio body — the value still feeds the tooltip's
+      // `· K set` suffix.
       usedInMapping: 60,
       // Schema-wide target field count (`datasets.role='target'`).
-      // Defaults to `total` here for the same reason — preserve the
-      // pre-change ratio in the legacy assertion.
       schemaTotal: 72,
+      // PR θ — schema-wide target-role table count. Fixture default mirrors
+      // the Rootstock POC shape (3 target tables) so chip-body assertions
+      // read naturally.
+      tables: 3,
     },
     source: {
       decided: 53,
       total: 70,
-      // Chip ratio source — distinct count of source fields contributing
-      // to any non-rejected mapping_sources row. Defaults to `decided`
-      // here so the legacy `Source Fields 53/70` assertion reads
-      // identically.
+      // Distinct count of source fields contributing to any non-rejected
+      // mapping_sources row. Kept for the PR θ tooltip's `· K mapped`
+      // suffix.
       usedInMapping: 53,
+      // PR θ — schema-wide source-role table count.
+      tables: 5,
     },
     transforms: { complete: 1, total: 24 },
     blocking: 21,
@@ -72,43 +75,44 @@ describe('MappingSummaryStrip — PR-7 source-first axis order', () => {
     ).toBeTruthy()
   })
 
-  it('renders the Source Fields chip with the source axis ratio', () => {
+  it('renders the Source chip with schema inventory (tables · fields)', () => {
     render(<MappingSummaryStrip projectStats={projectStats()} />)
     expect(
       screen.getByTestId('mapping-summary-chip-project-source'),
-    ).toHaveTextContent('Source Fields 53/70')
+    ).toHaveTextContent('Source 5 tables · 70 fields')
   })
 
-  it('renders the Target Fields chip with the target axis ratio', () => {
+  it('renders the Target chip with schema inventory (tables · fields)', () => {
     render(<MappingSummaryStrip projectStats={projectStats()} />)
     expect(
       screen.getByTestId('mapping-summary-chip-project-target'),
-    ).toHaveTextContent('Target Fields 60/72')
+    ).toHaveTextContent('Target 3 tables · 72 fields')
   })
 
-  // ─── Ratio shape ─────────────────────────────────────────────────────────
+  // ─── Inventory body shape (PR θ) ─────────────────────────────────────────
   //
-  // The two axis chips read `usedInMapping / (source.total | target.schemaTotal)`.
-  // These tests pin the SOURCE FIELDS chip to `source.usedInMapping`
-  // (not `source.decided`) and the TARGET FIELDS chip to
-  // `target.usedInMapping / target.schemaTotal` (not `target.approved / target.total`).
-  // If either reverts, the visual ratio drifts away from "fields used in
-  // mapping" back to "approved over addressable slots".
+  // PR θ replaced the project-wide chips' coverage ratio body
+  // (`usedInMapping / total`) with a schema-inventory body
+  // (`source.tables · source.total` and `target.tables · target.schemaTotal`).
+  // These tests pin the chip body to the inventory denominators so a
+  // regression that revives the coverage ratio fails loudly. The
+  // progress metric (`usedInMapping`) lives on the tooltip; see the
+  // tooltip block below.
 
-  it('Source Fields chip uses source.usedInMapping (not source.decided)', () => {
+  it('Source chip body reads `source.tables` and `source.total` (not usedInMapping)', () => {
     render(
       <MappingSummaryStrip
         projectStats={projectStats({
-          source: { decided: 999, total: 70, usedInMapping: 41 },
+          source: { decided: 999, total: 70, usedInMapping: 41, tables: 4 },
         })}
       />,
     )
     expect(
       screen.getByTestId('mapping-summary-chip-project-source'),
-    ).toHaveTextContent('Source Fields 41/70')
+    ).toHaveTextContent('Source 4 tables · 70 fields')
   })
 
-  it('Target Fields chip uses target.usedInMapping and target.schemaTotal (not approved/total)', () => {
+  it('Target chip body reads `target.tables` and `target.schemaTotal` (not approved/total)', () => {
     render(
       <MappingSummaryStrip
         projectStats={projectStats({
@@ -119,13 +123,34 @@ describe('MappingSummaryStrip — PR-7 source-first axis order', () => {
             needsReview: 0,
             usedInMapping: 80,
             schemaTotal: 121,
+            tables: 7,
           },
         })}
       />,
     )
     expect(
       screen.getByTestId('mapping-summary-chip-project-target'),
-    ).toHaveTextContent('Target Fields 80/121')
+    ).toHaveTextContent('Target 7 tables · 121 fields')
+  })
+
+  it('honest pluralization — 1 table / 1 field render in singular form', () => {
+    render(
+      <MappingSummaryStrip
+        projectStats={projectStats({
+          source: { decided: 1, total: 1, usedInMapping: 1, tables: 1 },
+          target: {
+            approved: 1, total: 1, unmapped: 0, needsReview: 0,
+            usedInMapping: 1, schemaTotal: 1, tables: 1,
+          },
+        })}
+      />,
+    )
+    expect(
+      screen.getByTestId('mapping-summary-chip-project-source'),
+    ).toHaveTextContent('Source 1 table · 1 field')
+    expect(
+      screen.getByTestId('mapping-summary-chip-project-target'),
+    ).toHaveTextContent('Target 1 table · 1 field')
   })
 
   it('project-wide chips are dot-less (denominator truth, not filter chips)', () => {
@@ -172,14 +197,17 @@ describe('MappingSummaryStrip — PR-7 chips read from projectStats', () => {
     // The conceptual contract PR-7 enforces: sum of status chips equals the
     // project-wide target denominator. A fixture violating this would imply
     // the formula change drifted; this test pins the invariant.
+    //
+    // PR θ — the project-wide Target chip no longer renders the `60/72`
+    // ratio (replaced with the inventory body `3 tables · 72 fields`), so
+    // the `toContain('60/72')` post-condition was retired. The
+    // status-chip sum invariant stays.
     render(<MappingSummaryStrip projectStats={projectStats()} />)
     const approved = screen.getByTestId('mapping-summary-chip-approved')
     const needsReview = screen.getByTestId('mapping-summary-chip-needs-review')
-    const target = screen.getByTestId('mapping-summary-chip-project-target')
     const approvedNum = Number(approved.textContent?.match(/\d+/)?.[0])
     const needsReviewNum = Number(needsReview.textContent?.match(/\d+/)?.[0])
     expect(approvedNum + needsReviewNum).toBe(72)
-    expect(target.textContent).toContain('60/72')
   })
 
   it('Approved chip carries an emerald dot with ring, Needs Review carries slate with ring', () => {
@@ -225,8 +253,8 @@ describe('MappingSummaryStrip — state-aware empty (preserved from PR-6)', () =
       <MappingSummaryStrip
         projectStats={projectStats({
           state: 'awaiting_data',
-          target: { approved: 0, total: 0, unmapped: 0, needsReview: 0, usedInMapping: 0, schemaTotal: 0 },
-          source: { decided: 0, total: 0, usedInMapping: 0 },
+          target: { approved: 0, total: 0, unmapped: 0, needsReview: 0, usedInMapping: 0, schemaTotal: 0, tables: 0 },
+          source: { decided: 0, total: 0, usedInMapping: 0, tables: 0 },
         })}
       />,
     )
@@ -290,7 +318,7 @@ describe('MappingSummaryStrip — always-visible status chips', () => {
     render(
       <MappingSummaryStrip
         projectStats={projectStats({
-          target: { approved: 5, total: 5, unmapped: 0, needsReview: 0, usedInMapping: 5, schemaTotal: 5 },
+          target: { approved: 5, total: 5, unmapped: 0, needsReview: 0, usedInMapping: 5, schemaTotal: 5, tables: 1 },
         })}
       />,
     )
@@ -329,5 +357,75 @@ describe('MappingSummaryStrip — styling invariants', () => {
       <MappingSummaryStrip projectStats={projectStats()} />,
     )
     expect(container.innerHTML).not.toMatch(/\bdark:/)
+  })
+})
+
+// ─── PR ε — chip tooltips ──────────────────────────────────────────────────
+//
+// Every chip carries a native `title=` hover tooltip explaining the metric
+// in customer-facing terms (pilot demo for Joanna/Greg). Native title was
+// chosen over a Radix-based component to avoid a new dependency and match
+// the codebase's existing hover-hint pattern (FieldMappingRow.tsx,
+// MappingListView.tsx all use native title=). Matchers are loose
+// (`toMatch`, not `toEqual`) so future copy tweaks don't fail unrelated
+// tests — the assertion is "tooltip is present and on-topic", not
+// "tooltip says exactly X". A future swap to Radix should keep these
+// tests green by mirroring the title text into the component's
+// equivalent prop.
+
+describe('MappingSummaryStrip — chip tooltips (PR ε / θ)', () => {
+  // PR θ — the project-wide chip tooltips now show inventory + progress
+  // (`N tables · M fields · K mapped|set`) instead of prose. The chip
+  // body shows the inventory; the tooltip adds the progress number so
+  // the demo question "how many of these are actually wired up?" is one
+  // hover away. Approved / Needs Review tooltips keep the PR ε prose
+  // because they have no inventory/progress duality to surface.
+
+  it('Source chip tooltip surfaces inventory + mapped count', () => {
+    render(<MappingSummaryStrip projectStats={projectStats()} />)
+    const chip = screen.getByTestId('mapping-summary-chip-project-source')
+    expect(chip).toHaveAttribute('title')
+    // Default fixture: source.tables=5, source.total=70, usedInMapping=53.
+    expect(chip.getAttribute('title')).toBe(
+      '5 tables · 70 fields · 53 mapped',
+    )
+  })
+
+  it('Target chip tooltip surfaces inventory + set count', () => {
+    render(<MappingSummaryStrip projectStats={projectStats()} />)
+    const chip = screen.getByTestId('mapping-summary-chip-project-target')
+    expect(chip).toHaveAttribute('title')
+    // Default fixture: target.tables=3, target.schemaTotal=72, usedInMapping=60.
+    expect(chip.getAttribute('title')).toBe(
+      '3 tables · 72 fields · 60 set',
+    )
+  })
+
+  it('Approved chip tooltip references reviewed-and-approved decisions', () => {
+    render(<MappingSummaryStrip projectStats={projectStats()} />)
+    const chip = screen.getByTestId('mapping-summary-chip-approved')
+    expect(chip).toHaveAttribute('title')
+    expect(chip.getAttribute('title')).toMatch(/reviewed and approved/i)
+  })
+
+  it('Needs Review chip tooltip references awaiting-review decisions', () => {
+    render(<MappingSummaryStrip projectStats={projectStats()} />)
+    const chip = screen.getByTestId('mapping-summary-chip-needs-review')
+    expect(chip).toHaveAttribute('title')
+    expect(chip.getAttribute('title')).toMatch(/awaiting your review/i)
+  })
+
+  it('chips with tooltips carry the cursor-help affordance class', () => {
+    // Visual hint that a hover-tooltip is available; one-line CSS, no
+    // layout impact. Pinned so a future class refactor doesn't drop it.
+    render(<MappingSummaryStrip projectStats={projectStats()} />)
+    const source = screen.getByTestId('mapping-summary-chip-project-source')
+    const target = screen.getByTestId('mapping-summary-chip-project-target')
+    const approved = screen.getByTestId('mapping-summary-chip-approved')
+    const needsReview = screen.getByTestId('mapping-summary-chip-needs-review')
+    expect(source.className).toContain('cursor-help')
+    expect(target.className).toContain('cursor-help')
+    expect(approved.className).toContain('cursor-help')
+    expect(needsReview.className).toContain('cursor-help')
   })
 })

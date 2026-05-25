@@ -463,8 +463,8 @@ function renderRedesign(
     // PR-7: needsReview = total − approved (formula invariant).
     // approved (6) + needsReview (4) = 10 = total. unmapped (1) is a
     // sub-component of needsReview.
-    target: { approved: 6, total: 10, unmapped: 1, needsReview: 4, usedInMapping: 6, schemaTotal: 10 },
-    source: { decided: 5, total: 8, usedInMapping: 5 },
+    target: { approved: 6, total: 10, unmapped: 1, needsReview: 4, usedInMapping: 6, schemaTotal: 10, tables: 2 },
+    source: { decided: 5, total: 8, usedInMapping: 5, tables: 2 },
     transforms: { complete: 1, total: 4 },
     blocking: 0,
   }

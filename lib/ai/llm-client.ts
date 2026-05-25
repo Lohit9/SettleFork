@@ -40,6 +40,7 @@ export type LLMFeature =
   | 'mapping_generate_legacy_pair' // ID 3: legacy regenerate primary
   | 'mapping_generate_legacy_pair_repair' // ID 4: legacy regenerate JSON-repair retry
   | 'mapping_suggest' // ID 5: per-target suggest
+  | 'mapping_regenerate' // PR δ: post-edit TFM metadata regenerate (Rootstock pilot)
   // Cluster 2+ — PR 7
   | 'mapping_suggest_legacy_bulk'
   | 'transform_generate'

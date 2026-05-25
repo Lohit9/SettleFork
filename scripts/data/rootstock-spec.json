@@ -1,7 +1,19 @@
 [
   {
     "project_ids": [
-      "eba53ac1-3d35-45ba-852d-a3fa3761850b"
+        "eba53ac1-3d35-45ba-852d-a3fa3761850b",
+        "51df5837-f0ee-48b4-a535-781695c3f35a",
+        "730f3138-3c84-4077-984f-3fa8f95908a9",
+        "699fe032-57cb-4f56-a06e-7a2a882f20e1",
+        "6ffd5629-5de9-4e1a-9b3d-d274d477d861"
+    ],
+    "joins": [
+      {
+        "from_table": "Engineering BOM Masters",
+        "from_field": "Assy Item",
+        "to_table": "Products",
+        "to_field": "ProductSKU"
+      }
     ],
     "load_order": [
       {
