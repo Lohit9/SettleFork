@@ -331,3 +331,63 @@ describe('MappingSummaryStrip — styling invariants', () => {
     expect(container.innerHTML).not.toMatch(/\bdark:/)
   })
 })
+
+// ─── PR ε — chip tooltips ──────────────────────────────────────────────────
+//
+// Every chip carries a native `title=` hover tooltip explaining the metric
+// in customer-facing terms (pilot demo for Joanna/Greg). Native title was
+// chosen over a Radix-based component to avoid a new dependency and match
+// the codebase's existing hover-hint pattern (FieldMappingRow.tsx,
+// MappingListView.tsx all use native title=). Matchers are loose
+// (`toMatch`, not `toEqual`) so future copy tweaks don't fail unrelated
+// tests — the assertion is "tooltip is present and on-topic", not
+// "tooltip says exactly X". A future swap to Radix should keep these
+// tests green by mirroring the title text into the component's
+// equivalent prop.
+
+describe('MappingSummaryStrip — chip tooltips (PR ε)', () => {
+  it('Source Fields chip carries a title attribute explaining the metric', () => {
+    render(<MappingSummaryStrip projectStats={projectStats()} />)
+    const chip = screen.getByTestId('mapping-summary-chip-project-source')
+    expect(chip).toHaveAttribute('title')
+    expect(chip.getAttribute('title')).toMatch(/source fields contributing/i)
+  })
+
+  it('Target Fields chip tooltip mentions both mapped and fixed-value paths', () => {
+    render(<MappingSummaryStrip projectStats={projectStats()} />)
+    const chip = screen.getByTestId('mapping-summary-chip-project-target')
+    expect(chip).toHaveAttribute('title')
+    const title = chip.getAttribute('title') ?? ''
+    expect(title).toMatch(/target fields receiving a value/i)
+    expect(title).toMatch(/mapped from source/i)
+    expect(title).toMatch(/fixed value/i)
+  })
+
+  it('Approved chip tooltip references reviewed-and-approved decisions', () => {
+    render(<MappingSummaryStrip projectStats={projectStats()} />)
+    const chip = screen.getByTestId('mapping-summary-chip-approved')
+    expect(chip).toHaveAttribute('title')
+    expect(chip.getAttribute('title')).toMatch(/reviewed and approved/i)
+  })
+
+  it('Needs Review chip tooltip references awaiting-review decisions', () => {
+    render(<MappingSummaryStrip projectStats={projectStats()} />)
+    const chip = screen.getByTestId('mapping-summary-chip-needs-review')
+    expect(chip).toHaveAttribute('title')
+    expect(chip.getAttribute('title')).toMatch(/awaiting your review/i)
+  })
+
+  it('chips with tooltips carry the cursor-help affordance class', () => {
+    // Visual hint that a hover-tooltip is available; one-line CSS, no
+    // layout impact. Pinned so a future class refactor doesn't drop it.
+    render(<MappingSummaryStrip projectStats={projectStats()} />)
+    const source = screen.getByTestId('mapping-summary-chip-project-source')
+    const target = screen.getByTestId('mapping-summary-chip-project-target')
+    const approved = screen.getByTestId('mapping-summary-chip-approved')
+    const needsReview = screen.getByTestId('mapping-summary-chip-needs-review')
+    expect(source.className).toContain('cursor-help')
+    expect(target.className).toContain('cursor-help')
+    expect(approved.className).toContain('cursor-help')
+    expect(needsReview.className).toContain('cursor-help')
+  })
+})

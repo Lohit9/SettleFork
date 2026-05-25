@@ -70,6 +70,13 @@ function addMapping(
     status?: 'approved' | 'needs_review' | 'rejected'
     isAck?: boolean
     combinationType?: string | null
+    /** PR ε — populate `combination_sql` so tests can distinguish
+     *  completed VAs (non-empty SQL → delivers a fixed value) from
+     *  blank placeholders. Defaults to null, which is the right
+     *  default for mapped TFMs (they don't carry combination_sql)
+     *  and for blank-VA fixtures that want to exercise the new
+     *  filter. */
+    combinationSql?: string | null
     needsTransformation?: boolean | null
     vaDismissed?: boolean | null
     confidence?: number
@@ -82,6 +89,7 @@ function addMapping(
     status = 'approved',
     isAck = false,
     combinationType = null,
+    combinationSql = null,
     needsTransformation = null,
     vaDismissed = null,
     confidence = 80,
@@ -94,6 +102,7 @@ function addMapping(
     status,
     is_acknowledged: isAck,
     combination_type: combinationType,
+    combination_sql: combinationSql,
     needs_transformation: needsTransformation,
     va_dismissed: vaDismissed,
   })
@@ -339,6 +348,7 @@ describe('rollupProjectStats — target axis', () => {
       status: 'rejected',
       is_acknowledged: false,
       combination_type: null,
+      combination_sql: null,
       needs_transformation: false,
       va_dismissed: false,
     })
@@ -429,10 +439,47 @@ describe('rollupProjectStats — target.usedInMapping + schemaTotal', () => {
       status: 'needs_review',
       is_acknowledged: true,
       combination_type: null,
+      combination_sql: null,
       needs_transformation: null,
       va_dismissed: null,
     })
     expect(rollupProjectStats(PROJECT_A, raw).target.usedInMapping).toBe(0)
+  })
+
+  // PR ε — public-surface pin for the "delivers a value" tightening. A
+  // VA TFM with combination_type='custom_sql', NULL combination_sql, and
+  // NO mapping_sources row is a blank placeholder. Pre-PR it counted
+  // toward `target.usedInMapping`; post-PR the chip-driving figure
+  // excludes it so the Mapping page "Target Fields X/Y" reflects data
+  // flow rather than mere TFM-row presence.
+  it('usedInMapping excludes a blank VA (custom_sql + null combination_sql + no MS)', () => {
+    const raw = withSourceTarget(emptyRaw(), { sourceFields: 5, targetFields: 5 })
+    addMapping(raw, {
+      tfmId: 'tfm-blank-va',
+      targetFieldId: 'tf-0',
+      sourceFieldId: null,
+      status: 'approved',
+      combinationType: 'custom_sql',
+      combinationSql: null,
+    })
+    expect(rollupProjectStats(PROJECT_A, raw).target.usedInMapping).toBe(0)
+  })
+
+  // Counterpart: a completed VA (no MS row, but combination_sql is set to
+  // a literal) IS data flow — the user has authored a fixed value — and
+  // must count. Without this pin, a future refactor that tightens the
+  // filter to "MS row required" would silently drop legitimate VAs.
+  it('usedInMapping INCLUDES a completed VA (combination_sql set, no MS)', () => {
+    const raw = withSourceTarget(emptyRaw(), { sourceFields: 5, targetFields: 5 })
+    addMapping(raw, {
+      tfmId: 'tfm-va',
+      targetFieldId: 'tf-0',
+      sourceFieldId: null,
+      status: 'approved',
+      combinationType: 'custom_sql',
+      combinationSql: "'TENANT_XYZ'::uuid",
+    })
+    expect(rollupProjectStats(PROJECT_A, raw).target.usedInMapping).toBe(1)
   })
 
   it('schemaTotal counts every target field in the schema (independent of TFM presence)', () => {
@@ -626,6 +673,7 @@ describe('rollupProjectStats — output shape', () => {
       status: 'approved',
       is_acknowledged: false,
       combination_type: null,
+      combination_sql: null,
       needs_transformation: null,
       va_dismissed: null,
     })

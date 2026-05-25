@@ -135,6 +135,14 @@ export interface StatsTfmRow {
   combination_type: string | null
   needs_transformation: boolean | null
   va_dismissed?: boolean | null
+  /** PR ε — only consulted by the `targetFieldsUsedInMapping` filter to
+   *  distinguish a "completed" value-assignment (non-empty SQL → delivers a
+   *  fixed value) from a "blank" placeholder (NULL / whitespace → no data
+   *  flow). Optional + nullable so legacy callers and test fixtures that
+   *  don't thread the column continue to work; an undefined value falls
+   *  back to the MS-row check, which preserves pre-PR behaviour for any
+   *  mapped TFM and excludes only the now-tightened blank-VA case. */
+  combination_sql?: string | null
 }
 
 /** PR γ.2 — coverage row shape consumed by `mappingApproved` UNION. Only
@@ -233,14 +241,25 @@ export interface ComputeProjectStatsResult {
    *  the chip math on the Mapping page strip:
    *  `Approved + Needs Review = Target Fields total`. */
   mappingNeedsReview: number
-  /** Distinct `target_field_id` count across primary TFMs (i.e. non-rejected
-   *  TFMs excluding bare-acks, where bare-ack = is_acknowledged AND
-   *  combination_type IS NULL). Answers "how many target fields appear as
-   *  the target of at least one real mapping?". Differs from
-   *  `mappingApproved` in two ways: it ignores TFM status (needs_review
-   *  and approved both count) and it excludes the acknowledged-unmapped
-   *  count (a bare-ack does not "use" the target field as a mapping
-   *  target). Always <= `targetFields.length` (the schema-wide count). */
+  /** Distinct `target_field_id` count across primary TFMs that actually
+   *  deliver a value — i.e. non-rejected, non-bare-ack TFMs that EITHER
+   *  have at least one `mapping_sources` row with `source_field_id IS NOT
+   *  NULL` (data flows from a source field) OR carry a non-empty
+   *  `combination_sql` (data flows from a fixed-value VA literal). A
+   *  "blank VA" (combination_type='custom_sql' with NULL/empty
+   *  combination_sql and no MS rows) is excluded — it's a placeholder, not
+   *  data flow.
+   *
+   *  Answers "how many target fields receive a value from the migration?"
+   *  Status-agnostic across `needs_review` and `approved` — a TFM that's
+   *  pending review but already wired up to a source still counts as
+   *  "delivering". Always <= `targetFields.length` (the schema-wide count).
+   *
+   *  PR ε note: pre-PR this counted EVERY primary TFM. The blank-VA case
+   *  inflated the Mapping page's "Target Fields X/Y" chip numerator on
+   *  projects whose loader writes placeholder VA rows (e.g. Rootstock
+   *  POC). The new filter aligns target-side semantics with the source
+   *  side, which already counted only fields contributing data. */
   targetFieldsUsedInMapping: number
 
   // ── Transform ──────────────────────────────────────────────────────────
@@ -405,7 +424,30 @@ export function computeProjectStats(inputs: ComputeProjectStatsInputs): ComputeP
       if (ms.source_field_id) mappedSourceIds.add(ms.source_field_id)
     }
   }
-  const primaryMappedTargetIds = new Set(primaryTfms.map((t) => t.target_field_id))
+  // PR ε — `targetFieldsUsedInMapping` counts only TFMs that actually
+  // deliver a value (MS row with a source_field_id OR non-empty
+  // combination_sql). A blank VA — combination_type='custom_sql' with no
+  // MS rows and NULL/empty combination_sql — is a placeholder and is
+  // excluded so the Mapping page's "Target Fields X/Y" chip reflects data
+  // flow rather than mere TFM-row presence. The trim() check matches the
+  // codebase's existing "combination_sql is the predicate; both null and
+  // empty trigger generation" convention (see
+  // tests/actions/transformations-context.test.ts:282-283). Note we
+  // deliberately do NOT tighten `primaryTfms` itself: every other count
+  // (mappingTotal, mappingApproved, mappingNeedsReview, transformScope)
+  // depends on the original primary set and must stay byte-identical to
+  // preserve PR-7's pinned chip-math invariants.
+  const primaryTfmsDelivering = primaryTfms.filter((t) => {
+    const hasMappedSource = (msByTfmId.get(t.id) ?? []).some(
+      (m) => m.source_field_id !== null,
+    )
+    const hasNonEmptySql =
+      typeof t.combination_sql === 'string' && t.combination_sql.trim() !== ''
+    return hasMappedSource || hasNonEmptySql
+  })
+  const primaryMappedTargetIds = new Set(
+    primaryTfmsDelivering.map((t) => t.target_field_id),
+  )
 
   // Bare-ack TFMs contribute target-side "acknowledged unmapped" entries.
   // INF-57 — UNION with coverage rows where status='approved' AND

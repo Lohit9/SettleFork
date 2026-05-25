@@ -189,16 +189,25 @@ export function MappingSummaryStrip({
             decided?" (mapped ∪ acknowledged); target side answers
             "what's the migration scope?". Both render dot-less because
             they're denominator-style truth, not filter chips. */}
+        {/* PR ε — every chip carries a native `title=` tooltip explaining
+            the metric in customer-facing terms (Joanna/Greg pilot). Copy
+            stays positive: the numerator vs denominator on the chip
+            itself answers any gap question, so we don't list exclusions
+            inline. Native title= chosen over Radix to avoid a new dep
+            and match the codebase's existing hover-hint pattern (see
+            FieldMappingRow.tsx + MappingListView.tsx). */}
         <SummaryChip
           testId="mapping-summary-chip-project-source"
           label="Source Fields"
           ratio={`${projectStats.source.usedInMapping}/${projectStats.source.total}`}
+          tooltip="Source fields contributing data to the migration."
         />
         <SummaryChipDivider />
         <SummaryChip
           testId="mapping-summary-chip-project-target"
           label="Target Fields"
           ratio={`${projectStats.target.usedInMapping}/${projectStats.target.schemaTotal}`}
+          tooltip="Target fields receiving a value — either mapped from source data or assigned a fixed value."
         />
         <SummaryChipBlockDivider />
         {/* Status chips read row-status counts. Post-#157/#158/A2
@@ -212,12 +221,14 @@ export function MappingSummaryStrip({
           label="Approved"
           value={approvedCount}
           dotClassName="bg-emerald-500 ring-2 ring-emerald-500/25"
+          tooltip="Mapping decisions you've reviewed and approved."
         />
         <SummaryChipDivider />
         <SummaryChip
           label="Needs Review"
           value={needsReviewCount}
           dotClassName="bg-slate-400 ring-2 ring-slate-400/25"
+          tooltip="Mapping decisions awaiting your review."
         />
       </div>
       {trailing ? (
@@ -238,6 +249,7 @@ function SummaryChip({
   value,
   ratio,
   dotClassName,
+  tooltip,
 }: {
   /** Override the default `mapping-summary-chip-<label>` test id —
    *  the consolidated PR-6 project-wide chips use stable testids so
@@ -252,6 +264,12 @@ function SummaryChip({
   /** Optional colored dot — project-wide chips are dot-less, status
    *  chips carry a hue. */
   dotClassName?: string
+  /** PR ε — native `title=` hover tooltip forwarded to the outer
+   *  span. Used to explain each chip's metric in customer-facing
+   *  terms (pilot demo). When set, the chip also picks up
+   *  `cursor-help` as a visual affordance. Omit for chips that
+   *  don't need a tooltip — falls back to no `title` attribute. */
+  tooltip?: string
 }) {
   const resolvedTestId =
     testId ?? `mapping-summary-chip-${label.toLowerCase().replace(/\s+/g, '-')}`
@@ -272,13 +290,21 @@ function SummaryChip({
     )
   if (!dotClassName) {
     return (
-      <span data-testid={resolvedTestId}>
+      <span
+        data-testid={resolvedTestId}
+        title={tooltip}
+        className={tooltip ? 'cursor-help' : undefined}
+      >
         {label} {valueNode}
       </span>
     )
   }
   return (
-    <span className="flex items-center gap-1.5" data-testid={resolvedTestId}>
+    <span
+      className={`flex items-center gap-1.5${tooltip ? ' cursor-help' : ''}`}
+      data-testid={resolvedTestId}
+      title={tooltip}
+    >
       <span
         aria-hidden="true"
         className={`w-2 h-2 rounded-full ${dotClassName}`}
