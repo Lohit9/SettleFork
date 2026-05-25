@@ -48,12 +48,7 @@ import type {
   ValueAssignmentRow,
 } from '@/lib/types/mappings-for-redesign'
 import { inferFkCandidates } from '@/lib/utils/fk-inference'
-// PR 3.4cd — single-agent and multi-agent pipeline helpers. Circular-import
-// safe: both modules import from this file at module-top-level (for
-// shared prompts + helpers), but the function references resolve at
-// call time, not at module-load time.
 import { runSingleAgentMappingLoop } from '@/lib/ai/single-agent-mapping'
-import { runMultiAgentMappingPipeline } from '@/lib/ai/multi-agent-orchestrator'
 import { validateMappingBatch, type MappingProposal } from '@/lib/validation/mapping-validator'
 import {
   getStaticSuggestionForTarget,
@@ -264,6 +259,7 @@ export interface ClaudeFieldMapping {
   contributing_source_fields?: string[]
   combination_hint?: string
   split_hint?: string
+  transform_sql?: string
 }
 
 export interface ClaudeTableMapping {
@@ -393,7 +389,15 @@ If documentation is provided, use it to:
 - Flag fields that need specific transformation logic based on documented rules
 - Set higher confidence scores when documentation confirms a mapping from a business logic perspective. If documentation describes different data types or constraints than the structured schema, always follow the structured schema — it reflects the user's latest configuration.
 
-CRITICAL: Respond with ONLY valid JSON, no markdown, no backticks, no explanation outside the JSON structure.`
+CRITICAL: Respond with ONLY valid JSON, no markdown, no backticks, no explanation outside the JSON structure.
+
+When needs_transformation is TRUE, you MUST also emit transform_sql: a PostgreSQL expression (not a full statement — no SELECT, FROM, WHERE, DDL, or DML keywords) converting the source value to the target representation. Reference source fields as row_data->>'FieldName'. No window functions. Explicit cast to target type. Examples:
+- Boolean: CASE WHEN row_data->>'active' IN ('Y','yes','1') THEN true ELSE false END::BOOLEAN
+- Value map: CASE WHEN row_data->>'stage' = 'Won' THEN 'Closed Won' ELSE row_data->>'stage' END
+- Numeric cast: (row_data->>'amount')::NUMERIC
+- Truncate: LEFT(row_data->>'description', 120)
+- Concat: row_data->>'first_name' || ' ' || row_data->>'last_name'
+Omit transform_sql when needs_transformation is FALSE.`
 
 // ─── PR 3.4a — Agent-mode system prompt ─────────────────────────────────────
 // `MAPPING_GENERATION_AGENT_SYSTEM_PROMPT` is the original prompt + the
@@ -1613,6 +1617,7 @@ export async function persistClaudeFieldMappingsForTM(
     confidence: number
     similar: string[]
     typeCompatibility: string | null
+    transformSql?: string
   }
   const byTarget = new Map<string, CollapsedEntry>()
 
@@ -1655,6 +1660,7 @@ export async function persistClaudeFieldMappingsForTM(
         confidence: fm.confidence,
         similar: fm.similar_fields_considered ?? [],
         typeCompatibility: fm.type_compatibility ?? null,
+        transformSql: fm.transform_sql,
       })
     } else {
       // Second row for same target — treat as contributor (many-to-one).
@@ -1688,7 +1694,7 @@ export async function persistClaudeFieldMappingsForTM(
       })),
     ]
 
-    const { error } = await supabase.rpc('dq_create_target_field_mapping', {
+    const { data: tfmId, error } = await supabase.rpc('dq_create_target_field_mapping', {
       p_project_id: projectId,
       p_target_field_id: entry.targetFieldId,
       p_sources: sources,
@@ -1705,6 +1711,25 @@ export async function persistClaudeFieldMappingsForTM(
       continue
     }
     inserted++
+
+    if (tfmId && entry.transformSql) {
+      const { error: txErr } = await supabase
+        .from('transformations')
+        .insert({
+          target_field_mapping_id: tfmId as string,
+          description: null,
+          generated_sql: entry.transformSql,
+          is_ai_generated: true,
+          status: 'draft',
+          test_results: null,
+        })
+      if (txErr) {
+        console.error(
+          `[mappings] transformations insert failed for TFM ${tfmId}:`,
+          txErr.message,
+        )
+      }
+    }
   }
 
   return { inserted }
@@ -1756,12 +1781,6 @@ export async function runMappingGeneration(
     // pre-loop aiCtx (per-role sample bumps) and the per-iteration
     // gate route through `runAgentLoop` instead of single-shot callLLM.
     const phase3Enabled = process.env.AI_PHASE_3_ENABLED === '1'
-    // PR 3.4cd — second-level gate. AI_PHASE_3_MULTI_AGENT_ENABLED=1
-    // routes through the multi-agent pipeline (Generator → specialists →
-    // Critic → refinement). Default OFF: PR 3.4b single-agent path.
-    // Both flags off: legacy Phase 2 single-shot.
-    const multiAgentEnabled = process.env.AI_PHASE_3_MULTI_AGENT_ENABLED === '1'
-
     const { data: sourceTables, error: stErr } = await supabase
       .from('tables')
       .select('id, name, dataset_id, datasets(id, name)')
@@ -1876,77 +1895,41 @@ ${otherSourcesList}
       const phase2Enabled = process.env.AI_PHASE_2_ENABLED === '1'
       let primaryResult: Awaited<ReturnType<typeof callLLM>>
       if (phase3Enabled) {
-        // PR 3.4cd — two-level gate. Outer: AI_PHASE_3_ENABLED selects
-        // agent path. Inner: AI_PHASE_3_MULTI_AGENT_ENABLED selects
-        // multi-agent pipeline (commit 2 shell, voting in commit 3) vs
-        // PR 3.4b single-agent loop (extracted to runSingleAgentMappingLoop).
-        // The single-agent extraction is cosmetic — its body is
-        // byte-equivalent to the inline 3.4b code; heritage Capture B
-        // verifies this.
+        // S1.1: agent path via runSingleAgentMappingLoop.
         const baseMetadata = {
           source_table_id: currentSourceRow?.id ?? null,
           source_table_name: sourceCtx.table_name,
           batch_index: i,
           batch_total: sourceTablesForBatching.length,
         }
-        if (multiAgentEnabled) {
-          // PR 3.4cd multi-agent pipeline (commit 2 SHELL — see
-          // multi-agent-orchestrator.ts; voting + telemetry in commit 3).
-          const unmappedTargetFields = (targetFields ?? [])
-            .filter((f) =>
-              (sourceFields ?? []).every((sf) => sf.id !== f.id) // placeholder; commit 3 may refine
-            )
-            .map((f) => f.name)
-          const r = await runMultiAgentMappingPipeline({
-            supabase,
-            projectId,
-            userId,
-            feature: 'mapping_generate',
-            baseUserMessage: batchUserMessage,
-            schemaOverviewBlock,
-            businessContext,
-            maxTokens: PER_BATCH_MAX_TOKENS,
-            baseMetadata: { ...baseMetadata, multi_agent: true },
-            // PR-CACHE-HOTFIX: disabled to unblock 4-block limit. See INF-5
-            // for selective re-enable on top 4 blocks.
-            cacheControl: false,
-            unmappedTargetFields,
-          })
-          if (r.kind === 'pair_aborted') {
-            console.error(`[Mapping] Multi-agent pair aborted for ${sourceCtx.table_name}: ${r.reason} — ${r.message}`)
-            continue
-          }
-          primaryResult = r.result
-        } else {
-          // PR 3.4b single-agent path — extracted to helper, byte-equivalent.
-          const r = await runSingleAgentMappingLoop({
-            supabase,
-            projectId,
-            userId,
-            feature: 'mapping_generate',
-            baseUserMessage: batchUserMessage,
-            schemaOverviewBlock,
-            businessContext,
-            maxTokens: PER_BATCH_MAX_TOKENS,
-            baseMetadata,
-            // PR-CACHE-HOTFIX: disabled to unblock 4-block limit. See INF-5
-            // for selective re-enable on top 4 blocks.
-            cacheControl: false,
-          })
-          if (r.kind === 'agent_threw') {
-            console.error(`[Mapping] Agent loop failed for source table ${sourceCtx.table_name}:`, r.error)
-            continue
-          }
-          if (r.kind === 'fallback_threw') {
-            console.error(`[Mapping] Schema-error fallback failed for ${sourceCtx.table_name}:`, r.error)
-            continue
-          }
-          if (r.kind === 'aborted_other') {
-            console.error(`[Mapping] Agent aborted for ${sourceCtx.table_name}: ${r.reason} — ${r.message}`)
-            continue
-          }
-          primaryResult = r.result
+        // S1.1: single-agent path (multi-agent dead code removed).
+        const r = await runSingleAgentMappingLoop({
+          supabase,
+          projectId,
+          userId,
+          feature: 'mapping_generate',
+          baseUserMessage: batchUserMessage,
+          schemaOverviewBlock,
+          businessContext,
+          maxTokens: PER_BATCH_MAX_TOKENS,
+          baseMetadata,
+          // PR-CACHE-HOTFIX: disabled to unblock 4-block limit. See INF-5
+          // for selective re-enable on top 4 blocks.
+          cacheControl: false,
+        })
+        if (r.kind === 'agent_threw') {
+          console.error(`[Mapping] Agent loop failed for source table ${sourceCtx.table_name}:`, r.error)
+          continue
         }
+        if (r.kind === 'fallback_threw') {
+          console.error(`[Mapping] Schema-error fallback failed for ${sourceCtx.table_name}:`, r.error)
+          continue
+        }
+        if (r.kind === 'aborted_other') {
+          console.error(`[Mapping] Agent aborted for ${sourceCtx.table_name}: ${r.reason} — ${r.message}`)
+          continue
+        }
+        primaryResult = r.result
       } else {
         try {
           // Streaming switch (May 2026 incident): mapping_generate uses
