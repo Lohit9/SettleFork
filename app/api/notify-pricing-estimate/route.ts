@@ -2,8 +2,6 @@ import { Resend } from 'resend'
 import { NextResponse } from 'next/server'
 import { pricingEstimateEmail, adminPricingEstimateEmail } from '@/lib/email/templates'
 
-const resend = new Resend(process.env.RESEND_API_KEY)
-
 const FROM_NOTIFICATIONS = 'Settle <info@usesettle.ai>'
 const ADMIN_EMAIL = 'info@usesettle.ai'
 
@@ -28,6 +26,7 @@ function shouldNotify(email: string): boolean {
 // ── POST handler ──────────────────────────────────────────────────────────────
 
 export async function POST(request: Request) {
+  const resend = new Resend(process.env.RESEND_API_KEY)
   try {
     const body = await request.json()
     const {

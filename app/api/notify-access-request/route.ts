@@ -5,8 +5,6 @@ import {
   adminAccessRequestEmail,
 } from '@/lib/email/templates'
 
-const resend = new Resend(process.env.RESEND_API_KEY)
-
 const FROM_NOTIFICATIONS = 'Settle <info@usesettle.ai>'
 const FROM_KAAN = 'Settle <info@usesettle.ai>'
 const ADMIN_EMAIL = 'info@usesettle.ai'
@@ -38,6 +36,7 @@ function shouldNotify(email: string): boolean {
 // Signup notifications are sent directly from lib/actions/auth.ts via Resend.
 
 export async function POST(request: Request) {
+  const resend = new Resend(process.env.RESEND_API_KEY)
   try {
     const body = await request.json()
     const {
