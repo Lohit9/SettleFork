@@ -90,15 +90,24 @@ const LoadOrderSchema = z.object({
   reason: z.string(),
 })
 
+const JoinDeclarationSchema = z.object({
+  from_table: z.string().min(1),
+  from_field: z.string().min(1),
+  to_table: z.string().min(1),
+  to_field: z.string().min(1),
+})
+
 const SpecSchema = z.array(
   z.object({
     project_ids: z.array(z.string().uuid()),
     load_order: z.array(LoadOrderSchema),
+    joins: z.array(JoinDeclarationSchema).optional().default([]),
     entries: z.array(EntrySchema).min(1),
   }),
 )
 
 type EntryT = z.infer<typeof EntrySchema>
+type JoinDeclaration = z.infer<typeof JoinDeclarationSchema>
 
 // ── Classification ───────────────────────────────────────────────────────
 
@@ -153,6 +162,58 @@ function composeTransformationIntent(entries: EntryT[]): string | null {
   if (intents.length === 0) return null
   if (intents.length === 1) return intents[0]!.t
   return intents.map((x) => `[${x.src}]\n${x.t}`).join('\n\n')
+}
+
+// ── join_spec composition ────────────────────────────────────────────────
+// Pre-computes the per-row mapping_sources.join_spec JSONB at load time so
+// the runtime path in lib/utils/transform-cross-table.ts (deriveJoinSpec)
+// short-circuits FK inference. Required because Rootstock source schemas
+// carry no FK metadata — inferFkCandidates would return 0 candidates and
+// the runtime would throw CROSS_TABLE_FK_INFERENCE_FAILED.
+//
+// Shape: { via_fk_field, to_fk_field } — the exact two snake_case keys
+// buildJoinSpec reads at transform-cross-table.ts:296-307. Stored values
+// are field NAMES, not UUIDs (verified at mappings-for-redesign.ts:728).
+//
+// Returns null for the dominant row (ordinal 0, where contributor table ==
+// dominant) and for any same-table multi-source contributor. Throws when a
+// cross-table contributor has no matching joins declaration — the loader
+// then aborts before any DB write (Phase 5 runs before Phase 6 wipe).
+//
+// Known limitation: this populates join_spec uniformly for all multi-source
+// cross-table TFMs. The platform's apply RPC currently supports only Shape 1
+// (LEFT JOIN) semantics. The "Item Number" TFM is conceptually Shape 2
+// (UNION ALL + dedup of SKUs from both tables); populating join_spec for it
+// removes the FK-inference error but Apply will still produce wrong output
+// until migration 076 grows UNION support. Item Description and the
+// iccomcod external-id mapping are genuinely Shape 1 and work correctly.
+
+function computeJoinSpec(
+  dominantTableName: string,
+  contributorTableName: string,
+  joins: JoinDeclaration[],
+  contextForError: string,
+): { via_fk_field: string; to_fk_field: string } | null {
+  if (contributorTableName === dominantTableName) return null
+
+  const match = joins.find(
+    (j) =>
+      j.from_table === dominantTableName &&
+      j.to_table === contributorTableName,
+  )
+  if (!match) {
+    throw new Error(
+      `Missing join declaration for cross-table TFM "${contextForError}": ` +
+        `dominant="${dominantTableName}" contributor="${contributorTableName}". ` +
+        `Add an entry to spec[0].joins with from_table="${dominantTableName}", ` +
+        `to_table="${contributorTableName}".`,
+    )
+  }
+
+  return {
+    via_fk_field: match.from_field,
+    to_fk_field: match.to_field,
+  }
 }
 
 // ── Main ─────────────────────────────────────────────────────────────────
@@ -372,6 +433,26 @@ async function main(): Promise<void> {
     )
     process.exit(1)
   }
+  // Mirror the TFM gate for table_mappings — the loader inserts (and in --force,
+  // wipes) TMs in addition to TFMs, so a non-force re-run against a project that
+  // already has TMs (e.g. someone ran AI "Generate Mappings" before the loader)
+  // would otherwise produce duplicate rows in Phase 8.5.
+  const { count: existingTmCount, error: tmCountErr } = await supabase
+    .from('table_mappings')
+    .select('id', { count: 'exact', head: true })
+    .eq('project_id', projectId!)
+    .neq('status', 'rejected')
+  if (tmCountErr) {
+    console.error(`[load-rootstock-spec] table_mappings count failed: ${tmCountErr.message}`)
+    process.exit(1)
+  }
+  if ((existingTmCount ?? 0) > 0 && !force) {
+    console.error(
+      `[load-rootstock-spec] project ${projectId} already has ${existingTmCount} ` +
+        `non-rejected table_mappings. Re-run with --force to wipe and reload.`,
+    )
+    process.exit(1)
+  }
 
   // ── Phase 5: build write payloads (in-memory, no DB writes yet) ────────
 
@@ -403,6 +484,7 @@ async function main(): Promise<void> {
     source_table_id: string
     confidence: number
     ordinal: number
+    join_spec: { via_fk_field: string; to_fk_field: string } | null
   }
   type SourceAckRow = {
     project_id: string
@@ -419,7 +501,23 @@ async function main(): Promise<void> {
   // Carry the pending sources keyed by target_field_id so we can join.
   const pendingSourcesByTargetFieldId = new Map<
     string,
-    Array<{ source_field_id: string; source_table_id: string; confidence: number; ordinal: number }>
+    Array<{
+      source_field_id: string
+      source_table_id: string
+      confidence: number
+      ordinal: number
+      join_spec: { via_fk_field: string; to_fk_field: string } | null
+    }>
+  >()
+  // table_mappings rows: one per distinct (dominant_source_table, target_table)
+  // pair. Required to satisfy the Transform-page gate in getTransformData
+  // (lib/actions/transformations.ts:599-605) which returns "No mappings found"
+  // when this table is empty, regardless of TFM count. Contributor source tables
+  // in cross-table TFMs flow through mapping_sources and do NOT get their own
+  // TM row — mirrors the AI fanout convention in lib/ai/mapping-engine.ts:2068.
+  const tablePairs = new Map<
+    string,
+    { source_table_id: string; target_table_id: string; minConfidence: number }
   >()
 
   for (const [, group] of mappedByTarget) {
@@ -446,20 +544,46 @@ async function main(): Promise<void> {
       status: 'needs_review',
     })
 
+    // Roll up the (dominant_source_table, target_table) pair for Phase 8.5.
+    // `head` is the dominant entry (group[0]); resolveSource already validated
+    // in Phase 3 so the non-null assertion is safe.
+    const dominantSourceTableId = resolveSource(head.source_table, head.source_field)!.tableId
+    const targetTableId = resolvedTarget.tableId
+    const pairKey = `${dominantSourceTableId}::${targetTableId}`
+    const existingPair = tablePairs.get(pairKey)
+    if (existingPair) {
+      existingPair.minConfidence = Math.min(existingPair.minConfidence, confidence)
+    } else {
+      tablePairs.set(pairKey, {
+        source_table_id: dominantSourceTableId,
+        target_table_id: targetTableId,
+        minConfidence: confidence,
+      })
+    }
+
+    const dominantTableName = group[0]!.source_table
     const sources: Array<{
       source_field_id: string
       source_table_id: string
       confidence: number
       ordinal: number
+      join_spec: { via_fk_field: string; to_fk_field: string } | null
     }> = []
     for (let i = 0; i < group.length; i++) {
       const e = group[i]!
       const r = resolveSource(e.source_table, e.source_field)!
+      const joinSpec = computeJoinSpec(
+        dominantTableName,
+        e.source_table,
+        spec.joins,
+        `${head.target_table}.${head.target_field}`,
+      )
       sources.push({
         source_field_id: r.fieldId,
         source_table_id: r.tableId,
         confidence: e.confidence,
         ordinal: i,
+        join_spec: joinSpec,
       })
     }
     pendingSourcesByTargetFieldId.set(resolvedTarget.fieldId, sources)
@@ -518,6 +642,7 @@ async function main(): Promise<void> {
   console.log(`  TFMs (mapped)         : ${mappedTfmCount}`)
   console.log(`  TFMs (value assignment): ${vaTfmCount} (${literalVaCount} with combination_sql literal)`)
   console.log(`  mapping_sources rows  : ${totalMappingSources}`)
+  console.log(`  table_mappings rows   : ${tablePairs.size}`)
   console.log(`  source_field_acks     : ${ackRows.length}`)
   console.log(`  schema_documents rows : 1 (poc_answer_key)`)
   console.log(`  projects.poc_template : '${POC_TEMPLATE_VALUE}'`)
@@ -551,6 +676,22 @@ async function main(): Promise<void> {
         .eq('project_id', projectId!)
       if (error) {
         console.error(`  target_field_mappings delete failed: ${error.message}`)
+        process.exit(1)
+      }
+    }
+    // DELETE table_mappings — TFMs do not FK to TMs (the new mapping model in
+    // migration 074 bypasses table_mappings), so a TFM wipe does not cascade
+    // here. Wiping ensures Phase 8.5's unconditional INSERT doesn't produce
+    // duplicate (src_table, tgt_table) pairs on re-runs. Destructive by design:
+    // any user-edited TM rows (status='approved', custom ai_reasoning) for this
+    // project are dropped — matches the rest of --force's contract.
+    {
+      const { error } = await supabase
+        .from('table_mappings')
+        .delete()
+        .eq('project_id', projectId!)
+      if (error) {
+        console.error(`  table_mappings delete failed: ${error.message}`)
         process.exit(1)
       }
     }
@@ -604,6 +745,7 @@ async function main(): Promise<void> {
         source_table_id: s.source_table_id,
         confidence: s.confidence,
         ordinal: s.ordinal,
+        join_spec: s.join_spec,
       })
     }
   }
@@ -612,6 +754,30 @@ async function main(): Promise<void> {
     const { error: msErr } = await supabase.from('mapping_sources').insert(msRows)
     if (msErr) {
       console.error(`  mapping_sources insert failed: ${msErr.message}`)
+      process.exit(1)
+    }
+  }
+
+  // ── Phase 8.5: bulk INSERT table_mappings ──────────────────────────────
+  // Required because getTransformData (lib/actions/transformations.ts:599-605)
+  // gates the entire Transform page on table_mappings count > 0, regardless of
+  // TFM count. TFMs do not FK to table_mappings — these rows exist purely to
+  // satisfy that UI gate. One row per distinct (dominant_source_table,
+  // target_table) pair, deduped in Phase 5 (tablePairs Map). Status mirrors the
+  // loader's TFM status and the AI fanout convention (lib/ai/mapping-engine.ts:2075).
+  if (tablePairs.size > 0) {
+    const tmRows = Array.from(tablePairs.values()).map((p) => ({
+      project_id: projectId!,
+      source_table_id: p.source_table_id,
+      target_table_id: p.target_table_id,
+      confidence: p.minConfidence,
+      status: 'needs_review' as const,
+      ai_reasoning: 'Seeded from Rootstock POC spec (load-rootstock-spec.ts)',
+    }))
+    console.log(`[load-rootstock-spec] writing ${tmRows.length} table_mappings...`)
+    const { error: tmErr } = await supabase.from('table_mappings').insert(tmRows)
+    if (tmErr) {
+      console.error(`  table_mappings insert failed: ${tmErr.message}`)
       process.exit(1)
     }
   }
