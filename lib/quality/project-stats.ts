@@ -105,6 +105,12 @@ export interface ProjectStatsTargetAxis {
    *  define?", `total` when the question is "how many mapping slots
    *  exist?". */
   schemaTotal: number
+  /** PR θ — schema-wide count of target-role tables in scope (distinct
+   *  `tables.id` whose `dataset_id` is in the project's `role='target'`
+   *  datasets). Inventory-axis denominator for the Mapping page strip's
+   *  "Target" chip ("N tables · M fields"). Pure schema count — does
+   *  NOT filter by usage, coverage, or mapping status. */
+  tables: number
 }
 
 export interface ProjectStatsSourceAxis {
@@ -119,6 +125,12 @@ export interface ProjectStatsSourceAxis {
    *  acknowledged-only sources (which carry no mapping). Always
    *  <= `decided` <= `total`. */
   usedInMapping: number
+  /** PR θ — schema-wide count of source-role tables in scope (distinct
+   *  `tables.id` whose `dataset_id` is in the project's `role='source'`
+   *  datasets). Inventory-axis denominator for the Mapping page strip's
+   *  "Source" chip ("N tables · M fields"). Pure schema count — does
+   *  NOT filter by usage, coverage, or mapping status. */
+  tables: number
 }
 
 export interface ProjectStatsTransforms {
@@ -510,11 +522,13 @@ export function rollupProjectStats(
       needsReview: stats.mappingNeedsReview,
       usedInMapping: stats.targetFieldsUsedInMapping,
       schemaTotal: targetFields.length,
+      tables: targetTableIds.size,
     },
     source: {
       decided: decidedSourceIds.size,
       total: sourceFields.length,
       usedInMapping: mappedSourceIds.size,
+      tables: sourceTableIds.size,
     },
     transforms: {
       complete: transformsComplete,
