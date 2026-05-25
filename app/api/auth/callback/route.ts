@@ -11,9 +11,8 @@ import {
 } from '@/lib/sso/attempt-cookie'
 import type { SupabaseClient, User } from '@supabase/supabase-js'
 
-const resend = new Resend(process.env.RESEND_API_KEY)
-
 export async function GET(request: Request) {
+  const resend = new Resend(process.env.RESEND_API_KEY)
   const requestUrl = new URL(request.url)
   const code = requestUrl.searchParams.get('code')
   const next = requestUrl.searchParams.get('next') || '/app/projects'
