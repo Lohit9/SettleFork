@@ -281,9 +281,19 @@ export async function deleteSchemaDocument(documentId: string): Promise<{ succes
   // Delete from storage
   await supabase.storage.from('project-files').remove([doc.file_storage_path])
 
-  // Delete DB record (RLS ensures user owns it)
-  const { error } = await supabase.from('schema_documents').delete().eq('id', documentId)
+  // Delete DB record. RLS enforces project membership; `.select('id')`
+  // surfaces silent rejections — Supabase returns {data:[], error:null}
+  // when a DELETE matches zero rows (RLS USING evaluates false), so
+  // checking error alone would let RLS-blocked deletes look successful.
+  const { data: deleted, error } = await supabase
+    .from('schema_documents')
+    .delete()
+    .eq('id', documentId)
+    .select('id')
   if (error) return { success: false, error: error.message }
+  if (!deleted || deleted.length === 0) {
+    return { success: false, error: 'You do not have permission to delete this document.' }
+  }
   return { success: true }
 }
 
