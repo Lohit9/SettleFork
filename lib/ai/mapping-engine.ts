@@ -50,6 +50,7 @@ import type {
 import { inferFkCandidates } from '@/lib/utils/fk-inference'
 import { runSingleAgentMappingLoop } from '@/lib/ai/single-agent-mapping'
 import { validateMappingBatch, type MappingProposal } from '@/lib/validation/mapping-validator'
+import { validateTransformSQL } from '@/lib/validation/transform-validator'
 import {
   getStaticSuggestionForTarget,
   resolveStaticSourceUnmappedRationale,
@@ -1713,6 +1714,10 @@ export async function persistClaudeFieldMappingsForTM(
     inserted++
 
     if (tfmId && entry.transformSql) {
+      // Static-only validation (no RPC) — avoid N async calls in batch loop.
+      const l1Result = await validateTransformSQL(entry.transformSql)
+      const validationIssues = l1Result.issues.length > 0 ? l1Result.issues : null
+
       const { error: txErr } = await supabase
         .from('transformations')
         .insert({
@@ -1722,6 +1727,7 @@ export async function persistClaudeFieldMappingsForTM(
           is_ai_generated: true,
           status: 'draft',
           test_results: null,
+          validation_issues: validationIssues,
         })
       if (txErr) {
         console.error(

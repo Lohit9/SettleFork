@@ -122,6 +122,7 @@ import { logAIEdit } from '@/lib/actions/ai-edit-history'
 import { assertMappingWritesEnabled } from '@/lib/auth/mapping-writes'
 import { SHIMMED_ID_SEPARATOR } from '@/lib/compat/mapping-shim'
 import { revalidatePath } from 'next/cache'
+import { validateTransformSQL } from '@/lib/validation/transform-validator'
 import type {
   TargetFieldMappingRow,
   TransformationRow,
@@ -1473,6 +1474,10 @@ The user has updated their description. Modify the existing SQL expression above
       sql = wrapWithNullGuard(sql, srcField.name)
     }
 
+    // Layer 1 validation — annotates the row, never blocks save.
+    const l1Result = await validateTransformSQL(sql, supabase)
+    const validationIssues = l1Result.issues.length > 0 ? l1Result.issues : null
+
     // Upsert transformation keyed on target_field_mapping_id.
     // Pull generated_sql for previousSql capture (provenance diff).
     const { data: existing } = await supabase
@@ -1496,6 +1501,7 @@ The user has updated their description. Modify the existing SQL expression above
           is_ai_generated: true,
           status: 'draft' as TransformationStatus,
           test_results: null,
+          validation_issues: validationIssues,
         })
         .eq('id', existing.id)
       if (updateErr) return { success: false, error: 'Failed to save transformation' }
@@ -1513,6 +1519,7 @@ The user has updated their description. Modify the existing SQL expression above
           original_ai_generated_sql: sql,
           status: 'draft' as TransformationStatus,
           test_results: null,
+          validation_issues: validationIssues,
         })
         .select('id')
         .single()
@@ -1727,6 +1734,10 @@ export async function updateTransformSQL(
     const previousSql = tx.generated_sql ?? null
     const wasAiGenerated = tx.is_ai_generated === true
 
+    // Layer 1 validation — annotates the row, never blocks save.
+    const l1Result = await validateTransformSQL(cleanSql, supabase)
+    const validationIssues = l1Result.issues.length > 0 ? l1Result.issues : null
+
     const { error } = await supabase
       .from('transformations')
       .update({
@@ -1734,6 +1745,7 @@ export async function updateTransformSQL(
         is_ai_generated: false,
         status: newStatus,
         test_results: null,
+        validation_issues: validationIssues,
       })
       .eq('id', transformationId)
 
