@@ -1175,6 +1175,7 @@ export async function createFieldMapping(input: {
         type: combinationType,
         ai_reasoning: tfmAiReasoning,
       },
+      p_table_mapping_id: tableMappingId,
     },
   )
 

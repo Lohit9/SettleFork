@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { resolveDefaultTableMappingsForTargetFields } from '@/lib/utils/partition-binding'
 import type { ClaudeFieldMapping } from '@/lib/ai/mapping-engine'
 
 type StaticTransform = string | Record<string, unknown>
@@ -584,6 +585,25 @@ async function persistTargetAcknowledgments(
     )
   }
 
+  // PR Ω.1 — Resolve each ack TFM to a default partition TM (MIN created_at, id).
+  // Mirrors migration 107's backfill #2. Caller must invoke
+  // ensureStaticTableMappings BEFORE this function — otherwise the helper
+  // returns no TM ids and every ack is skipped with a logged warning.
+  const candidateTargetFieldIds: string[] = []
+  for (const entry of entries) {
+    const targetTable = targetTableByName.get(normalizeName(entry.target_table))
+    if (!targetTable) continue
+    const tfid = targetFieldIdByTableAndName.get(
+      `${targetTable.id}::${normalizeName(entry.target_field)}`,
+    )
+    if (tfid) candidateTargetFieldIds.push(tfid)
+  }
+  const defaultTms = await resolveDefaultTableMappingsForTargetFields(
+    supabase,
+    projectId,
+    candidateTargetFieldIds,
+  )
+
   let inserted = 0
   const { supabaseAdmin } = await import('@/lib/supabase/admin')
   for (const entry of entries) {
@@ -594,11 +614,21 @@ async function persistTargetAcknowledgments(
     )
     if (!targetFieldId) continue
 
+    const tableMappingId = defaultTms.get(targetFieldId)
+    if (!tableMappingId) {
+      console.warn(
+        `[static-mappings] skipping target ack for ${entry.target_table}.${entry.target_field}: ` +
+          `no table_mapping exists for the target table. Ensure mapped entries are persisted first.`,
+      )
+      continue
+    }
+
     const { data: upserted, error: tfmError } = await supabaseAdmin
       .from('target_field_mappings')
       .upsert({
         project_id: projectId,
         target_field_id: targetFieldId,
+        table_mapping_id: tableMappingId,
         is_acknowledged: true,
         acknowledgment_reason: entry.explanation.trim() || 'Unmapped',
         status: 'needs_review',
@@ -608,7 +638,7 @@ async function persistTargetAcknowledgments(
         ai_reasoning: buildReasoning(entry),
         transformation_intent: buildTransformationIntent([entry]),
         needs_transformation: entry.transformation_needed,
-      }, { onConflict: 'project_id,target_field_id' })
+      }, { onConflict: 'project_id,target_field_id,table_mapping_id' })
       .select('id')
       .single<{ id: string }>()
     if (tfmError || !upserted) {
@@ -842,6 +872,7 @@ async function persistResolvedStaticTargetMappings(args: {
   supabase: SupabaseClient
   projectId: string
   resolvedEntries: ResolvedMappedEntry[]
+  pairToTableMappingId: Map<string, string>
 }): Promise<number> {
   const grouped = new Map<string, ResolvedMappedEntry[]>()
   for (const entry of args.resolvedEntries) {
@@ -897,6 +928,15 @@ async function persistResolvedStaticTargetMappings(args: {
     )
     const combinationType = rpcSources.length > 1 ? 'concat_space' : 'single'
 
+    const pairKey = `${primary.sourceTableId}::${primary.targetTableId}`
+    const tableMappingId = args.pairToTableMappingId.get(pairKey)
+    if (!tableMappingId) {
+      console.error(
+        `[static-mappings] no table_mapping for pair ${pairKey} (target ${primary.targetFieldId})`,
+      )
+      continue
+    }
+
     const { error } = await args.supabase.rpc('dq_create_target_field_mapping', {
       p_project_id: args.projectId,
       p_target_field_id: primary.targetFieldId,
@@ -905,6 +945,7 @@ async function persistResolvedStaticTargetMappings(args: {
         type: combinationType,
         ai_reasoning: reasoning,
       },
+      p_table_mapping_id: tableMappingId,
     })
 
     if (error) {
@@ -1025,14 +1066,9 @@ export async function persistStaticMappingsForSelection(
   let generated = 0
   let skipped = 0
 
-  await persistTargetAcknowledgments(
-    args.supabase,
-    args.projectId,
-    targetUnmappedEntries,
-    projectSchema.targetTables,
-    projectSchema.targetFields,
-  )
-
+  // PR Ω.1 — TMs must be written BEFORE target acknowledgments. The ack writer
+  // looks up a default table_mapping_id for each ack TFM (mirrors migration 107
+  // backfill #2). With no TMs, every ack would be skipped with a logged warning.
   const { pairToTableMappingId, created, reused } = await ensureStaticTableMappings({
     supabase: args.supabase,
     projectId: args.projectId,
@@ -1041,10 +1077,19 @@ export async function persistStaticMappingsForSelection(
   generated = pairToTableMappingId.size
   skipped = reused
 
+  await persistTargetAcknowledgments(
+    args.supabase,
+    args.projectId,
+    targetUnmappedEntries,
+    projectSchema.targetTables,
+    projectSchema.targetFields,
+  )
+
   const insertedTargetMappings = await persistResolvedStaticTargetMappings({
     supabase: args.supabase,
     projectId: args.projectId,
     resolvedEntries: resolvedMappedEntries,
+    pairToTableMappingId,
   })
 
   if (insertedTargetMappings === 0) {
