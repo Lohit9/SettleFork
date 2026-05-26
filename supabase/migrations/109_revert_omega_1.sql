@@ -1,6 +1,11 @@
 -- ============================================================================
--- Migration 108 — PR Ω.1 ROLLBACK (forward-revert of migration 107)
+-- Migration 109 — PR Ω.1 ROLLBACK (forward-revert of migration 107)
 -- ============================================================================
+--
+-- Renumbered from 108 → 109 in PR Ω.2.0 to clear a slot collision with
+-- 108_schema_documents_by_project_policies.sql (PR #186, applied to prod).
+-- This rollback file has never been applied; the rename has no prod impact.
+--
 --
 -- WHAT THIS MIGRATION DOES
 --   Reverses migration 107 in full:
@@ -31,7 +36,7 @@
 -- no automatic way to collapse N partition-TFMs down to 1 without losing
 -- partition-specific mappings. In that case:
 --
---   DO NOT APPLY 108. Fix forward with a new targeted migration.
+--   DO NOT APPLY 109. Fix forward with a new targeted migration.
 --
 -- ROLLBACK SEQUENCING
 --   1. Revert the application-code PR first (mapping-engine.ts to NOT pass
@@ -39,7 +44,7 @@
 --   2. Wait for CI green and deploy.
 --   3. Then apply this migration via Supabase Dashboard.
 --
--- If 108 is applied before the code revert, the next call to
+-- If 109 is applied before the code revert, the next call to
 -- dq_create_target_field_mapping will pass 6 args to a function that now
 -- accepts 5 → Postgres function-not-found error → mapping_generate fails.
 -- ============================================================================
