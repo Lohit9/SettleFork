@@ -11,6 +11,7 @@ import {
 } from 'react'
 import { Loader2 } from 'lucide-react'
 import { cn } from '@/components/ui/utils'
+import { CollapsibleText } from '@/components/ui/collapsible-text'
 import {
   AlertCircle,
   AlertTriangle,
@@ -3006,7 +3007,17 @@ function WhyThisMappingSection({ aiReasoning }: { aiReasoning: string | null }) 
       <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-slate-500">
         Why this mapping
       </h3>
-      <ReasoningProse text={text} testIdPrefix="drawer-why-this-mapping" />
+      <CollapsibleText
+        text={text}
+        threshold={400}
+        testId="drawer-why-this-mapping-collapsible"
+        renderContent={(displayText) => (
+          <ReasoningProse
+            text={displayText}
+            testIdPrefix="drawer-why-this-mapping"
+          />
+        )}
+      />
     </section>
   )
 }
@@ -3561,36 +3572,53 @@ function TransformationSection({
       >
         <div className="space-y-2">
           {transformationIntent ? (
-            <p
-              className="text-sm text-slate-700"
-              data-testid="drawer-transformation-intent"
-            >
-              {transformationIntent}
-            </p>
+            <CollapsibleText
+              text={transformationIntent}
+              threshold={400}
+              renderContent={(displayText) => (
+                <p
+                  className="text-sm text-slate-700"
+                  data-testid="drawer-transformation-intent"
+                >
+                  {displayText}
+                </p>
+              )}
+            />
           ) : null}
           {row.transformationStatus ? (
             <TransformationStatusPill status={row.transformationStatus} />
           ) : null}
           {row.transformationDescription ? (
-            <p
-              className="text-sm text-slate-700"
-              data-testid="drawer-transformation-description"
-            >
-              {row.transformationDescription}
-            </p>
+            <CollapsibleText
+              text={row.transformationDescription}
+              threshold={400}
+              renderContent={(displayText) => (
+                <p
+                  className="text-sm text-slate-700"
+                  data-testid="drawer-transformation-description"
+                >
+                  {displayText}
+                </p>
+              )}
+            />
           ) : null}
           {row.transformationSqlPreview ? (
-            <pre
-              className={cn(
-                'overflow-y-auto rounded bg-slate-50 px-3 py-2',
-                'font-mono text-[11px] text-slate-900',
-                'whitespace-pre-wrap break-words',
-                'max-h-32',
+            <CollapsibleText
+              text={row.transformationSqlPreview}
+              threshold={600}
+              renderContent={(displayText) => (
+                <pre
+                  className={cn(
+                    'rounded bg-slate-50 px-3 py-2',
+                    'font-mono text-[11px] text-slate-900',
+                    'whitespace-pre-wrap break-words',
+                  )}
+                  data-testid="drawer-transformation-sql-preview"
+                >
+                  {displayText}
+                </pre>
               )}
-              data-testid="drawer-transformation-sql-preview"
-            >
-              {row.transformationSqlPreview}
-            </pre>
+            />
           ) : null}
           <TransformLink
             href={transformHref}
@@ -3609,12 +3637,18 @@ function TransformationSection({
         title="Transformation"
         testId="drawer-section-transformation"
       >
-        <p
-          className="text-sm text-slate-700"
-          data-testid="drawer-transformation-intent"
-        >
-          {transformationIntent}
-        </p>
+        <CollapsibleText
+          text={transformationIntent}
+          threshold={400}
+          renderContent={(displayText) => (
+            <p
+              className="text-sm text-slate-700"
+              data-testid="drawer-transformation-intent"
+            >
+              {displayText}
+            </p>
+          )}
+        />
       </DrawerSection>
     )
   }
