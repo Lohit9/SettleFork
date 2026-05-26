@@ -1620,6 +1620,7 @@ export async function persistClaudeFieldMappingsForTM(
   const {
     supabase,
     projectId,
+    tableMappingId,
     sourceFieldMap,
     targetFieldMap,
     fieldMappings,
@@ -1724,6 +1725,7 @@ export async function persistClaudeFieldMappingsForTM(
         type: entry.combinationType,
         ai_reasoning: entry.reasoning,
       },
+      p_table_mapping_id: tableMappingId,
     })
     if (error) {
       console.error(

@@ -70,6 +70,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { resolveDefaultTableMappingsForTargetFields } from '@/lib/utils/partition-binding'
 import type {
   PathDParsedOutput,
   MappingPayload,
@@ -470,6 +471,15 @@ async function persistMappings(
   // default 'needs_review', a fundamental trust violation.
   const userLocks = await fetchTfmUserLocks(admin, projectId)
 
+  // PR Ω.1 — Path D writes ack-style TFMs without a natural source TM.
+  // Resolve the default table_mapping_id for each target field via the
+  // same rule migration 107's backfill #2 used (MIN created_at, id).
+  const defaultTms = await resolveDefaultTableMappingsForTargetFields(
+    admin,
+    projectId,
+    data.map((m) => m.target_field_id),
+  )
+
   // Build TFM rows; resolve data_quality_flag_indices → dqIds[]
   const tfmRows = data.map((m) => {
     const dqUuids = m.data_quality_flag_indices
@@ -483,6 +493,7 @@ async function persistMappings(
     return {
       project_id: projectId,
       target_field_id: m.target_field_id,
+      table_mapping_id: defaultTms.get(m.target_field_id),
       ai_reasoning: m.ai_reasoning,
       transformation_intent: m.transformation_intent,
       mapping_cardinality: m.mapping_cardinality,
@@ -497,10 +508,24 @@ async function persistMappings(
     }
   })
 
-  // UPSERT by (project_id, target_field_id) — natural key from migration 074
+  // Drop rows that have no matching TM for the target table — the NOT NULL
+  // constraint on target_field_mappings.table_mapping_id (PR Ω.1) would reject
+  // them and abort the entire upsert otherwise. Log so the operator notices.
+  const orphans = tfmRows.filter((r) => !r.table_mapping_id)
+  if (orphans.length > 0) {
+    console.error(
+      `[path-d-persistence] ${orphans.length} target field(s) skipped — no table_mapping for their target table:`,
+      orphans.map((r) => r.target_field_id),
+    )
+  }
+  const writableRows = tfmRows.filter((r) => r.table_mapping_id)
+  if (writableRows.length === 0) return []
+
+  // UPSERT by (project_id, target_field_id, table_mapping_id) — partition-aware
+  // natural key from migration 107.
   const upResult = await admin
     .from('target_field_mappings')
-    .upsert(tfmRows, { onConflict: 'project_id,target_field_id' })
+    .upsert(writableRows, { onConflict: 'project_id,target_field_id,table_mapping_id' })
     .select('id, target_field_id')
   if (upResult.error) throw new Error(`mappings upsert: ${upResult.error.message}`)
 
