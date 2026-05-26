@@ -132,6 +132,11 @@ const FIELD_MAPPING_SCHEMA = {
       description:
         'Required when mapping_type === "one_to_many". Brief description of which part to extract (e.g., "Extract first name (substring before first space)", "Extract street component before comma"). Each one_to_many entry gets its own split_hint per target.',
     },
+    transform_sql: {
+      type: 'string',
+      description:
+        'PostgreSQL expression (not a full statement — no SELECT, FROM, WHERE, DDL, or DML keywords) that converts the source value to the target representation. Required when needs_transformation=true. Reference source fields as row_data->>\'FieldName\'. No window functions. Explicit cast to target type (e.g., ::NUMERIC, ::BOOLEAN). Omit when needs_transformation=false.',
+    },
   },
   required: ['source_field', 'target_field', 'confidence', 'reasoning'],
 } as const
