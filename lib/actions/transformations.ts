@@ -2406,10 +2406,9 @@ export async function autoGenerateAllTransforms(
     .single()
   if (!project) return { success: false, generated: 0, failed: 0, error: 'Project not found' }
 
-  // S2.2 — snapshot approved mappings into the template flywheel.
-  // Fire-and-forget: failure must never block transform generation.
-  snapshotTemplateAsync(projectId, (project as typeof project & { org_id: string }).org_id).catch(
-    (err) => console.error('[autoGenerateAllTransforms] template snapshot failed:', err),
+  const { org_id } = project as typeof project & { org_id: string }
+  snapshotTemplate(projectId, org_id).catch((err) =>
+    console.error('[templates] snapshot failed:', err),
   )
 
   return guardWrites(projectId, async () => {
@@ -3646,61 +3645,38 @@ export async function checkFieldMappingHasTransform(
 // NOTE ON GUARDING: same pattern as `resetFieldTransform` — called exclusively
 // from guarded write paths in `mappings.ts`; no re-assertion.
 
-// ─── S2.2: Template flywheel snapshot ────────────────────────────────────────
-//
-// Called fire-and-forget from autoGenerateAllTransforms. Queries approved
-// TFMs for the project, builds CompletedMapping[], and calls saveTemplate.
-// Source/target system names come from datasets.role = 'source'/'target'.
-// isForeignKey is not exposed on FieldItem — defaults to false (signature
-// matching works without it; FK info is supplementary).
+async function snapshotTemplate(projectId: string, orgId: string): Promise<void> {
+  const data = await getTransformData(projectId)
+  const srcSystem = data.datasets[0]?.datasetName ?? 'unknown'
 
-async function snapshotTemplateAsync(projectId: string, orgId: string): Promise<void> {
-  const pageData = await getTransformData(projectId)
+  const { data: tgtDs } = await supabaseAdmin
+    .from('datasets').select('name').eq('project_id', projectId).eq('role', 'target').limit(1)
+  const tgtSystem = tgtDs?.[0]?.name ?? 'unknown'
 
-  // Derive source/target system names from dataset names.
-  // One dataset per role is the norm; if multiple exist, use the first.
-  const sourceDataset = pageData.datasets[0] // datasets are source-led
-  const sourceSystem = sourceDataset?.datasetName ?? 'unknown'
-
-  // Target system name: query datasets table directly for role='target'
-  const { data: targetDatasets } = await supabaseAdmin
-    .from('datasets')
-    .select('name')
-    .eq('project_id', projectId)
-    .eq('role', 'target')
-    .limit(1)
-  const targetSystem = targetDatasets?.[0]?.name ?? 'unknown'
-
-  const completedMappings: CompletedMapping[] = []
-
-  for (const ds of pageData.datasets) {
-    for (const tbl of ds.tables) {
-      for (const field of tbl.fields) {
-        // Only snapshot approved (non-null source) mappings with a generated transform
-        if (!field.sourceFieldId || !field.sourceFieldName || !field.sourceFieldDataType) continue
-
-        completedMappings.push({
+  const mappings: CompletedMapping[] = data.datasets.flatMap(ds =>
+    ds.tables.flatMap(tbl =>
+      tbl.fields
+        .filter(f => f.sourceFieldId && f.sourceFieldName && f.sourceFieldDataType)
+        .map(f => ({
           sourceTableName: tbl.sourceTableName,
-          sourceFieldName: field.sourceFieldName,
-          sourceDataType: field.sourceFieldDataType,
-          sourceIsNullable: field.sourceFieldIsNullable,
+          sourceFieldName: f.sourceFieldName!,
+          sourceDataType: f.sourceFieldDataType!,
+          sourceIsNullable: f.sourceFieldIsNullable,
           sourceIsForeignKey: false,
           targetTableName: tbl.targetTableName,
-          targetFieldName: field.targetFieldName,
-          targetDataType: field.targetFieldDataType,
-          targetIsNullable: field.targetFieldIsNullable,
+          targetFieldName: f.targetFieldName,
+          targetDataType: f.targetFieldDataType,
+          targetIsNullable: f.targetFieldIsNullable,
           targetIsForeignKey: false,
-          transformSql: field.transformation?.generated_sql ?? null,
-          explanation: field.aiReasoning ?? '',
-          confidence: field.confidence ?? 0,
-        })
-      }
-    }
-  }
+          transformSql: f.transformation?.generated_sql ?? null,
+          explanation: f.aiReasoning ?? '',
+          confidence: f.confidence ?? 0,
+        }))
+    )
+  )
 
-  if (completedMappings.length === 0) return
-
-  await saveTemplate(orgId, sourceSystem, targetSystem, completedMappings, [])
+  if (mappings.length === 0) return
+  await saveTemplate(orgId, srcSystem, tgtSystem, mappings, [])
 }
 
 export async function resetAllTransformsForTable(
