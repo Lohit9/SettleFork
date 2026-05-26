@@ -318,7 +318,7 @@ describe('MappingDrawer — header (feat/mapping-drawer-header-redesign)', () =>
     expect(targetSide.textContent).toContain('created_at')
   })
 
-  it('confidence line renders dot + pct + status-derived label for an approved mapped row', () => {
+  it('status line renders "Approved" with emerald dot for an approved mapped row (no percentage)', () => {
     render(
       <MappingDrawer
         row={mapped({ status: 'approved', confidence: 98 })}
@@ -331,12 +331,17 @@ describe('MappingDrawer — header (feat/mapping-drawer-header-redesign)', () =>
     const dot = within(line).getByTestId('mapping-drawer-header-confidence-dot')
     expect(dot.className).toContain('bg-emerald-500')
     const text = within(line).getByTestId('mapping-drawer-header-confidence-text')
-    // formatConfidencePercent rounds to integer per Phase 4-polish-1 Refinement H.
-    expect(text.textContent).toContain('98%')
-    expect(text.textContent).toContain('confidence')
+    // ui/mapping-drawer-approved-status-display — approved rows show
+    // the literal "Approved" label and DO NOT surface the confidence
+    // percentage. The confidence number is the AI's pre-approval
+    // score, not the post-approval state, so showing it after the
+    // user has approved conflates two concepts.
+    expect(text.textContent).toContain('Approved')
+    expect(text.textContent).not.toContain('98%')
+    expect(text.textContent).not.toMatch(/\d/)
   })
 
-  it('confidence line renders the status label for needs_review and rejected rows', () => {
+  it('status line renders "{pct}% needs review" for needs_review rows and "Rejected" (no pct) for rejected rows', () => {
     const { rerender } = render(
       <MappingDrawer
         row={mapped({ status: 'needs_review', confidence: 54 })}
@@ -351,6 +356,9 @@ describe('MappingDrawer — header (feat/mapping-drawer-header-redesign)', () =>
     ).toContain('bg-slate-400')
     expect(
       within(line).getByTestId('mapping-drawer-header-confidence-text').textContent,
+    ).toContain('54%')
+    expect(
+      within(line).getByTestId('mapping-drawer-header-confidence-text').textContent,
     ).toContain('needs review')
 
     rerender(
@@ -362,27 +370,32 @@ describe('MappingDrawer — header (feat/mapping-drawer-header-redesign)', () =>
     )
     line = screen.getByTestId('mapping-drawer-header-confidence')
     expect(line.getAttribute('data-status')).toBe('rejected')
-    // feat/normalize-rejected-rows-null-confidence: post-#157/#158/A2
-    // 'rejected' collapses onto the needs_review visual (Reject =
-    // reset). The dot renders slate-400, NOT red — matching the
-    // flat-view `FlatStatusDot` / `StatusDot` collapse. The trailing
-    // label word stays "rejected".
+    // Post-#157/#158/A2: rejected collapses onto the needs_review
+    // visual (Reject = reset). Dot stays slate-400 — only the label
+    // differs.
     expect(
       within(line).getByTestId('mapping-drawer-header-confidence-dot').className,
     ).toContain('bg-slate-400')
     expect(
       within(line).getByTestId('mapping-drawer-header-confidence-dot').className,
     ).not.toContain('bg-red-500')
-    expect(
-      within(line).getByTestId('mapping-drawer-header-confidence-text').textContent,
-    ).toContain('rejected')
+    // ui/mapping-drawer-approved-status-display — rejected rows show
+    // the literal "Rejected" label without a percentage (same
+    // rationale as approved: confidence is pre-decision, status is
+    // post-decision).
+    const text = within(line).getByTestId(
+      'mapping-drawer-header-confidence-text',
+    )
+    expect(text.textContent).toContain('Rejected')
+    expect(text.textContent).not.toContain('80%')
+    expect(text.textContent).not.toMatch(/\d/)
   })
 
-  it('confidence line renders NOTHING when row.confidence is null (unmapped / null-confidence VA)', () => {
+  it('status line renders NOTHING when row.confidence is null for needs_review/unmapped rows', () => {
     render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
-    // feat/normalize-rejected-rows-null-confidence: a null confidence
-    // suppresses the whole line — no dot, no label. Pre-change it
-    // rendered a bare status word with no number.
+    // needs_review / 'unmapped' literal still gate on confidence
+    // presence — the percentage is the load-bearing affordance for
+    // those states. A null confidence suppresses the whole line.
     expect(
       screen.queryByTestId('mapping-drawer-header-confidence'),
     ).toBeNull()
@@ -391,7 +404,7 @@ describe('MappingDrawer — header (feat/mapping-drawer-header-redesign)', () =>
     ).toBeNull()
   })
 
-  it('confidence line renders NOTHING for an approved row with null confidence (orphan-visual fix)', () => {
+  it('status line renders "Approved" even when confidence is null (terminal state, no pct needed)', () => {
     render(
       <MappingDrawer
         row={mapped({ status: 'approved', confidence: null })}
@@ -399,12 +412,17 @@ describe('MappingDrawer — header (feat/mapping-drawer-header-redesign)', () =>
         onClose={() => {}}
       />,
     )
-    // The orphan visual this fix targets: approved + null confidence
-    // previously showed the bare word "confidence" with no percentage.
-    // Suppression is status-agnostic — it keys off confidence alone.
+    // ui/mapping-drawer-approved-status-display — approved is a
+    // terminal state, so the label renders regardless of whether a
+    // confidence number is on file. This reverses the prior
+    // confidence-gated suppression: the user wants to see "Approved"
+    // unconditionally on approved rows.
+    const line = screen.getByTestId('mapping-drawer-header-confidence')
+    expect(line.getAttribute('data-status')).toBe('approved')
     expect(
-      screen.queryByTestId('mapping-drawer-header-confidence'),
-    ).toBeNull()
+      within(line).getByTestId('mapping-drawer-header-confidence-text')
+        .textContent,
+    ).toContain('Approved')
   })
 
   it('dialog aria-labelledby points at the new header title element id', () => {
@@ -1071,6 +1089,29 @@ describe('MappingDrawer — source-field-only drawer (feat/unmapped-source-drawe
     expect(conf.getAttribute('data-status')).toBe('needs_review')
     expect(conf.textContent).toContain('80%')
     expect(conf.textContent).toContain('needs review')
+  })
+
+  it('renders an "Approved" status line with emerald dot when the source is acknowledged (no percentage)', () => {
+    // ui/mapping-drawer-approved-status-display — the source-field
+    // stub header previously hardcoded "{pct}% needs review" with a
+    // slate dot regardless of acknowledgment state, even though the
+    // footer correctly showed Un-approve. The header now tracks
+    // `footerStatus`: acknowledged → "Approved" + emerald dot;
+    // otherwise → "{pct}% needs review" + slate dot.
+    renderSourceDrawer(
+      sourceRow(
+        makeOrphanSourceField({ isAcknowledged: true, confidence: 87 }),
+      ),
+    )
+    const conf = screen.getByTestId('mapping-drawer-source-stub-confidence')
+    expect(conf.getAttribute('data-status')).toBe('approved')
+    expect(conf.className).toBeTruthy()
+    const dot = conf.querySelector('span[aria-hidden="true"]')
+    expect(dot?.className).toContain('bg-emerald-500')
+    const text = screen.getByTestId('mapping-drawer-source-stub-confidence-text')
+    expect(text.textContent).toContain('Approved')
+    expect(text.textContent).not.toContain('87%')
+    expect(text.textContent).not.toMatch(/\d/)
   })
 
   it('renders the confidence line without a pct when confidence is null', () => {
