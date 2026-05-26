@@ -28,6 +28,7 @@ import { logAIEdit } from '@/lib/actions/ai-edit-history'
 import { assertMappingWritesEnabled } from '@/lib/auth/mapping-writes'
 import { computeOrphanedTfmsForTmDelete } from '@/lib/mappings/tm-ownership'
 import { APPROVE_ALL_REASON } from '@/lib/constants/approve-all-reason'
+import { validatePackageConsistency, type PackageValidationResult } from '@/lib/validation/package-validator'
 import {
   persistStaticMappingsForPair,
   persistStaticMappingsForSelection,
@@ -2837,4 +2838,35 @@ ${remCtx.intelligence_context ? remCtx.intelligence_context + '\n\n' : ''}CRITIC
 
     return { success: true, newMappingsCount: persistRes.inserted }
   })
+}
+
+// ─── Package consistency check ────────────────────────────────────────────────
+
+/**
+ * Run cross-mapping + package consistency checks on the full approved mapping
+ * set for a project (S1 Task #18).
+ *
+ * Called at the Mapping→Transform boundary and by the self-correction loop
+ * (S1 Task #5). Returns a structured result with per-issue metadata.
+ * Read-only — no LLM calls, no side effects.
+ */
+export async function checkPackageConsistency(
+  projectId: string,
+): Promise<{ success: boolean; result?: PackageValidationResult; error?: string }> {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) return { success: false, error: 'Not authenticated' }
+
+  const perm = await requireProjectPermission(projectId, 'viewer')
+  if (!perm.allowed) return { success: false, error: perm.error }
+
+  try {
+    const result = await validatePackageConsistency(supabase, projectId)
+    return { success: true, result }
+  } catch (err) {
+    console.error('[checkPackageConsistency] Failed:', err)
+    return { success: false, error: 'Package consistency check failed' }
+  }
 }
