@@ -123,6 +123,8 @@ import { assertMappingWritesEnabled } from '@/lib/auth/mapping-writes'
 import { SHIMMED_ID_SEPARATOR } from '@/lib/compat/mapping-shim'
 import { revalidatePath } from 'next/cache'
 import { validateTransformSQL } from '@/lib/validation/transform-validator'
+import { saveTemplate } from '@/lib/actions/migration-templates'
+import type { CompletedMapping } from '@/lib/validation/migration-template'
 import type {
   TargetFieldMappingRow,
   TransformationRow,
@@ -2399,10 +2401,15 @@ export async function autoGenerateAllTransforms(
 
   const { data: project } = await supabase
     .from('projects')
-    .select('id')
+    .select('id, org_id')
     .eq('id', projectId)
     .single()
   if (!project) return { success: false, generated: 0, failed: 0, error: 'Project not found' }
+
+  const { org_id } = project as typeof project & { org_id: string }
+  snapshotTemplate(projectId, org_id).catch((err) =>
+    console.error('[templates] snapshot failed:', err),
+  )
 
   return guardWrites(projectId, async () => {
     const pageData = await getTransformData(projectId)
@@ -3637,6 +3644,40 @@ export async function checkFieldMappingHasTransform(
 //
 // NOTE ON GUARDING: same pattern as `resetFieldTransform` — called exclusively
 // from guarded write paths in `mappings.ts`; no re-assertion.
+
+async function snapshotTemplate(projectId: string, orgId: string): Promise<void> {
+  const data = await getTransformData(projectId)
+  const srcSystem = data.datasets[0]?.datasetName ?? 'unknown'
+
+  const { data: tgtDs } = await supabaseAdmin
+    .from('datasets').select('name').eq('project_id', projectId).eq('role', 'target').limit(1)
+  const tgtSystem = tgtDs?.[0]?.name ?? 'unknown'
+
+  const mappings: CompletedMapping[] = data.datasets.flatMap(ds =>
+    ds.tables.flatMap(tbl =>
+      tbl.fields
+        .filter(f => f.sourceFieldId && f.sourceFieldName && f.sourceFieldDataType)
+        .map(f => ({
+          sourceTableName: tbl.sourceTableName,
+          sourceFieldName: f.sourceFieldName!,
+          sourceDataType: f.sourceFieldDataType!,
+          sourceIsNullable: f.sourceFieldIsNullable,
+          sourceIsForeignKey: false,
+          targetTableName: tbl.targetTableName,
+          targetFieldName: f.targetFieldName,
+          targetDataType: f.targetFieldDataType,
+          targetIsNullable: f.targetFieldIsNullable,
+          targetIsForeignKey: false,
+          transformSql: f.transformation?.generated_sql ?? null,
+          explanation: f.aiReasoning ?? '',
+          confidence: f.confidence ?? 0,
+        }))
+    )
+  )
+
+  if (mappings.length === 0) return
+  await saveTemplate(orgId, srcSystem, tgtSystem, mappings, [])
+}
 
 export async function resetAllTransformsForTable(
   tableMappingId: string,

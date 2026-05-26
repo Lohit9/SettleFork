@@ -49,6 +49,8 @@ import type {
 } from '@/lib/types/mappings-for-redesign'
 import { inferFkCandidates } from '@/lib/utils/fk-inference'
 import { runSingleAgentMappingLoop } from '@/lib/ai/single-agent-mapping'
+import { findTemplate } from '@/lib/actions/migration-templates'
+import type { MigrationTemplate } from '@/lib/validation/migration-template'
 import { interpretFieldDomains } from '@/lib/ai/field-interpreter'
 import { validateMappingBatch, type MappingProposal } from '@/lib/validation/mapping-validator'
 import { validateTransformSQL } from '@/lib/validation/transform-validator'
@@ -1155,18 +1157,35 @@ export function parseClaudeJSON(raw: string): ClaudeResponse {
   }
 }
 
+export function buildTemplateBlock(template: MigrationTemplate, sourceTableName: string): string {
+  const entries = template.entries.filter(
+    e => e.source.tableName === sourceTableName.toLowerCase()
+  )
+  if (entries.length === 0) return ''
+  const lines = entries.map(e =>
+    `  ${e.source.fieldName} → ${e.target.tableName}.${e.target.fieldName}` +
+    (e.transformSql ? ` [SQL: ${e.transformSql}]` : '') +
+    ` (confidence: ${e.confidence}, reused: ${e.reuseCount}x)`
+  ).join('\n')
+  return `<template_mappings>
+Previously approved mappings for this system pair (${template.migrationCount} migration${template.migrationCount !== 1 ? 's' : ''}). Prefer these unless schema evidence contradicts them.
+${lines}
+</template_mappings>`
+}
+
 export function buildMappingUserMessage(args: {
   sourceSection: string
   targetSection: string
   docBlock: string
   intelligenceCtx: string | null
   otherSourcesBlock?: string | null
+  templateBlock?: string | null
 }): string {
-  const { sourceSection, targetSection, docBlock, intelligenceCtx, otherSourcesBlock } = args
+  const { sourceSection, targetSection, docBlock, intelligenceCtx, otherSourcesBlock, templateBlock } = args
   return `${sourceSection}
 ${targetSection}
 ${docBlock}
-${intelligenceCtx ? intelligenceCtx + '\n\n' : ''}${otherSourcesBlock ? otherSourcesBlock + '\n\n' : ''}Generate source-to-target mappings. Respond with this exact JSON structure.
+${intelligenceCtx ? intelligenceCtx + '\n\n' : ''}${templateBlock ? templateBlock + '\n\n' : ''}${otherSourcesBlock ? otherSourcesBlock + '\n\n' : ''}Generate source-to-target mappings. Respond with this exact JSON structure.
 
 CRITICAL RULES FOR THE JSON:
 - "source_table" must be ONLY the table name (e.g., "prices") — NOT the qualified name (NOT "trux.prices")
@@ -1832,12 +1851,28 @@ export async function runMappingGeneration(
       userId,
     )
 
-    // S1 #17 — field domain interpretation. Fire-and-forget before the mapping
-    // loop so descriptions land in fields.description and propagate into
-    // buildAIContext's FieldContext on subsequent reads. Errors never block mapping.
     interpretFieldDomains(projectId, sourceTableIds, userId).catch((err) =>
       console.error('[mapping] interpretFieldDomains failed:', err),
     )
+
+    // S2.3 — fetch template for this system pair (fire once, reuse per batch)
+    const srcDs = sourceTables?.[0]?.datasets as unknown as { name: string } | null
+    const tgtDs = targetTables?.[0]?.datasets as unknown as { name: string } | null
+    const srcSystem = srcDs?.name ?? ''
+    const tgtSystem = tgtDs?.name ?? ''
+    let template: MigrationTemplate | null = null
+    if (srcSystem && tgtSystem) {
+      const { data: project } = await supabase
+        .from('projects').select('org_id').eq('id', projectId).single()
+      if (project) {
+        const r = await findTemplate(
+          (project as typeof project & { org_id: string }).org_id,
+          srcSystem,
+          tgtSystem,
+        )
+        template = r.data ?? null
+      }
+    }
 
     // PR 3.4b — fetch business_context + compute schema-overview once
     // (single read for the whole BULK loop). Both null/empty when flag OFF.
@@ -1901,6 +1936,7 @@ ${otherSourcesList}
         docBlock,
         intelligenceCtx: aiCtx.intelligence_context ?? null,
         otherSourcesBlock,
+        templateBlock: template ? buildTemplateBlock(template, sourceCtx.table_name) : null,
       })
 
       // PR 12 H1: when AI_PHASE_2_ENABLED=1 the engine forces a tool
