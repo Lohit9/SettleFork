@@ -30,25 +30,24 @@ const ORCHESTRATOR_SRC = readFileSync(
   'utf8',
 )
 
-describe('multi-agent gate — two-level dispatch (BULK callsite)', () => {
-  it('mapping-engine declares both flags + dispatches to multi-agent OR single-agent helper', () => {
+describe('multi-agent gate — BULK callsite (S1.1: single-agent only)', () => {
+  // S1.1 removed runMultiAgentMappingPipeline and AI_PHASE_3_MULTI_AGENT_ENABLED
+  // from lib/ai/mapping-engine.ts (the BULK callsite). The single-pair callsite
+  // in lib/actions/mappings.ts still carries the multi-agent gate.
+  // These pins lock the post-S1.1 shape: BULK always uses single-agent.
+
+  it('mapping-engine no longer declares multiAgentEnabled or runMultiAgentMappingPipeline (S1.1 removal)', () => {
+    expect(ENGINE_SRC).not.toMatch(/const multiAgentEnabled = process\.env\.AI_PHASE_3_MULTI_AGENT_ENABLED === '1'/)
+    expect(ENGINE_SRC).not.toMatch(/runMultiAgentMappingPipeline\(/)
+  })
+
+  it('mapping-engine still declares phase3Enabled + uses runSingleAgentMappingLoop (BULK now always single-agent)', () => {
     expect(ENGINE_SRC).toMatch(/const phase3Enabled = process\.env\.AI_PHASE_3_ENABLED === '1'/)
-    expect(ENGINE_SRC).toMatch(/const multiAgentEnabled = process\.env\.AI_PHASE_3_MULTI_AGENT_ENABLED === '1'/)
-    expect(ENGINE_SRC).toMatch(/runMultiAgentMappingPipeline\(/)
     expect(ENGINE_SRC).toMatch(/runSingleAgentMappingLoop\(/)
   })
 
-  it('BULK callsite passes cacheControl: false to multi-agent pipeline (PR-CACHE-HOTFIX disable)', () => {
-    // PR 13.1 originally enabled cache on the BULK callsite. PR-CACHE-HOTFIX
-    // flipped it to false to unblock the Anthropic 4-cache_control-block
-    // limit (INF-5 will re-enable selectively). Pin updated to assert the
-    // flipped value so a future revert without the INF-5 selective work
-    // is caught here.
-    expect(ENGINE_SRC).toMatch(/runMultiAgentMappingPipeline\(\{[\s\S]{0,800}cacheControl:\s*false/)
-  })
-
-  it('multi_agent: true marker threaded into baseMetadata at BULK callsite', () => {
-    expect(ENGINE_SRC).toMatch(/multi_agent:\s*true/)
+  it('mapping-engine no longer carries multi_agent: true metadata (removed with multi-agent gate)', () => {
+    expect(ENGINE_SRC).not.toMatch(/multi_agent:\s*true/)
   })
 })
 

@@ -135,10 +135,13 @@ describe('mapping-engine — runMappingGeneration agent gate (source pins)', () 
     expect(ENGINE_SRC).toMatch(/const schemaOverviewBlock\s*=\s*phase3Enabled\s*\?\s*formatSchemaOverviewBlock\(/)
   })
 
-  it('PR 3.4cd: declares multiAgentEnabled + dispatches to single-agent helper or multi-agent orchestrator', () => {
-    expect(ENGINE_SRC).toMatch(/const multiAgentEnabled = process\.env\.AI_PHASE_3_MULTI_AGENT_ENABLED === '1'/)
+  it('S1.1: multi-agent removed from BULK callsite — only single-agent helper dispatched', () => {
+    // S1.1 removed runMultiAgentMappingPipeline and AI_PHASE_3_MULTI_AGENT_ENABLED from
+    // mapping-engine.ts (the BULK callsite). The single-pair callsite in mappings.ts still
+    // carries the multi-agent gate. This pin ensures the dead code stays gone.
+    expect(ENGINE_SRC).not.toMatch(/runMultiAgentMappingPipeline\(/)
+    expect(ENGINE_SRC).not.toMatch(/AI_PHASE_3_MULTI_AGENT_ENABLED/)
     expect(ENGINE_SRC).toMatch(/runSingleAgentMappingLoop\(/)
-    expect(ENGINE_SRC).toMatch(/runMultiAgentMappingPipeline\(/)
   })
 
   it('extracted helper streams via callLLMStreaming with EMIT_TABLE_MAPPINGS_TOOL forced + locked llmOptions (Opus 4.7 + adaptive thinking + max effort + agent_loop)', () => {
