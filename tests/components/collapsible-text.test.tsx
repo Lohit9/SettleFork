@@ -90,6 +90,32 @@ describe('<CollapsibleText>', () => {
     expect(screen.getByTestId('custom-render').tagName).toBe('PRE')
   })
 
+  it('truncates near the threshold even when text contains paragraph breaks', () => {
+    // Regression for the line-anchored-regex bug: a previous /^.*\s/
+    // implementation would snap to the first `\n`, cutting a 405-char
+    // rationale down to ~32 chars (right after "Required.").
+    const text =
+      'Field type: Text(50), Required.\n\n' +
+      'Each distinct Assy Item is a manufactured assembly that should become one ' +
+      'Engineering Item Master record with Inventory Source = Manufactured. The ' +
+      'Engineering BOM Masters contains 1,562 rows but only 123 unique parent ' +
+      'assemblies — duplicates collapse on distinct extraction. After whitespace ' +
+      'trimming, all 123 Assy Items match a corresponding Products.ProductSKU. ' +
+      'Additional context here.'
+    expect(text.length).toBeGreaterThan(400)
+
+    render(<CollapsibleText text={text} threshold={400} />)
+
+    const truncated = document.querySelector('p')?.textContent ?? ''
+    expect(truncated.endsWith('…')).toBe(true)
+    // Must be close to the 400-char threshold, not snapped back to the
+    // first paragraph break around char ~32.
+    expect(truncated.length).toBeGreaterThan(350)
+    // And must contain content past the first paragraph break — sanity
+    // check that we crossed the `\n\n` instead of stopping at it.
+    expect(truncated).toContain('Each distinct Assy Item')
+  })
+
   it('respects a higher threshold for technical content (e.g. SQL)', () => {
     // Build a 500-char SQL-ish string: below 600 threshold, no truncation.
     const sql = 'CASE WHEN field = '.padEnd(500, 'X')
