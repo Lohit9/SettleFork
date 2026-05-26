@@ -432,6 +432,8 @@ export interface TfmContext {
     id: string
     source_table_id: string
     target_table_id: string
+    /** PR Ω.2 — per-partition WHERE filter applied at apply time. NULL = no filter. */
+    filter_sql: string | null
   } | null
 }
 
@@ -511,11 +513,16 @@ export async function loadTfmContext(tfmId: string): Promise<TfmContext | null> 
   if (primarySource && primarySource.sourceTableId) {
     const { data: tm } = await supabaseAdmin
       .from('table_mappings')
-      .select('id, source_table_id, target_table_id')
+      .select('id, source_table_id, target_table_id, filter_sql')
       .eq('project_id', tfm.project_id)
       .eq('source_table_id', primarySource.sourceTableId)
       .eq('target_table_id', targetField.table_id)
-      .maybeSingle<{ id: string; source_table_id: string; target_table_id: string }>()
+      .maybeSingle<{
+        id: string
+        source_table_id: string
+        target_table_id: string
+        filter_sql: string | null
+      }>()
     tableMapping = tm ?? null
   }
 
@@ -2598,13 +2605,31 @@ export async function applyTransform(
       }
       const okSpec = joinSpec as Extract<typeof joinSpec, { ok: true }>
 
+      // PR Ω.2 — load partition filter (NULL on every TM in prod until Ω.3
+      // ships the partition-creation UI). DML-checked + qualified in the same
+      // shape transform SQL takes below, so the filter resolves jsonb-keyed
+      // field refs against the same fieldMap / fieldNames.
+      const rawFilter = ctx.tableMapping?.filter_sql ?? null
+      if (rawFilter) {
+        try {
+          assertNoDml(rawFilter)
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : 'invalid filter expression'
+          return { success: false, rowsAffected: 0, error: `Partition filter: ${msg}` }
+        }
+      }
+
       let wrappedSql: string
+      let wrappedFilter: string | null = null
       let p_join_spec: unknown = null
 
       if (okSpec.spec && okSpec.fieldMap) {
         // Cross-table — qualify field refs against the per-table alias map.
         try {
           wrappedSql = wrapFieldRefsInJsonb(cleaned, okSpec.fieldMap)
+          if (rawFilter) {
+            wrappedFilter = wrapFieldRefsInJsonb(rawFilter, okSpec.fieldMap)
+          }
         } catch (e) {
           const msg =
             e instanceof Error
@@ -2621,16 +2646,31 @@ export async function applyTransform(
           .eq('table_id', srcField.table_id)
         const fieldNames = (allSourceFields ?? []).map((f) => f.name)
         wrappedSql = wrapFieldRefsInJsonb(cleaned, fieldNames)
+        if (rawFilter) {
+          try {
+            wrappedFilter = wrapFieldRefsInJsonb(rawFilter, fieldNames)
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : 'filter qualification failed'
+            return { success: false, rowsAffected: 0, error: `Partition filter: ${msg}` }
+          }
+        }
       }
+
+      // Conditional spread: code-first deploy safety. When wrappedFilter is
+      // null (every TM in prod today) the param is omitted entirely, so the
+      // RPC call shape is byte-identical to pre-Ω.2 regardless of whether
+      // migration 110 has applied.
+      const joinedRpcArgs: Record<string, unknown> = {
+        p_target_field_mapping_id: ctx.tfm.id,
+        p_target_field_name: tgtField.name,
+        p_transform_sql: wrappedSql,
+        p_join_spec,
+      }
+      if (wrappedFilter !== null) joinedRpcArgs.p_filter_sql = wrappedFilter
 
       const { data: rowsAffected, error: rpcErr } = await supabase.rpc(
         'dq_apply_field_transform_joined',
-        {
-          p_target_field_mapping_id: ctx.tfm.id,
-          p_target_field_name: tgtField.name,
-          p_transform_sql: wrappedSql,
-          p_join_spec,
-        },
+        joinedRpcArgs,
       )
 
       if (rpcErr) return { success: false, rowsAffected: 0, error: rpcErr.message }
@@ -2642,7 +2682,7 @@ export async function applyTransform(
       // `dq_apply_value_assignment` is deferred to Prompt 3c.
       const { data: tms } = await supabaseAdmin
         .from('table_mappings')
-        .select('id, source_table_id, target_table_id')
+        .select('id, source_table_id, target_table_id, filter_sql')
         .eq('project_id', ctx.projectId)
         .eq('target_table_id', tgtField.table_id)
         .neq('status', 'rejected')
@@ -2656,7 +2696,54 @@ export async function applyTransform(
       // `wrapFieldRefsInJsonb` is a no-op when the set is empty.
       const wrappedSql = wrapFieldRefsInJsonb(sql.replace(/;+$/, '').trim(), [])
 
+      // PR Ω.2 — bulk-fetch source field names for TMs that carry a filter.
+      // The filter is wrapped against its own TM's source-table fields (one
+      // shared query for the loop, indexed by source_table_id). NULL on every
+      // TM in prod today, so this loop typically skips.
+      const tmsWithFilter = tms.filter((t) => t.filter_sql != null)
+      const sourceFieldsByTable = new Map<string, string[]>()
+      if (tmsWithFilter.length > 0) {
+        const distinctSourceTableIds = Array.from(
+          new Set(tmsWithFilter.map((t) => t.source_table_id)),
+        )
+        const { data: srcFields } = await supabaseAdmin
+          .from('fields')
+          .select('name, table_id')
+          .in('table_id', distinctSourceTableIds)
+        for (const f of (srcFields ?? []) as Array<{ name: string; table_id: string }>) {
+          const list = sourceFieldsByTable.get(f.table_id) ?? []
+          list.push(f.name)
+          sourceFieldsByTable.set(f.table_id, list)
+        }
+      }
+
       for (const tm of tms) {
+        // Resolve and wrap this TM's filter, if any.
+        let wrappedFilter: string | null = null
+        if (tm.filter_sql) {
+          try {
+            assertNoDml(tm.filter_sql)
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : 'invalid filter expression'
+            return {
+              success: false,
+              rowsAffected: 0,
+              error: `Partition filter on table mapping ${tm.id}: ${msg}`,
+            }
+          }
+          const fieldNames = sourceFieldsByTable.get(tm.source_table_id) ?? []
+          try {
+            wrappedFilter = wrapFieldRefsInJsonb(tm.filter_sql, fieldNames)
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : 'filter qualification failed'
+            return {
+              success: false,
+              rowsAffected: 0,
+              error: `Partition filter on table mapping ${tm.id}: ${msg}`,
+            }
+          }
+        }
+
         const { count: stagedCount } = await supabaseAdmin
           .from('staged_data_rows')
           .select('id', { count: 'exact', head: true })
@@ -2664,16 +2751,21 @@ export async function applyTransform(
 
         const hasExistingStaged = (stagedCount ?? 0) > 0
 
+        // Conditional spread: omit p_filter_sql when wrappedFilter is null so
+        // the call shape is byte-identical to pre-Ω.2 for heritage TMs.
+        const vaRpcArgs: Record<string, unknown> = {
+          p_table_mapping_id: tm.id,
+          p_source_table_id: tm.source_table_id,
+          p_target_table_id: tm.target_table_id,
+          p_target_field_name: tgtField.name,
+          p_transform_sql: wrappedSql,
+          p_has_existing_staged: hasExistingStaged,
+        }
+        if (wrappedFilter !== null) vaRpcArgs.p_filter_sql = wrappedFilter
+
         const { data: rowsAffected, error: rpcErr } = await supabase.rpc(
           'dq_apply_field_transform',
-          {
-            p_table_mapping_id: tm.id,
-            p_source_table_id: tm.source_table_id,
-            p_target_table_id: tm.target_table_id,
-            p_target_field_name: tgtField.name,
-            p_transform_sql: wrappedSql,
-            p_has_existing_staged: hasExistingStaged,
-          },
+          vaRpcArgs,
         )
 
         if (rpcErr) {
