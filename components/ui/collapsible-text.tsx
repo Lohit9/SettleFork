@@ -69,12 +69,17 @@ export function CollapsibleText({
 }
 
 // Trim to the last whitespace at-or-before `max` so we never cut mid-word.
-// Falls back to a hard cut at `max` if no whitespace exists in the slice
+// Falls back to a hard cut at `max` if no whitespace exists before then
 // (e.g. a single 500-char token — rare in prose, possible in long URLs).
+//
+// Walks backward instead of regex-matching because `/^.*\s/` is anchored to
+// a single line (`.` excludes `\n`), which made truncation snap to the first
+// paragraph break instead of the threshold — e.g. a 405-char rationale
+// starting "Field type: Text(50), Required.\n\n…" truncated to ~32 chars.
 function lastWordBoundary(text: string, max: number): number {
   if (text.length <= max) return text.length
-  const slice = text.slice(0, max)
-  const match = slice.match(/^.*\s/)
-  if (match && match[0].length > 0) return match[0].length
+  for (let i = max; i > 0; i--) {
+    if (/\s/.test(text[i])) return i
+  }
   return max
 }
