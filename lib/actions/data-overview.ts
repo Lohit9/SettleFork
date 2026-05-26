@@ -26,6 +26,7 @@ export interface FieldData {
   // as new provenance labels are added (e.g. 'ddl_parsed', 'cross_table_inferred').
   schema_source: FieldSchemaSource
   check_constraint: CheckConstraint | null
+  description: string | null
 }
 
 export interface TableData {
@@ -110,7 +111,7 @@ export async function getProjectSchema(projectId: string): Promise<ProjectSchema
           id, table_id, name, data_type, inferred_type,
           is_nullable, is_primary_key, is_foreign_key,
           fk_reference, ordinal_position, schema_source,
-          check_constraint
+          check_constraint, description
         )
       )
     `)
@@ -131,6 +132,7 @@ export async function getProjectSchema(projectId: string): Promise<ProjectSchema
         inferred_type: string | null; is_nullable: boolean; is_primary_key: boolean
         is_foreign_key: boolean; fk_reference: string | null; ordinal_position: number
         schema_source: string | null; check_constraint: CheckConstraint | null
+        description: string | null
       }>
     }>) ?? [])
       .map((t) => ({
@@ -151,6 +153,7 @@ export async function getProjectSchema(projectId: string): Promise<ProjectSchema
             ordinal_position: f.ordinal_position,
             schema_source: (f.schema_source as FieldSchemaSource) ?? 'inferred',
             check_constraint: (f.check_constraint as CheckConstraint | null) ?? null,
+            description: f.description ?? null,
           })),
       })),
   }))
@@ -299,7 +302,7 @@ export async function getFieldProfiles(projectId: string, tableId: string): Prom
   const { data: fields } = await supabase
     .from('fields')
     .select(
-      'id, name, data_type, inferred_type, is_nullable, is_primary_key, is_foreign_key, fk_reference, check_constraint, schema_source, ordinal_position',
+      'id, name, data_type, inferred_type, is_nullable, is_primary_key, is_foreign_key, fk_reference, check_constraint, schema_source, ordinal_position, description',
     )
     .eq('table_id', tableId)
     .order('ordinal_position', { ascending: true })

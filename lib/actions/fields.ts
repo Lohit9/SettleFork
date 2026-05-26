@@ -29,6 +29,7 @@ type FieldUpdates = {
   is_primary_key?: boolean
   is_foreign_key?: boolean
   fk_reference?: string | null
+  description?: string | null
 }
 
 // Re-computes format_issues_count for a single field after its type changes.

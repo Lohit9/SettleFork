@@ -524,6 +524,7 @@ function SchemaPanel({
       ordinal_position: f.ordinal_position,
       schema_source: f.schema_source,
       check_constraint: f.check_constraint,
+      description: (f as unknown as { description?: string | null }).description ?? null,
     }
   }
 

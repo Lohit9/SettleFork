@@ -49,6 +49,7 @@ import type {
 } from '@/lib/types/mappings-for-redesign'
 import { inferFkCandidates } from '@/lib/utils/fk-inference'
 import { runSingleAgentMappingLoop } from '@/lib/ai/single-agent-mapping'
+import { interpretFieldDomains } from '@/lib/ai/field-interpreter'
 import { validateMappingBatch, type MappingProposal } from '@/lib/validation/mapping-validator'
 import { validateTransformSQL } from '@/lib/validation/transform-validator'
 import {
@@ -1828,6 +1829,13 @@ export async function runMappingGeneration(
         ...(phase3Enabled && { maxSourceSampleValues: 50, maxTargetSampleValues: 30 }),
       },
       userId,
+    )
+
+    // S1 #17 — field domain interpretation. Fire-and-forget before the mapping
+    // loop so descriptions land in fields.description and propagate into
+    // buildAIContext's FieldContext on subsequent reads. Errors never block mapping.
+    interpretFieldDomains(projectId, sourceTableIds, userId).catch((err) =>
+      console.error('[mapping] interpretFieldDomains failed:', err),
     )
 
     // PR 3.4b — fetch business_context + compute schema-overview once
