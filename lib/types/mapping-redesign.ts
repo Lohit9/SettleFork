@@ -153,6 +153,7 @@ export interface TransformationRow {
   generated_sql: string
   is_ai_generated: boolean
   test_results: unknown | null
+  validation_issues?: unknown | null
   status: TransformationStatus
   created_at: string
 }
