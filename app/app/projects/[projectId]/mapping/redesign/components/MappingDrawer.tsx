@@ -1141,9 +1141,11 @@ function SourceFieldDrawerStub({
   return (
     <>
       {/* Compact header — parity with DrawerHeader: MAPPING label,
-          source title (table · field chip), confidence line. The
-          source field has no target, so it always reads "needs
-          review" (slate dot). */}
+          source title (table · field chip), status line. The status
+          line tracks `footerStatus`: acknowledged → "Approved" with
+          emerald dot; otherwise → "{pct}% needs review" with slate
+          dot (confidence-gated, matching DrawerHeader's needs_review
+          branch). */}
       <header
         data-testid="mapping-drawer-source-stub-header"
         className="border-b border-slate-200 bg-white px-6 py-4"
@@ -1181,15 +1183,22 @@ function SourceFieldDrawerStub({
             </h2>
             <div
               data-testid="mapping-drawer-source-stub-confidence"
-              data-status="needs_review"
+              data-status={footerStatus}
               className="mt-2 flex items-center gap-2 text-xs text-slate-600"
             >
               <span
                 aria-hidden="true"
-                className="inline-block h-2 w-2 flex-shrink-0 rounded-full bg-slate-400 ring-2 ring-slate-400/25"
+                className={cn(
+                  'inline-block h-2 w-2 flex-shrink-0 rounded-full',
+                  footerStatus === 'approved'
+                    ? 'bg-emerald-500 ring-2 ring-emerald-500/25'
+                    : 'bg-slate-400 ring-2 ring-slate-400/25',
+                )}
               />
               <span data-testid="mapping-drawer-source-stub-confidence-text">
-                {confidencePct ? (
+                {footerStatus === 'approved' ? (
+                  <span className="text-slate-700">Approved</span>
+                ) : confidencePct ? (
                   <>
                     <span className="tabular-nums text-slate-700">
                       {confidencePct}
