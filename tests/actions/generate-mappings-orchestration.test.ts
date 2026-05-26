@@ -594,12 +594,14 @@ describe('[generateMappings] E5 — non-collision path: one mapping per target �
 // ─────────────────────────────────────────────────────────────────────
 
 describe('[generateMappings] F1 — dq_create_target_field_mapping RPC arg shape', () => {
-  it('calls supabase.rpc("dq_create_target_field_mapping", …) with the four expected keys', () => {
+  it('calls supabase.rpc("dq_create_target_field_mapping", …) with the five expected keys', () => {
     expect(PERSIST_BODY).toContain("supabase.rpc('dq_create_target_field_mapping'")
     expect(PERSIST_BODY).toContain('p_project_id: projectId,')
     expect(PERSIST_BODY).toContain('p_target_field_id: entry.targetFieldId,')
     expect(PERSIST_BODY).toContain('p_sources: sources,')
     expect(PERSIST_BODY).toContain('p_combination: {')
+    // PR Ω.1 — p_table_mapping_id is the partition binding (NOT NULL post-107).
+    expect(PERSIST_BODY).toContain('p_table_mapping_id: tableMappingId,')
   })
 
   it('p_combination carries type and ai_reasoning, no other keys', () => {
@@ -675,8 +677,8 @@ describe('[generateMappings] F4 — TFM-level confidence rollup is left to the D
       '})',
     )
     // Top-level keys: p_project_id, p_target_field_id, p_sources,
-    // p_combination only. No bare `confidence:` at depth 1 of the
-    // RPC args object.
+    // p_combination, p_table_mapping_id only. No bare `confidence:` at
+    // depth 1 of the RPC args object.
     const topLevelKeys = rpcCallSlice
       .split('\n')
       .filter((l) => /^\s{6}p_/.test(l))
@@ -685,6 +687,7 @@ describe('[generateMappings] F4 — TFM-level confidence rollup is left to the D
       'p_combination',
       'p_project_id',
       'p_sources',
+      'p_table_mapping_id',
       'p_target_field_id',
     ])
   })
