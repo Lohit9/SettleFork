@@ -5,6 +5,7 @@ import {
   provenanceLabelsEnabled,
 } from '@/lib/ai/agent-provenance-guidance'
 import { applyPocOverrides } from '@/lib/ai/poc-overrides'
+import { validateSourceField } from '@/lib/validation/source-field-validator'
 import type { CheckConstraint, FieldSchemaSource, MigrationIntelligence } from '@/lib/types/database'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -704,6 +705,17 @@ export function formatSchemaForPrompt(tables: TableContext[], label: string): st
         if (field.format_issues_count > 0) stats.push(`format_issues: ${field.format_issues_count}`)
         if (field.cardinality > 0) stats.push(`distinct: ${field.cardinality}`)
         if (stats.length) output += `    Stats: ${stats.join(', ')}\n`
+      }
+
+      // Layer 2 DQ warnings — source fields only (target fields have schema constraints instead)
+      if (!isTarget) {
+        const dqIssues = validateSourceField(field)
+        for (const issue of dqIssues) {
+          const prefix = issue.severity === 'warning' ? '⚠️ DQ' : 'ℹ️ DQ'
+          output += `    ${prefix}: ${issue.message}`
+          if (issue.suggestion) output += ` — ${issue.suggestion}`
+          output += '\n'
+        }
       }
 
       // Value distribution (most useful for transforms and mappings)
