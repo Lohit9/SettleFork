@@ -2083,14 +2083,40 @@ export async function runFullTransformTest(
 
   const wrappedSql = wrapFieldRefsInJsonb(transformation.generated_sql.replace(/;+$/, '').trim(), fieldNames)
 
+  // PR Ω.3.3 — partition filter (NULL until Ω.3.2's UI sets one). With a
+  // non-null filter, totalRows in the result reflects filtered row count
+  // (COUNT(*) WHERE filter), not raw source row count — UI message
+  // "All N rows transformed" naturally reflects the filtered count.
+  const rawFilter = ctx.tableMapping?.filter_sql ?? null
+  if (rawFilter) {
+    try {
+      assertNoDml(rawFilter)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'invalid filter expression'
+      return { success: false, error: `Partition filter: ${msg}` }
+    }
+  }
+  let wrappedFilter: string | null = null
+  if (rawFilter) {
+    try {
+      wrappedFilter = wrapFieldRefsInJsonb(rawFilter, fieldNames)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'filter qualification failed'
+      return { success: false, error: `Partition filter: ${msg}` }
+    }
+  }
+
   return guardWrites(ctx.projectId, async () => {
+    const rpcArgs: Record<string, unknown> = {
+      p_expression: wrappedSql,
+      p_table_id: sourceTableId,
+      p_source_field: srcField?.name ?? '_none_',
+    }
+    if (wrappedFilter !== null) rpcArgs.p_filter_sql = wrappedFilter
+
     const { data: rpcResult, error: rpcErr } = await supabaseAdmin.rpc(
       'execute_transform_full_test',
-      {
-        p_expression: wrappedSql,
-        p_table_id: sourceTableId,
-        p_source_field: srcField?.name ?? '_none_',
-      },
+      rpcArgs,
     )
 
     if (rpcErr) return { success: false, error: rpcErr.message }
@@ -2248,30 +2274,70 @@ export async function testTransformation(
     wrappedSql = wrapFieldRefsInJsonb(sql.trim(), fieldNames)
   }
 
+  // PR Ω.3.3 — partition filter (NULL on every TM in prod until Ω.3.2's
+  // partition UI ships). Wrapped via the same rules transform SQL uses:
+  // cross-table → fieldMap + alias-strip; same-table → fieldNames.
+  const rawFilter = ctx.tableMapping?.filter_sql ?? null
+  if (rawFilter) {
+    try {
+      assertNoDml(rawFilter)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'invalid filter expression'
+      return { success: false, error: `Partition filter: ${msg}` }
+    }
+  }
+  let wrappedFilter: string | null = null
+  if (rawFilter) {
+    try {
+      if (
+        crossTableJoinSpec &&
+        crossTableJoinSpec.ok &&
+        crossTableJoinSpec.spec &&
+        crossTableJoinSpec.fieldMap
+      ) {
+        wrappedFilter = wrapFieldRefsInJsonb(rawFilter, crossTableJoinSpec.fieldMap)
+        wrappedFilter = wrappedFilter.replace(/\b[A-Za-z_][A-Za-z0-9_]*\.row_data->>'/g, "row_data->>'")
+      } else {
+        wrappedFilter = wrapFieldRefsInJsonb(rawFilter, fieldNames)
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'filter qualification failed'
+      return { success: false, error: `Partition filter: ${msg}` }
+    }
+  }
+
   const sourceFieldNames = srcField ? [srcField.name, ...(contributingFieldNames ?? [])] : (contributingFieldNames ?? [])
   const useMultiField = sourceFieldNames.length > 1
 
   return guardWrites(ctx.projectId, async () => {
-    const { data: rpcResult, error: rpcErr } = useMultiField
-      ? await supabaseAdmin.rpc('execute_transform_test', {
+    // Branch-aware base args; conditional-spread p_filter_sql so heritage
+    // calls (rawFilter=NULL) keep the pre-Ω.3.3 4-arg RPC call shape.
+    const rpcArgs: Record<string, unknown> = useMultiField
+      ? {
           p_expression: wrappedSql,
           p_table_id: sourceTableId,
           p_source_fields: sourceFieldNames,
           p_limit: 20,
-        })
+        }
       : sourceFieldNames.length === 1
-      ? await supabaseAdmin.rpc('execute_transform_test', {
+      ? {
           p_expression: wrappedSql,
           p_table_id: sourceTableId,
           p_source_field: sourceFieldNames[0],
           p_limit: 20,
-        })
-      : await supabaseAdmin.rpc('execute_transform_test', {
+        }
+      : {
           p_expression: wrappedSql,
           p_table_id: sourceTableId,
           p_source_field: '_none_',
           p_limit: 10,
-        })
+        }
+    if (wrappedFilter !== null) rpcArgs.p_filter_sql = wrappedFilter
+
+    const { data: rpcResult, error: rpcErr } = await supabaseAdmin.rpc(
+      'execute_transform_test',
+      rpcArgs,
+    )
 
     if (rpcErr) return { success: false, error: rpcErr.message }
 
@@ -3070,17 +3136,42 @@ export async function previewTransformDistinct(
 
   const wrappedSql = wrapFieldRefsInJsonb(sql.replace(/;+$/, '').trim(), fieldNames)
 
+  // PR Ω.3.3 — partition filter (NULL until Ω.3.2's UI sets one). Same-table
+  // wrap only — previewTransformDistinct doesn't call buildJoinSpec (cross-
+  // table distinct preview is a separate Phase 4-extras concern).
+  const rawFilter = ctx.tableMapping?.filter_sql ?? null
+  if (rawFilter) {
+    try {
+      assertNoDml(rawFilter)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'invalid filter expression'
+      return { success: false, error: `Partition filter: ${msg}` }
+    }
+  }
+  let wrappedFilter: string | null = null
+  if (rawFilter) {
+    try {
+      wrappedFilter = wrapFieldRefsInJsonb(rawFilter, fieldNames)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'filter qualification failed'
+      return { success: false, error: `Partition filter: ${msg}` }
+    }
+  }
+
   const sourceFields = srcField ? [srcField.name, ...(contributingFieldNames ?? [])] : (contributingFieldNames ?? [])
   if (sourceFields.length === 0) sourceFields.push('_none_')
 
+  const rpcArgs: Record<string, unknown> = {
+    p_table_id: sourceTableId,
+    p_source_fields: sourceFields,
+    p_transform_sql: wrappedSql,
+    p_limit: 200,
+  }
+  if (wrappedFilter !== null) rpcArgs.p_filter_sql = wrappedFilter
+
   const { data: rpcResult, error: rpcErr } = await supabaseAdmin.rpc(
     'execute_transform_test_distinct',
-    {
-      p_table_id: sourceTableId,
-      p_source_fields: sourceFields,
-      p_transform_sql: wrappedSql,
-      p_limit: 200,
-    },
+    rpcArgs,
   )
 
   if (rpcErr) return { success: false, error: rpcErr.message }
