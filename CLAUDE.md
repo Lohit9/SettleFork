@@ -324,6 +324,16 @@ For RBAC behavioral verification and other risky changes, prefer a **temporary s
 
 ## 9. Code Quality Standards
 
+### 9.0 Code style — non-negotiable
+
+**Comments:** Explain *why*, never *what*. If a comment restates what the next line does, delete it and rename the variable instead. No section dividers (`// ─── foo ───`) in files under 500 lines. No JSDoc on internal helpers.
+
+**Naming:** Scope-appropriate. `src`/`tgt` inside a 10-line function is fine. No type encoding (`userId` not `strUserId`). Names describe what a thing *is*, not how it works.
+
+**Patterns:** `flatMap`/`map`/`filter` for transformations. Push set operations down to SQL — don't pull rows into TS to filter them in JS. Return early; no nested if-else chains when a guard clause works. No defensive null checks on things that can't be null.
+
+**Self-check before committing:** Does any comment restate the next line? Is any variable name longer than context requires? Is there a push loop that's really a `flatMap`? Fix it.
+
 ### 9.1 TypeScript
 
 - `strict: true`. No `any` without an inline `// reason: <why>` comment.
