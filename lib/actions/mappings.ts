@@ -1575,6 +1575,7 @@ export async function addManualFieldMapping(
         },
       ],
       p_combination: { type: 'single', ai_reasoning: aiReasoning ?? defaultReasoning },
+      p_table_mapping_id: tm.id,
     })
     if (rpcErr) return { success: false, error: rpcErr.message, errorCode: 'INTERNAL' }
 
@@ -2069,6 +2070,7 @@ export async function createValueAssignment(
         confidence: 100,
         ai_reasoning: 'Value assignment — no source field. User will define the value in Transform.',
       },
+      p_table_mapping_id: tableMappingId,
     })
     if (rpcErr) return { success: false, error: rpcErr.message, errorCode: 'INTERNAL' }
 
@@ -2076,8 +2078,6 @@ export async function createValueAssignment(
       .from('target_field_mappings')
       .update({ status: 'approved' })
       .eq('id', newId as string)
-
-    void tableMappingId
     revalidatePath(`/app/projects/${projectId}`, 'layout')
     return { success: true, fieldMappingId: newId as string }
   })
@@ -2369,6 +2369,7 @@ export async function approveAllFieldMappings(
       const rows = targetIdsToAck.map((fid) => ({
         project_id: tm.project_id,
         target_field_id: fid,
+        table_mapping_id: tm.id,
         is_acknowledged: true,
         acknowledgment_reason: APPROVE_ALL_REASON,
         status: 'approved' as const,
@@ -2379,7 +2380,7 @@ export async function approveAllFieldMappings(
       }))
       await supabaseAdmin
         .from('target_field_mappings')
-        .upsert(rows, { onConflict: 'project_id,target_field_id' })
+        .upsert(rows, { onConflict: 'project_id,target_field_id,table_mapping_id' })
     }
 
     // Source side. Determine mapped source_field_ids in this TM pairing.
