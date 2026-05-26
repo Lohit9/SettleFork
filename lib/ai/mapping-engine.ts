@@ -52,6 +52,7 @@ import { runSingleAgentMappingLoop } from '@/lib/ai/single-agent-mapping'
 import { interpretFieldDomains } from '@/lib/ai/field-interpreter'
 import { validateMappingBatch, type MappingProposal } from '@/lib/validation/mapping-validator'
 import { validateTransformSQL } from '@/lib/validation/transform-validator'
+import { runSelfCorrectionLoop } from '@/lib/validation/self-correction'
 import {
   getStaticSuggestionForTarget,
   resolveStaticSourceUnmappedRationale,
@@ -1944,6 +1945,49 @@ ${otherSourcesList}
           continue
         }
         primaryResult = r.result
+
+        // S1.4 — self-correction: if the initial proposal has hard validation
+        // errors, re-prompt up to MAX_CORRECTION_ITERATIONS times before
+        // persisting. Only runs on the phase3 path where we have Opus + streaming.
+        if (primaryResult.kind === 'toolUse') {
+          const initialResponse = primaryResult.toolUse.input as { table_mappings?: ClaudeTableMapping[] }
+          const currentSrcFields = (sourceFields ?? []).filter(f => f.table_id === currentSourceRow?.id)
+          const correctionResult = await runSelfCorrectionLoop({
+            initialResponse: { table_mappings: initialResponse.table_mappings ?? [] },
+            initialLlmResult: primaryResult,
+            sourceFields: currentSrcFields.map(f => ({
+              name: f.name,
+              data_type: f.data_type ?? f.inferred_type ?? 'unknown',
+              is_nullable: f.is_nullable ?? true,
+            })),
+            targetFields: (targetFields ?? []).map(f => ({
+              name: f.name,
+              data_type: f.data_type ?? f.inferred_type ?? 'unknown',
+              is_nullable: f.is_nullable ?? true,
+              is_primary_key: f.is_primary_key ?? false,
+              is_foreign_key: f.is_foreign_key ?? false,
+              fk_reference: f.fk_reference ?? null,
+            })),
+            originalUserMessage: batchUserMessage,
+            feature: 'mapping_generate',
+            projectId,
+            userId,
+            maxTokens: PER_BATCH_MAX_TOKENS,
+          })
+
+          if (correctionResult.correctionsApplied > 0 || correctionResult.unresolvableFields.length > 0) {
+            console.log(
+              `[Mapping] Self-correction for ${sourceCtx.table_name}: ` +
+              `${correctionResult.correctionsApplied} iteration(s), ` +
+              `exit=${correctionResult.exitReason}, ` +
+              `unresolvable=${correctionResult.unresolvableFields.length}`,
+            )
+          }
+
+          // Replace primaryResult with the corrected LLM result so the
+          // allTableMappings.push below accumulates the corrected proposals.
+          primaryResult = correctionResult.llmResult
+        }
       } else {
         try {
           // Streaming switch (May 2026 incident): mapping_generate uses
