@@ -469,6 +469,11 @@ async function main(): Promise<void> {
   type TfmRow = {
     project_id: string
     target_field_id: string
+    // PR Ω.1 — populated in Phase 6.75 after TMs are written in Phase 6.5.
+    // Mapped TFMs bind to the TM matching (dominant_source_table, target_table).
+    // VA TFMs bind to the deterministically-lowest TM for target_table (mirrors
+    // migration 107 backfill #2).
+    table_mapping_id: string
     ai_reasoning: string
     original_ai_reasoning: string
     transformation_intent: string | null
@@ -509,6 +514,13 @@ async function main(): Promise<void> {
       join_spec: { via_fk_field: string; to_fk_field: string } | null
     }>
   >()
+  // PR Ω.1 — sidecar tracking the (target_table_id, dominant_source_table_id?)
+  // for each TFM so Phase 6.75 can resolve table_mapping_id per row. Mapped TFMs
+  // carry both; VAs carry only target_table_id (dominantSourceTableId=null).
+  const tfmBindingByTargetFieldId = new Map<
+    string,
+    { targetTableId: string; dominantSourceTableId: string | null }
+  >()
   // table_mappings rows: one per distinct (dominant_source_table, target_table)
   // pair. Required to satisfy the Transform-page gate in getTransformData
   // (lib/actions/transformations.ts:599-605) which returns "No mappings found"
@@ -534,6 +546,8 @@ async function main(): Promise<void> {
     tfmRows.push({
       project_id: projectId!,
       target_field_id: resolvedTarget.fieldId,
+      // table_mapping_id filled in Phase 6.75 after Phase 6.5 writes TMs.
+      table_mapping_id: '',
       ai_reasoning: aiReasoning,
       original_ai_reasoning: aiReasoning,
       transformation_intent: transformationIntent,
@@ -544,11 +558,15 @@ async function main(): Promise<void> {
       status: 'needs_review',
     })
 
-    // Roll up the (dominant_source_table, target_table) pair for Phase 8.5.
+    // Roll up the (dominant_source_table, target_table) pair for Phase 6.5.
     // `head` is the dominant entry (group[0]); resolveSource already validated
     // in Phase 3 so the non-null assertion is safe.
     const dominantSourceTableId = resolveSource(head.source_table, head.source_field)!.tableId
     const targetTableId = resolvedTarget.tableId
+    tfmBindingByTargetFieldId.set(resolvedTarget.fieldId, {
+      targetTableId,
+      dominantSourceTableId,
+    })
     const pairKey = `${dominantSourceTableId}::${targetTableId}`
     const existingPair = tablePairs.get(pairKey)
     if (existingPair) {
@@ -598,6 +616,8 @@ async function main(): Promise<void> {
     tfmRows.push({
       project_id: projectId!,
       target_field_id: resolvedTarget.fieldId,
+      // table_mapping_id filled in Phase 6.75 (VA branch: first TM for the target table).
+      table_mapping_id: '',
       ai_reasoning: e.explanation,
       original_ai_reasoning: e.explanation,
       transformation_intent: e.transformations[0] ?? null,
@@ -606,6 +626,12 @@ async function main(): Promise<void> {
       combination_sql: literal,
       confidence: e.confidence,
       status: 'needs_review',
+    })
+    // VAs have no source → dominantSourceTableId is null (Phase 6.75 picks the
+    // deterministically-lowest TM for the target table per migration 107 backfill #2).
+    tfmBindingByTargetFieldId.set(resolvedTarget.fieldId, {
+      targetTableId: resolvedTarget.tableId,
+      dominantSourceTableId: null,
     })
     // VAs have zero mapping_sources rows — do not add to pendingSourcesByTargetFieldId.
   }
@@ -710,11 +736,84 @@ async function main(): Promise<void> {
     console.log(`  wipe complete (poc_template preserved if set).`)
   }
 
+  // ── Phase 6.5: bulk INSERT table_mappings ──────────────────────────────
+  // PR Ω.1 — TMs must exist BEFORE Phase 7 so target_field_mappings.table_mapping_id
+  // (NOT NULL after migration 107) can be populated. Was Phase 8.5 pre-Ω.1; moved
+  // earlier because TFMs now FK to TMs.
+  const tmIdByPairKey = new Map<string, string>()
+  const firstTmIdByTargetTable = new Map<string, string>()
+  if (tablePairs.size > 0) {
+    const tmRowsToInsert = Array.from(tablePairs.values()).map((p) => ({
+      project_id: projectId!,
+      source_table_id: p.source_table_id,
+      target_table_id: p.target_table_id,
+      confidence: p.minConfidence,
+      status: 'needs_review' as const,
+      ai_reasoning: 'Seeded from Rootstock POC spec (load-rootstock-spec.ts)',
+    }))
+    console.log(`[load-rootstock-spec] writing ${tmRowsToInsert.length} table_mappings...`)
+    const { error: tmInsertErr } = await supabase
+      .from('table_mappings')
+      .insert(tmRowsToInsert)
+    if (tmInsertErr) {
+      console.error(`  table_mappings insert failed: ${tmInsertErr.message}`)
+      process.exit(1)
+    }
+
+    // Re-fetch ordered the way migration 107 backfill #2 does, so VA bindings
+    // exactly match what the migration would have chosen post-hoc.
+    const { data: allProjectTms, error: tmFetchErr } = await supabase
+      .from('table_mappings')
+      .select('id, source_table_id, target_table_id, created_at')
+      .eq('project_id', projectId!)
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true })
+    if (tmFetchErr) {
+      console.error(`  table_mappings refetch failed: ${tmFetchErr.message}`)
+      process.exit(1)
+    }
+    for (const tm of allProjectTms ?? []) {
+      const pairKey = `${tm.source_table_id}::${tm.target_table_id}`
+      if (!tmIdByPairKey.has(pairKey)) tmIdByPairKey.set(pairKey, tm.id as string)
+      const ttid = tm.target_table_id as string
+      if (!firstTmIdByTargetTable.has(ttid)) firstTmIdByTargetTable.set(ttid, tm.id as string)
+    }
+  }
+
+  // ── Phase 6.75: bind table_mapping_id onto each TfmRow ─────────────────
+  // Mapped TFMs → lookup by (dominant_source_table, target_table) pair.
+  // VA TFMs    → lookup by target_table alone (MIN created_at, id rule).
+  for (const tfm of tfmRows) {
+    const binding = tfmBindingByTargetFieldId.get(tfm.target_field_id)
+    if (!binding) {
+      console.error(
+        `  internal: no binding sidecar for target_field_id ${tfm.target_field_id}`,
+      )
+      process.exit(1)
+    }
+    let tmId: string | undefined
+    if (binding.dominantSourceTableId) {
+      const pairKey = `${binding.dominantSourceTableId}::${binding.targetTableId}`
+      tmId = tmIdByPairKey.get(pairKey)
+    } else {
+      tmId = firstTmIdByTargetTable.get(binding.targetTableId)
+    }
+    if (!tmId) {
+      console.error(
+        `  internal: no table_mapping found for target_field_id ${tfm.target_field_id} ` +
+          `(target_table_id=${binding.targetTableId}, dominant=${binding.dominantSourceTableId ?? 'null (VA)'}). ` +
+          `Spec must include at least one mapped entry per target table referenced by VAs.`,
+      )
+      process.exit(1)
+    }
+    tfm.table_mapping_id = tmId
+  }
+
   // ── Phase 7: bulk UPSERT target_field_mappings ─────────────────────────
   console.log(`[load-rootstock-spec] writing ${tfmRows.length} TFMs...`)
   const { data: upsertedTfms, error: tfmErr } = await supabase
     .from('target_field_mappings')
-    .upsert(tfmRows, { onConflict: 'project_id,target_field_id' })
+    .upsert(tfmRows, { onConflict: 'project_id,target_field_id,table_mapping_id' })
     .select('id, target_field_id')
   if (tfmErr) {
     console.error(`  TFM upsert failed: ${tfmErr.message}`)
@@ -758,29 +857,9 @@ async function main(): Promise<void> {
     }
   }
 
-  // ── Phase 8.5: bulk INSERT table_mappings ──────────────────────────────
-  // Required because getTransformData (lib/actions/transformations.ts:599-605)
-  // gates the entire Transform page on table_mappings count > 0, regardless of
-  // TFM count. TFMs do not FK to table_mappings — these rows exist purely to
-  // satisfy that UI gate. One row per distinct (dominant_source_table,
-  // target_table) pair, deduped in Phase 5 (tablePairs Map). Status mirrors the
-  // loader's TFM status and the AI fanout convention (lib/ai/mapping-engine.ts:2075).
-  if (tablePairs.size > 0) {
-    const tmRows = Array.from(tablePairs.values()).map((p) => ({
-      project_id: projectId!,
-      source_table_id: p.source_table_id,
-      target_table_id: p.target_table_id,
-      confidence: p.minConfidence,
-      status: 'needs_review' as const,
-      ai_reasoning: 'Seeded from Rootstock POC spec (load-rootstock-spec.ts)',
-    }))
-    console.log(`[load-rootstock-spec] writing ${tmRows.length} table_mappings...`)
-    const { error: tmErr } = await supabase.from('table_mappings').insert(tmRows)
-    if (tmErr) {
-      console.error(`  table_mappings insert failed: ${tmErr.message}`)
-      process.exit(1)
-    }
-  }
+  // ── Phase 8.5 removed (PR Ω.1) ─────────────────────────────────────────
+  // TM writes moved to Phase 6.5 because target_field_mappings.table_mapping_id
+  // is NOT NULL after migration 107 and must be populated at TFM insert time.
 
   // ── Phase 9: bulk UPSERT source_field_acknowledgments ──────────────────
   if (ackRows.length > 0) {
