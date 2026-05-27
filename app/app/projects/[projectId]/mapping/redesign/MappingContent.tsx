@@ -61,6 +61,7 @@ import {
   shouldHideEmptyGroups,
 } from '@/lib/utils/mapping-filters'
 import { FilterRow } from './components/FilterRow'
+import { PartitionDeleteConfirmDialog } from './components/PartitionDeleteConfirmDialog'
 import { PartitionRulesModal } from './components/PartitionRulesModal'
 import { TargetTableGroup } from './components/TargetTableGroup'
 import { MappingDrawer, type DrawerRow, type SourceFieldDrawerRow } from './components/MappingDrawer'
@@ -109,6 +110,7 @@ import {
   getPathDOutputsForProject,
   type PathDOutputs,
 } from '@/lib/actions/path-d-outputs'
+import { deletePartition } from '@/lib/actions/partitions'
 import { ToastProvider, useToast } from '@/lib/contexts/ToastContext'
 import { CONFIDENCE_THRESHOLD_ROW_HIGH } from '@/lib/utils/confidence-format'
 import { useCollapsedGroups } from '@/lib/hooks/useCollapsedGroups'
@@ -606,6 +608,37 @@ function MappingContentLoaded({
     | null
   >(null)
 
+  // PR Ω.3.2.1 — destructive partition-delete dialog state.
+  //
+  // `null` means closed. The object describes which partition is
+  // being deleted and the running result of the action call:
+  //
+  //   stagedRowsBlocking — null = first attempt (SAFE state);
+  //                         >0   = server returned HAS_STAGED_ROWS
+  //                                and the dialog needs the user's
+  //                                explicit force-confirmation
+  //                                checkbox before retrying
+  //   errorMessage       — surfaced when deletePartition returned an
+  //                         error OTHER than HAS_STAGED_ROWS
+  //                         (PERMISSION_DENIED, INTERNAL, …)
+  //   saving             — in-flight gate; disables both Cancel +
+  //                         Confirm so a second click cannot race the
+  //                         pending request
+  //
+  // savingRef mirrors `saving` synchronously for the canSubmit-style
+  // double-fire guard (INF-79 pattern, mirrors PartitionRulesModal).
+  const [partitionDeleteState, setPartitionDeleteState] = useState<
+    | {
+        partition: PartitionInfo
+        targetTableId: string
+        stagedRowsBlocking: number | null
+        errorMessage: string | null
+        saving: boolean
+      }
+    | null
+  >(null)
+  const partitionDeleteSavingRef = useRef(false)
+
   // ── Phase 4a-2 — pendingDrawerRowId sentinel ──────────────────────
   //
   // After a successful `createFieldMapping`, we swap the drawer URL
@@ -828,6 +861,145 @@ function MappingContentLoaded({
     // `onClose` regardless.
     router.refresh()
   }, [router])
+
+  // ─── PR Ω.3.2.1 — partition-delete handlers ──────────────────────
+  //
+  // Flow:
+  //   1. User clicks "Delete partition" in PartitionRulesModal edit
+  //      mode → `handleOpenDeleteDialog` captures the editing
+  //      partition + targetTableId and opens the dialog. Modal stays
+  //      open behind the dialog (PRMD4 contract — preserves form
+  //      state if the user cancels).
+  //   2. User confirms → `handleConfirmDelete` calls deletePartition
+  //      with the dialog's force flag.
+  //      - SUCCESS: pre-emptively close drawer if it was showing a
+  //        row from the deleted partition (mirrors handlePartitionChange's
+  //        drawer auto-close); reconcile selectedPartitionByTable
+  //        (pick siblings[0] or clear); writeUrl once with the new
+  //        state; router.refresh(); close both dialog + modal.
+  //      - HAS_STAGED_ROWS: surface the count, switch dialog to the
+  //        force-checkbox state. Drawer / selection unchanged.
+  //      - Other error: surface the message in the dialog's inline
+  //        error banner. Dialog stays open; user can retry or cancel.
+  //   3. User cancels → `handleCancelDelete` closes the dialog only;
+  //      modal stays open.
+
+  const handleOpenDeleteDialog = useCallback(() => {
+    if (!partitionModalState || !partitionModalState.editing) return
+    setPartitionDeleteState({
+      partition: partitionModalState.editing,
+      targetTableId: partitionModalState.targetTableId,
+      stagedRowsBlocking: null,
+      errorMessage: null,
+      saving: false,
+    })
+  }, [partitionModalState])
+
+  const handleCancelDelete = useCallback(() => {
+    if (partitionDeleteSavingRef.current) return
+    setPartitionDeleteState(null)
+  }, [])
+
+  const handleConfirmDelete = useCallback(
+    async ({ force }: { force: boolean }) => {
+      if (partitionDeleteSavingRef.current) return
+      if (!partitionDeleteState) return
+      partitionDeleteSavingRef.current = true
+      const { partition, targetTableId } = partitionDeleteState
+      setPartitionDeleteState((prev) =>
+        prev ? { ...prev, saving: true, errorMessage: null } : null,
+      )
+      try {
+        const result = await deletePartition({
+          tableMappingId: partition.id,
+          force,
+        })
+        if (result.success) {
+          // ── Drawer reconciliation ──
+          // Mirrors handlePartitionChange's pre-emptive close: if the
+          // drawer is showing a row that belonged to the just-deleted
+          // partition, close it before the data refresh would catch
+          // the stale id via the auto-close effect.
+          let nextDrawerRowId: string | null = drawerRowId
+          if (drawerRowId !== null) {
+            const openRow = data.rows.find((r) => r.id === drawerRowId)
+            if (
+              openRow !== undefined &&
+              openRow.tableMappingId === partition.id
+            ) {
+              setDrawerRowId(null)
+              setDrawerHighlightedSourceFieldId(null)
+              nextDrawerRowId = null
+            }
+          }
+
+          // ── Selection reconciliation ──
+          // If the deleted partition was the selected one for its
+          // table, switch to siblings[0] (server-canonical order means
+          // lowest-ordinal sibling) or clear the entry entirely when
+          // no siblings remain (tab strip auto-hides under heritage
+          // rule). Untouched when the deleted partition wasn't
+          // selected.
+          let nextSelection = selectedPartitionByTable
+          const currentSelected = selectedPartitionByTable.get(targetTableId)
+          if (currentSelected === partition.id) {
+            const next = new Map(selectedPartitionByTable)
+            const siblings = (
+              data.partitionsByTargetTable?.[targetTableId] ?? []
+            ).filter((p) => p.id !== partition.id)
+            if (siblings.length === 0) {
+              next.delete(targetTableId)
+            } else {
+              next.set(targetTableId, siblings[0].id)
+            }
+            setSelectedPartitionByTable(next)
+            nextSelection = next
+          }
+
+          writeUrl(filters, nextDrawerRowId, undefined, nextSelection)
+          router.refresh()
+          setPartitionDeleteState(null)
+          setPartitionModalState(null)
+        } else if (result.errorCode === 'HAS_STAGED_ROWS') {
+          // Switch dialog to the force-confirmation state. Defensive
+          // fallback to 1 if the server didn't echo the count (the
+          // action contract always includes it, but the dialog renders
+          // sensible copy either way).
+          setPartitionDeleteState((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  stagedRowsBlocking: result.stagedRowsBlocking ?? 1,
+                  saving: false,
+                }
+              : null,
+          )
+        } else {
+          setPartitionDeleteState((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  errorMessage: result.error ?? 'Delete failed',
+                  saving: false,
+                }
+              : null,
+          )
+        }
+      } finally {
+        partitionDeleteSavingRef.current = false
+      }
+    },
+    [
+      partitionDeleteState,
+      drawerRowId,
+      data.rows,
+      data.partitionsByTargetTable,
+      selectedPartitionByTable,
+      filters,
+      writeUrl,
+      router,
+    ],
+  )
 
   // PR 3b commit 3 — `handleFormDirtyChange` / `handleRestoreConsumed`
   // and the `CreateMappingFormSnapshot` import retired with
@@ -2423,10 +2595,33 @@ function MappingContentLoaded({
                 open={true}
                 onClose={handleClosePartitionModal}
                 onSaved={handlePartitionSaved}
+                onDelete={handleOpenDeleteDialog}
               />
             )
           })()
         : null}
+
+      {/*
+        PR Ω.3.2.1 — page-level partition-delete confirmation dialog.
+        Renders on top of the PartitionRulesModal (which stays mounted
+        behind it per PRMD4) so the user's form state is preserved if
+        they cancel out of the deletion. State machine + action
+        dispatch live in handleConfirmDelete above.
+      */}
+      {partitionDeleteState !== null ? (
+        <PartitionDeleteConfirmDialog
+          open={true}
+          onOpenChange={(next) => {
+            if (!next) handleCancelDelete()
+          }}
+          partition={partitionDeleteState.partition}
+          stagedRowsBlocking={partitionDeleteState.stagedRowsBlocking}
+          errorMessage={partitionDeleteState.errorMessage}
+          saving={partitionDeleteState.saving}
+          onCancel={handleCancelDelete}
+          onConfirm={handleConfirmDelete}
+        />
+      ) : null}
     </>
   )
 }
