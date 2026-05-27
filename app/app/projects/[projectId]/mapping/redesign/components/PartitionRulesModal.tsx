@@ -57,6 +57,20 @@ import type { PartitionInfo } from '@/lib/types/mappings-for-redesign'
 const PARTITION_LABEL_MAX_LENGTH = 64
 const FILTER_SQL_MAX_LENGTH = 8000
 
+// Sentinel for the "(none)" option in the identity-field Select.
+//
+// `@radix-ui/react-select@^2` throws at render whenever a `Select.Item`
+// has `value=""` — the empty string is reserved by Radix to signal
+// "clear selection / show placeholder" at the root level, and using it
+// on an item is a violation the library rejects synchronously. We need
+// a real "(none)" choice in the dropdown (identity_field_id is
+// nullable), so this sentinel stands in for null at the Radix
+// boundary. Map to/from null at the three boundaries that touch it:
+//   • <Select value=…> — render `IDENTITY_FIELD_NONE` when the state is null
+//   • <SelectItem value=…> — the (none) item is hard-coded to the sentinel
+//   • onValueChange — convert the sentinel back to null before setState
+const IDENTITY_FIELD_NONE = '__none__'
+
 // ─── Client-side Zod schemas ──────────────────────────────────────────────
 //
 // Server-side schemas are authoritative (see lib/actions/partitions.ts).
@@ -452,15 +466,17 @@ export function PartitionRulesModal({
               Identity field (for future dedup engine)
             </label>
             <Select
-              value={identityFieldId ?? ''}
-              onValueChange={(val) => setIdentityFieldId(val || null)}
+              value={identityFieldId ?? IDENTITY_FIELD_NONE}
+              onValueChange={(val) =>
+                setIdentityFieldId(val === IDENTITY_FIELD_NONE ? null : val)
+              }
               disabled={saving}
             >
               <SelectTrigger className="w-full h-9 text-sm">
                 <SelectValue placeholder="(none)" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">(none)</SelectItem>
+                <SelectItem value={IDENTITY_FIELD_NONE}>(none)</SelectItem>
                 {identityFieldOptions.map((f) => (
                   <SelectItem key={f.id} value={f.id}>
                     {f.name}
