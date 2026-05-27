@@ -212,9 +212,19 @@ describe('[redesign guard] no legacy shim or UI types in the redesign path', () 
     //     `partition_ordinal ASC NULLS LAST, created_at ASC, id ASC`
     //     rule and is untouched by this client-side sort. Added in
     //     PR Ω.3.2 commit 4 alongside the partition strip integration.
+    //
+    //   • `FlatPartitionChip.tsx` — sorts the partition option-group
+    //     headers alphabetically by target_table NAME (for the
+    //     popover's outer grouping). The sort target is a derived
+    //     `targetTables` array of group-header summaries, NOT the
+    //     wire-canonical rows list; inner partition order within each
+    //     group remains server-canonical. Added in PR Ω.3.2.2 commit
+    //     2; allowlist entry missed at the time, caught + added in
+    //     PR Ω.3.6 commit 2.
     const SORT_ALLOWED_FILES = new Set<string>([
       'app/app/projects/[projectId]/mapping/redesign/components/MappingListView.tsx',
       'app/app/projects/[projectId]/mapping/redesign/MappingContent.tsx',
+      'app/app/projects/[projectId]/mapping/redesign/components/FlatPartitionChip.tsx',
     ])
     for (const abs of files) {
       const relPath = abs.replace(REPO_ROOT + '/', '')
