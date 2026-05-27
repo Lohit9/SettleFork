@@ -1174,3 +1174,250 @@ describe('filterFlatRows — "Unmapped" axis options', () => {
     ])
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// filterFlatRows — PR Ω.3.2.2 partition predicate (5 FFR tests)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Closes the deferred follow-up from PR Ω.3.2 commit 4 — flat view honors
+// partition selection via a new optional `selectedPartitionIds` arg.
+//
+// Fixture builders below explicitly set `tableMappingId` on every parent
+// row. The shared `buildFlatRows()` fixture leaves it undefined (mirrors
+// the optional-on-type contract), so we build a dedicated
+// `buildPartitionedFlatRows()` to exercise the new predicate.
+
+function buildPartitionedFlatRows() {
+  // 3 mapped rows across 2 partitions of tableA + 1 partition of tableB,
+  // plus an unmapped-target row in tableA's partition tm-a-1 and a
+  // value-assignment in tableA's partition tm-a-2. Two source-side rows
+  // (no partition affiliation) are included to cover the always-pass-through
+  // contract.
+  const result: MappingsForRedesignResult = {
+    projectId: 'proj-1',
+    rows: [
+      mapped({
+        id: 'm-a1',
+        tableMappingId: 'tm-a-1',
+        targetField: targetField({ id: 'tf-a1', name: 'a_field_1' }),
+        status: 'approved',
+        sources: [
+          source({
+            id: 'ms-a1',
+            sourceField: {
+              id: 'sf-a1',
+              name: 'A1',
+              dataType: 'VARCHAR',
+              isNullable: false,
+            },
+            sourceTable: { id: sourceTableX.id, name: sourceTableX.name },
+          }),
+        ],
+      }),
+      mapped({
+        id: 'm-a2',
+        tableMappingId: 'tm-a-2',
+        targetField: targetField({ id: 'tf-a2', name: 'a_field_2' }),
+        status: 'approved',
+        sources: [
+          source({
+            id: 'ms-a2',
+            sourceField: {
+              id: 'sf-a2',
+              name: 'A2',
+              dataType: 'VARCHAR',
+              isNullable: false,
+            },
+            sourceTable: { id: sourceTableX.id, name: sourceTableX.name },
+          }),
+        ],
+      }),
+      mapped({
+        id: 'm-b1',
+        tableMappingId: 'tm-b-1',
+        targetField: targetField({
+          id: 'tf-b1',
+          name: 'b_field_1',
+          targetTable: { id: tableB.id, name: tableB.name },
+        }),
+        status: 'needs_review',
+        sources: [
+          source({
+            id: 'ms-b1',
+            sourceField: {
+              id: 'sf-b1',
+              name: 'B1',
+              dataType: 'DECIMAL',
+              isNullable: true,
+            },
+            sourceTable: { id: sourceTableY.id, name: sourceTableY.name },
+          }),
+        ],
+      }),
+      unmapped({
+        id: 'unmapped::tf-a3::tm-a-1',
+        tableMappingId: 'tm-a-1',
+        targetField: targetField({ id: 'tf-a3', name: 'a_field_3' }),
+        status: 'needs_review',
+      }),
+      valueAssignment({
+        id: 'va-a2',
+        tableMappingId: 'tm-a-2',
+        status: 'approved',
+      }),
+    ],
+    targetTables: [],
+    sourceTables: [],
+    sourceFieldAcknowledgments: [],
+    sourceFields: [
+      unmappedSourceField({
+        id: 'sf-orphan-x',
+        name: 'ORPHAN_X',
+        sourceTable: { id: sourceTableX.id, name: sourceTableX.name },
+      }),
+      unmappedSourceField({
+        id: 'sf-orphan-y',
+        name: 'ORPHAN_Y',
+        sourceTable: { id: sourceTableY.id, name: sourceTableY.name },
+      }),
+    ],
+    counts: { total: 0, approved: 0, needsReview: 0, rejected: 0, unmapped: 0 },
+    targetSchemaEmpty: false,
+  }
+  return flattenRowsForListView(result)
+}
+
+describe('[filterFlatRows] FFR1 — empty selectedPartitionIds short-circuits', () => {
+  it('returns the same length as input when selectedPartitionIds is undefined', () => {
+    const flat = buildPartitionedFlatRows()
+    const out = filterFlatRows(flat, DEFAULT_FILTER_STATE, undefined)
+    expect(out).toHaveLength(flat.length)
+  })
+
+  it('returns the same length as input when selectedPartitionIds is empty Set', () => {
+    const flat = buildPartitionedFlatRows()
+    const out = filterFlatRows(flat, DEFAULT_FILTER_STATE, new Set())
+    expect(out).toHaveLength(flat.length)
+  })
+})
+
+describe('[filterFlatRows] FFR2 — non-empty selectedPartitionIds filters by tableMappingId', () => {
+  it('keeps only mapped/VA/unmapped-target rows whose tableMappingId is in the set', () => {
+    const out = filterFlatRows(
+      buildPartitionedFlatRows(),
+      DEFAULT_FILTER_STATE,
+      new Set(['tm-a-1']),
+    )
+    // tm-a-1 → m-a1 + unmapped::tf-a3::tm-a-1.
+    // Source-side rows pass through (FFR3).
+    expect(idsOf(out)).toEqual([
+      'm-a1',
+      'unmapped-source::sf-orphan-x',
+      'unmapped-source::sf-orphan-y',
+      'unmapped::tf-a3::tm-a-1',
+    ])
+  })
+
+  it('keeps rows across multiple selected partitions (union semantics)', () => {
+    const out = filterFlatRows(
+      buildPartitionedFlatRows(),
+      DEFAULT_FILTER_STATE,
+      new Set(['tm-a-1', 'tm-a-2']),
+    )
+    // Both tableA partitions surface; tableB's tm-b-1 row drops.
+    expect(idsOf(out)).toEqual([
+      'm-a1',
+      'm-a2',
+      'unmapped-source::sf-orphan-x',
+      'unmapped-source::sf-orphan-y',
+      'unmapped::tf-a3::tm-a-1',
+      'va-a2',
+    ])
+  })
+})
+
+describe('[filterFlatRows] FFR3 — unmapped-source rows always pass through', () => {
+  it('source-side rows render even when selectedPartitionIds excludes their (nonexistent) partition', () => {
+    const out = filterFlatRows(
+      buildPartitionedFlatRows(),
+      DEFAULT_FILTER_STATE,
+      // A partition id that doesn't exist in the fixture — every parent
+      // row should drop, but the two source-side rows must survive.
+      new Set(['tm-nonexistent']),
+    )
+    expect(idsOf(out)).toEqual([
+      'unmapped-source::sf-orphan-x',
+      'unmapped-source::sf-orphan-y',
+    ])
+  })
+})
+
+describe('[filterFlatRows] FFR4 — rows missing tableMappingId pass defensively', () => {
+  it('rows whose parentRow.tableMappingId is null/undefined survive partition filtering', () => {
+    // Build a fixture where one row OMITS tableMappingId (mirrors a
+    // pre-Ω.1 hypothetical or a fixture that hasn't been updated).
+    // Predicate must pass these defensively — the alternative (drop)
+    // would silently hide rows the user has no way to surface.
+    const result: MappingsForRedesignResult = {
+      projectId: 'proj-1',
+      rows: [
+        mapped({
+          id: 'm-with-tm',
+          tableMappingId: 'tm-x',
+          targetField: targetField({ id: 'tf-1', name: 'with_tm' }),
+          status: 'approved',
+        }),
+        mapped({
+          id: 'm-without-tm',
+          // tableMappingId intentionally omitted
+          targetField: targetField({ id: 'tf-2', name: 'no_tm' }),
+          status: 'approved',
+        }),
+      ],
+      targetTables: [],
+      sourceTables: [],
+      sourceFieldAcknowledgments: [],
+      sourceFields: [],
+      counts: { total: 0, approved: 0, needsReview: 0, rejected: 0, unmapped: 0 },
+      targetSchemaEmpty: false,
+    }
+    const flat = flattenRowsForListView(result)
+    const out = filterFlatRows(
+      flat,
+      DEFAULT_FILTER_STATE,
+      // Picking ONLY tm-x — the without-tm row should still pass per
+      // the defensive contract.
+      new Set(['tm-x']),
+    )
+    expect(idsOf(out)).toEqual(['m-with-tm', 'm-without-tm'])
+  })
+})
+
+describe('[filterFlatRows] FFR5 — AND-semantics with other filters', () => {
+  it('combines target=A with partitions={tm-a-1} via AND', () => {
+    const out = filterFlatRows(
+      buildPartitionedFlatRows(),
+      { ...DEFAULT_FILTER_STATE, target: tableA.id },
+      new Set(['tm-a-1']),
+    )
+    // tableA + tm-a-1 → m-a1 + unmapped::tf-a3::tm-a-1.
+    // Unmapped-source rows drop on the target filter (they have no
+    // target). m-a2 / va-a2 / m-b1 drop on the partition filter.
+    expect(idsOf(out)).toEqual([
+      'm-a1',
+      'unmapped::tf-a3::tm-a-1',
+    ])
+  })
+
+  it('partition filter narrows status="approved" result further', () => {
+    const out = filterFlatRows(
+      buildPartitionedFlatRows(),
+      { ...DEFAULT_FILTER_STATE, status: 'approved' },
+      new Set(['tm-a-2']),
+    )
+    // approved + tm-a-2 → m-a2 + va-a2. m-a1 is in tm-a-1 (excluded).
+    // m-b1 is needs_review (excluded). Source-side rows have status
+    // needs_review by fixture default → excluded.
+    expect(idsOf(out)).toEqual(['m-a2', 'va-a2'])
+  })
+})
