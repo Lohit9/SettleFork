@@ -27,6 +27,7 @@ import { logActivity } from '@/lib/actions/activity-log'
 import { logAIEdit } from '@/lib/actions/ai-edit-history'
 import { assertMappingWritesEnabled } from '@/lib/auth/mapping-writes'
 import { computeOrphanedTfmsForTmDelete } from '@/lib/mappings/tm-ownership'
+import { updateTemplateFromApproval } from '@/lib/actions/migration-templates'
 import { APPROVE_ALL_REASON } from '@/lib/constants/approve-all-reason'
 import { validatePackageConsistency, type PackageValidationResult } from '@/lib/validation/package-validator'
 import {
@@ -1113,6 +1114,12 @@ export async function updateFieldMappingStatus(
         newValue: status,
         editKind,
       })
+
+      if (status === 'approved') {
+        // fire-and-forget: update template counters + write override_log if a
+        // template suggestion existed for this field
+        void updateTemplateFromApproval(tfmLookup.project_id, decoded.tfmId)
+      }
     } else {
       // tfm-contributor: reject = delete the contributor row; approve = no-op.
       if (status === 'rejected') {
