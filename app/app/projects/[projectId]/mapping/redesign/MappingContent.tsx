@@ -598,6 +598,36 @@ function MappingContentLoaded({
     return out
   })
 
+  // PR Ω.3.2.2 — flat view partition chip selection.
+  //
+  // KEYED BY: nothing (it's a flat set). VALUE: table_mappings.id.
+  // EMPTY SET = no filter active (show all rows in flat view —
+  // heritage byte-identity preserved via filterFlatRows short-circuit).
+  //
+  // INDEPENDENT from selectedPartitionByTable (the Target-led tab
+  // strip's state) — different mental models: Target-led picks ONE
+  // partition per table; flat view picks ANY combination project-wide.
+  // See PR Ω.3.2.2 design doc §4 for the rationale.
+  //
+  // URL FORM: `?flatpartitions=<tm-id>[,<tm-id>...]` — comma-separated,
+  // sorted on serialize, omitted when empty. Parallel to `?partition=`
+  // but a distinct key so the two views never collide.
+  const [flatPartitionSelection, setFlatPartitionSelection] = useState<
+    Set<string>
+  >(() => {
+    const raw = (searchParams ?? new URLSearchParams()).get('flatpartitions')
+    if (!raw) return new Set()
+    const ids = raw.split(',').filter((s) => s.length > 0)
+    if (ids.length === 0) return new Set()
+    // Trust the URL — partition IDs are server-generated UUIDs. Stale
+    // ids (e.g. a partition was deleted between bookmark save and
+    // load) naturally produce zero matches in filterFlatRows; the
+    // chip will surface the stale id under its trigger label until
+    // the user clears or re-selects. Acceptable for a chip filter
+    // (no destructive side effect).
+    return new Set(ids)
+  })
+
   // Single page-level mount for the partition create/edit modal. Owned
   // here (not per-TargetTableGroup) so we can keep one focus trap and
   // one Esc handler. `null` means closed; the object describes which
@@ -691,15 +721,17 @@ function MappingContentLoaded({
       nextDrawerRowId: string | null,
       overrideViewMode?: MappingViewMode,
       overridePartitionSelection?: Map<string, string>,
+      overrideFlatPartitionSelection?: ReadonlySet<string>,
     ) => {
       // Pattern U1 (single source of truth): one writer composes the
-      // filter query string, the drawer param, the view-mode param, and
-      // the partition param together. This keeps any single concern's
-      // write from clobbering the others. `overrideViewMode` /
-      // `overridePartitionSelection` are opt-in escape hatches for
-      // handlers that don't have to await a re-render of the underlying
-      // state before writing the new value (e.g. `handleViewModeChange`,
-      // `handlePartitionChange`).
+      // filter query string, the drawer param, the view-mode param,
+      // the Target-led partition param, and the flat-view partition
+      // param together. This keeps any single concern's write from
+      // clobbering the others. The `override*` args are opt-in escape
+      // hatches for handlers that don't have to await a re-render of
+      // the underlying state before writing the new value (e.g.
+      // `handleViewModeChange`, `handlePartitionChange`,
+      // `handleFlatPartitionSelectionChange`).
       const filterQs = serializeFilterStateToQuery(next)
       const params = new URLSearchParams(filterQs)
       if (nextDrawerRowId !== null) {
@@ -715,13 +747,26 @@ function MappingContentLoaded({
         const ids = Array.from(partitionMap.values()).sort()
         params.set('partition', ids.join(','))
       }
+      const flatPartitions =
+        overrideFlatPartitionSelection ?? flatPartitionSelection
+      if (flatPartitions.size > 0) {
+        // Same sort-for-stability rationale as `?partition=`.
+        const ids = Array.from(flatPartitions).sort()
+        params.set('flatpartitions', ids.join(','))
+      }
       const qs = params.toString()
       router.replace(
         `/app/projects/${projectId}/mapping${qs ? `?${qs}` : ''}`,
         { scroll: false },
       )
     },
-    [router, projectId, viewMode, selectedPartitionByTable],
+    [
+      router,
+      projectId,
+      viewMode,
+      selectedPartitionByTable,
+      flatPartitionSelection,
+    ],
   )
 
   const handleViewModeChange = useCallback(
@@ -834,6 +879,20 @@ function MappingContentLoaded({
       writeUrl(filters, nextDrawerRowId, undefined, next)
     },
     [selectedPartitionByTable, drawerRowId, data.rows, filters, writeUrl],
+  )
+
+  // PR Ω.3.2.2 — flat view partition chip handler. Receives the
+  // FULL new selection set (the chip's local state holds the
+  // checkbox truth); we just commit it to page state + URL via the
+  // standard override hatch. No drawer reconciliation needed — flat
+  // view's drawer-row addressing is unaffected by partition-axis
+  // filtering (rows hide/show but ids don't churn).
+  const handleFlatPartitionSelectionChange = useCallback(
+    (next: ReadonlySet<string>) => {
+      setFlatPartitionSelection(new Set(next))
+      writeUrl(filters, drawerRowId, undefined, undefined, next)
+    },
+    [filters, drawerRowId, writeUrl],
   )
 
   const handleOpenPartitionModal = useCallback(
@@ -2409,6 +2468,7 @@ function MappingContentLoaded({
                 filters={filters}
                 mutations={mutations}
                 onOpenDrawer={handleFlatOpenDrawer}
+                flatPartitionSelection={flatPartitionSelection}
               />
             ) : visibleTargetTables.length === 0 ? (
               <NoGroupsMatchState />

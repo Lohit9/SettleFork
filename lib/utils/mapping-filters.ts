@@ -271,10 +271,17 @@ function flatRowMatchesSearch(row: FlatRow, needle: string): boolean {
 /**
  * Apply all filters to a flat-row projection, preserving input order.
  * Mirrors `filterRows`'s AND-semantics + `'all'` pass-through contract.
+ *
+ * PR Ω.3.2.2 — accepts an optional `selectedPartitionIds` set so the
+ * flat view can scope rows to the user's chosen partitions (mirrors
+ * Target-led's `partitionFilteredRows` in MappingContent.tsx). Empty
+ * set / omitted = no partition filter, same array reference returned
+ * for heritage projects (memo identity preserved).
  */
 export function filterFlatRows(
   rows: readonly FlatRow[],
   filters: MappingFilterState,
+  selectedPartitionIds?: ReadonlySet<string>,
 ): FlatRow[] {
   const search = filters.search.trim().toLowerCase()
   const hasSearch = search.length > 0
@@ -282,13 +289,16 @@ export function filterFlatRows(
   const hasSourceFilter = filters.source !== 'all'
   const hasStatusFilter = filters.status !== 'all'
   const hasConfidenceFilter = filters.confidence !== 'all'
+  const hasPartitionFilter =
+    selectedPartitionIds !== undefined && selectedPartitionIds.size > 0
 
   if (
     !hasTargetFilter &&
     !hasSourceFilter &&
     !hasStatusFilter &&
     !hasConfidenceFilter &&
-    !hasSearch
+    !hasSearch &&
+    !hasPartitionFilter
   ) {
     return rows.slice()
   }
@@ -309,9 +319,36 @@ export function filterFlatRows(
       continue
     }
     if (hasSearch && !flatRowMatchesSearch(row, search)) continue
+    if (hasPartitionFilter && !flatRowMatchesPartition(row, selectedPartitionIds!)) {
+      continue
+    }
     out.push(row)
   }
   return out
+}
+
+/**
+ * PR Ω.3.2.2 — partition predicate for the flat view chip.
+ *
+ * Three pass-through cases:
+ *   1. `unmapped-source` rows have no `parentRow` and no partition
+ *      affiliation — their existence is project-scoped, not
+ *      partition-scoped (a source field is unmapped or it isn't,
+ *      regardless of which target_table partitions exist).
+ *   2. Rows missing `tableMappingId` (pre-Ω.1 defensive — every prod
+ *      row carries one today, but the type allows null).
+ *   3. Caller responsibility — when `selected.size === 0`, skip
+ *      calling this predicate entirely (handled by the outer
+ *      `hasPartitionFilter` gate).
+ */
+export function flatRowMatchesPartition(
+  row: FlatRow,
+  selected: ReadonlySet<string>,
+): boolean {
+  if (row.kind === 'unmapped-source') return true
+  const parentTmId = row.parentRow.tableMappingId ?? null
+  if (parentTmId === null) return true
+  return selected.has(parentTmId)
 }
 
 /**
