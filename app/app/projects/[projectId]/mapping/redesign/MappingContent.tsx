@@ -2426,6 +2426,10 @@ function MappingContentLoaded({
             sourceTables={data.sourceTables}
             highConfidenceCount={highConfidenceCount}
             onApproveHighConfidenceClick={handleApproveHighConfidenceClick}
+            partitionsByTargetTable={data.partitionsByTargetTable}
+            partitionsEnabled={data.partitionsEnabled}
+            selectedFlatPartitionIds={flatPartitionSelection}
+            onFlatPartitionIdsChange={handleFlatPartitionSelectionChange}
           />
         </>
       )}

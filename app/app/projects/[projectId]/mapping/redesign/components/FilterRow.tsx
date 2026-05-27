@@ -11,9 +11,11 @@ import {
 } from '@/components/ui/select'
 import { cn } from '@/components/ui/utils'
 import type {
+  PartitionInfo,
   SourceTableSummary,
   TargetTableSummary,
 } from '@/lib/types/mappings-for-redesign'
+import { FlatPartitionChip } from './FlatPartitionChip'
 import {
   CONFIDENCE_THRESHOLD_ROW_AMBER,
   CONFIDENCE_THRESHOLD_ROW_HIGH,
@@ -103,6 +105,21 @@ interface FilterRowProps {
    * `scope='high_confidence'`.
    */
   onApproveHighConfidenceClick?: () => void
+  /**
+   * PR Ω.3.2.2 — partition catalog from
+   * `MappingsForRedesignResult.partitionsByTargetTable`. Threaded
+   * through to `<FlatPartitionChip>` which renders the multi-select
+   * dropdown when its own auto-hide gates pass. Optional; omitting it
+   * (legacy fixtures / heritage) hides the chip entirely.
+   */
+  partitionsByTargetTable?: Record<string, PartitionInfo[]>
+  /** `projects.partitions_enabled`. First auto-hide gate for the chip. */
+  partitionsEnabled?: boolean
+  /** Current flat-view chip selection (Set semantics, project-wide). */
+  selectedFlatPartitionIds?: ReadonlySet<string>
+  /** Fired with the full updated set on every chip checkbox toggle.
+   *  Parent commits to URL via the standard writeUrl machinery. */
+  onFlatPartitionIdsChange?: (next: ReadonlySet<string>) => void
 }
 
 // Refinement 3 (2026-04-26): prefix labels DROPPED from the toolbar.
@@ -152,6 +169,10 @@ export function FilterRow({
   sourceTables,
   highConfidenceCount,
   onApproveHighConfidenceClick,
+  partitionsByTargetTable,
+  partitionsEnabled,
+  selectedFlatPartitionIds,
+  onFlatPartitionIdsChange,
 }: FilterRowProps) {
   // Local mirror for the search input so typing stays instant even
   // when the parent debounces URL writes. We sync back FROM the parent
@@ -350,6 +371,25 @@ export function FilterRow({
           ))}
         </SelectContent>
       </Select>
+
+      {/*
+        PR Ω.3.2.2 — flat-view partition chip. Mounts only when the
+        parent threads the partition catalog AND the change handler
+        (legacy / heritage callers omit both → chip absent). The chip
+        further self-gates on `partitionsEnabled` + at-least-one
+        multi-partition target table; heritage projects get zero chip
+        DOM. See FlatPartitionChip.tsx for the auto-hide contract.
+      */}
+      {partitionsByTargetTable !== undefined &&
+      onFlatPartitionIdsChange !== undefined ? (
+        <FlatPartitionChip
+          partitionsByTargetTable={partitionsByTargetTable}
+          partitionsEnabled={partitionsEnabled ?? false}
+          targetTables={targetTables}
+          selectedPartitionIds={selectedFlatPartitionIds ?? new Set()}
+          onChange={onFlatPartitionIdsChange}
+        />
+      ) : null}
 
       {/*
         Refinement C (Phase 4-polish-1 final, 2026-04-26): the search
