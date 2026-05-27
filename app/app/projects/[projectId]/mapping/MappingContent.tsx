@@ -772,8 +772,8 @@ function InlineAddFieldRow({
   const existingTgtForSrc = pendingPair
     ? tm.fieldMappings.find((f) => f.source_field_id === pendingPair.srcId && f.status !== 'rejected')?.targetField?.name
     : null
-  // TODO(PR Ω.3): scope by selected partition's table_mapping_id when projects.partitions_enabled.
-  // Currently safe — tm.fieldMappings is already partition-scoped (TM = partition).
+  // per-partition: scope correct — `tm` IS the partition, and
+  // `tm.fieldMappings` only contains FMs belonging to it.
   const existingSrcForTgt = pendingPair
     ? tm.fieldMappings.find((f) => f.target_field_id === pendingPair.tgtId && f.status !== 'rejected' && !f.is_contributing)?.sourceField?.name
     : null
@@ -2760,11 +2760,14 @@ export default function MappingContent({
         mappedSourceIds.add(fm.source_field_id)
       }
     }
-    // TODO(PR Ω.3): partition-sensitive — flattens across all TMs/partitions.
-    // Post-Ω.3 a target_field can be mapped in partition A but unmapped in B;
-    // this Set would mark it as "mapped" globally. Dimension by
-    // (target_field_id, table_mapping_id) when projects.partitions_enabled.
-    const mappedTargetIds = new Set(primaryFMs.map((fm) => fm.target_field_id))
+    // per-partition: keyed on `${target_field_id}::${table_mapping_id}` so
+    // a target field counts as "mapped" only within partitions that
+    // actually carry a primary FM for it. Heritage projects have one TM
+    // per target_table, so the inner loop runs once and totals match the
+    // pre-Ω.3 behavior.
+    const mappedTargetKeys = new Set(
+      primaryFMs.map((fm) => `${fm.target_field_id}::${fm.table_mapping_id}`)
+    )
 
     let unmappedSourceCount = 0
     let unmappedTargetCount = 0
@@ -2780,10 +2783,15 @@ export default function MappingContent({
         }
       }
       if (targetTableIds.has(tableId)) {
+        const tmsForTable = tableMappings.filter(
+          (tm) => tm.target_table_id === tableId
+        )
         for (const field of fields) {
-          if (!mappedTargetIds.has(field.id)) {
-            if (acknowledgedIds.has(field.id)) acknowledgedCount++
-            else unmappedTargetCount++
+          for (const tm of tmsForTable) {
+            if (!mappedTargetKeys.has(`${field.id}::${tm.id}`)) {
+              if (acknowledgedIds.has(field.id)) acknowledgedCount++
+              else unmappedTargetCount++
+            }
           }
         }
       }
@@ -2983,19 +2991,32 @@ export default function MappingContent({
     // ── Status filter
     switch (statusFilter) {
       case 'needs_review': {
-        // TODO(PR Ω.3): partition-sensitive — allFMs flattens across all TMs.
-        // For a multi-partition target field, "active in any partition" hides
-        // per-partition state. Re-scope per selected partition's TM when
-        // projects.partitions_enabled.
-        const activeSrcIds = new Set(allFMs.filter((fm) => fm.status !== 'rejected' && fm.source_field_id).map((fm) => fm.source_field_id as string))
-        const activeTgtIds = new Set(allFMs.filter((fm) => fm.status !== 'rejected' && fm.source_field_id !== null).map((fm) => fm.target_field_id))
+        // per-partition: keyed on `${field_id}::${table_mapping_id}` so
+        // "active" only flags the (field, partition) combinations that
+        // actually carry a non-rejected FM. Heritage: one TM per
+        // source/target_table, so the per-partition .has() resolves to
+        // the same answer as the pre-Ω.3 field-id-only check.
+        const activeSrcKeys = new Set(
+          allFMs
+            .filter((fm) => fm.status !== 'rejected' && fm.source_field_id)
+            .map((fm) => `${fm.source_field_id as string}::${fm.table_mapping_id}`)
+        )
+        const activeTgtKeys = new Set(
+          allFMs
+            .filter((fm) => fm.status !== 'rejected' && fm.source_field_id !== null)
+            .map((fm) => `${fm.target_field_id}::${fm.table_mapping_id}`)
+        )
         result = result.filter((tm) => {
           const hasNeedsReview = tm.fieldMappings.some((fm) => !fm.is_contributing && fm.status === 'needs_review')
           if (hasNeedsReview) return true
           const srcFields = allFieldsByTable[tm.source_table_id] ?? []
           const tgtFields = allFieldsByTable[tm.target_table_id] ?? []
-          const hasUnackedSrc = srcFields.some((f) => !activeSrcIds.has(f.id) && !acknowledgedIds.has(f.id))
-          const hasUnackedTgt = tgtFields.some((f) => !activeTgtIds.has(f.id) && !acknowledgedIds.has(f.id))
+          const hasUnackedSrc = srcFields.some(
+            (f) => !activeSrcKeys.has(`${f.id}::${tm.id}`) && !acknowledgedIds.has(f.id)
+          )
+          const hasUnackedTgt = tgtFields.some(
+            (f) => !activeTgtKeys.has(`${f.id}::${tm.id}`) && !acknowledgedIds.has(f.id)
+          )
           return hasUnackedSrc || hasUnackedTgt
         })
         break
@@ -3009,9 +3030,9 @@ export default function MappingContent({
           .filter((tm) => tm.fieldMappings.length > 0)
         break
       case 'unmapped': {
-        // TODO(PR Ω.3): per-TM scope here is partition-correct (TM = partition).
-        // No behavior change needed when projects.partitions_enabled — the
-        // outer .filter((tm) => ...) already implicitly partitions by TM.
+        // per-partition: scope correct — the outer `.filter((tm) => ...)`
+        // implicitly partitions by TM, and the inner activeSrcIds /
+        // activeTgtIds are derived from this `tm`'s fieldMappings.
         result = result.filter((tm) => {
           const activeSrcIds = new Set(tm.fieldMappings.filter((fm) => fm.status !== 'rejected' && fm.source_field_id).map((fm) => fm.source_field_id as string))
           const activeTgtIds = new Set(tm.fieldMappings.filter((fm) => fm.status !== 'rejected' && fm.source_field_id !== null).map((fm) => fm.target_field_id))
@@ -3068,9 +3089,9 @@ export default function MappingContent({
         break
       }
       case 'many_to_one':
-        // TODO(PR Ω.3): tm.fieldMappings .some() is partition-correct here
-        // (TM = partition). When projects.partitions_enabled, no semantic
-        // change needed — many-to-one is intrinsically within one partition.
+        // per-partition: scope correct — many-to-one is intrinsic to a
+        // single partition (the contributing + primary FMs all live on
+        // the same `tm`). Filter operates on `tm.fieldMappings` only.
         result = result
           .map((tm) => {
             const filtered = tm.fieldMappings.filter((fm) => {
@@ -3088,24 +3109,30 @@ export default function MappingContent({
           .filter((tm) => tm.fieldMappings.length > 0)
         break
       case 'one_to_many': {
-        // TODO(PR Ω.3): partition-sensitive — allFMs flattens across TMs to
-        // count source field reuse. Under partitions, a source could fan out
-        // across partitions; need to decide whether to count global or per-
-        // partition. Likely per-partition when projects.partitions_enabled.
-        const srcCounts = new Map<string, number>()
-        for (const fm of allFMs.filter((f) => !f.is_contributing && f.status !== 'rejected' && f.source_field_id)) {
-          srcCounts.set(fm.source_field_id!, (srcCounts.get(fm.source_field_id!) ?? 0) + 1)
-        }
-        const multiSrcIds = new Set(
-          [...srcCounts.entries()].filter(([, c]) => c > 1).map(([id]) => id)
-        )
+        // per-partition: srcCounts is computed inside the .map((tm) =>)
+        // so a source field that fans out to multiple targets across
+        // different partitions is NOT counted as one-to-many within any
+        // single partition. Heritage projects have one TM per
+        // target_table, so this collapses to the same count as the
+        // pre-Ω.3 global pass.
         result = result
-          .map((tm) => ({
-            ...tm,
-            fieldMappings: tm.fieldMappings.filter(
-              (fm) => fm.source_field_id && multiSrcIds.has(fm.source_field_id)
-            ),
-          }))
+          .map((tm) => {
+            const srcCounts = new Map<string, number>()
+            for (const fm of tm.fieldMappings.filter(
+              (f) => !f.is_contributing && f.status !== 'rejected' && f.source_field_id
+            )) {
+              srcCounts.set(fm.source_field_id!, (srcCounts.get(fm.source_field_id!) ?? 0) + 1)
+            }
+            const multiSrcIds = new Set(
+              [...srcCounts.entries()].filter(([, c]) => c > 1).map(([id]) => id)
+            )
+            return {
+              ...tm,
+              fieldMappings: tm.fieldMappings.filter(
+                (fm) => fm.source_field_id && multiSrcIds.has(fm.source_field_id)
+              ),
+            }
+          })
           .filter((tm) => tm.fieldMappings.length > 0)
         break
       }

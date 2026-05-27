@@ -202,8 +202,19 @@ describe('[redesign guard] no legacy shim or UI types in the redesign path', () 
     //     ordering is a user-facing UI concern, NOT a re-derivation of
     //     server contract. Target-led view (which IS server-ordered)
     //     continues to be checked by this guard.
+    //
+    //   • `MappingContent.tsx` (redesign) — `writeUrl` sorts the
+    //     comma-separated `?partition=` token list (Array<string> of
+    //     table_mappings.id values) for URL stability so bookmarks /
+    //     history don't churn just because of Map insertion order.
+    //     The sort target is URL tokens, NOT rows; tab render order
+    //     is governed by the server-canonical
+    //     `partition_ordinal ASC NULLS LAST, created_at ASC, id ASC`
+    //     rule and is untouched by this client-side sort. Added in
+    //     PR Ω.3.2 commit 4 alongside the partition strip integration.
     const SORT_ALLOWED_FILES = new Set<string>([
       'app/app/projects/[projectId]/mapping/redesign/components/MappingListView.tsx',
+      'app/app/projects/[projectId]/mapping/redesign/MappingContent.tsx',
     ])
     for (const abs of files) {
       const relPath = abs.replace(REPO_ROOT + '/', '')

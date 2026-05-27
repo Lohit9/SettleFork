@@ -159,6 +159,67 @@ export interface MappingsForRedesignResult {
    * viewport.
    */
   targetSchemaEmpty: boolean
+
+  /**
+   * PR Ω.3.2 — per-target-table partition metadata. Map keyed by
+   * `target_table_id`; value is the ordered list of partitions (table_mappings
+   * rows) backing that target table.
+   *
+   * Server-derived (not computed client-side from rows) so:
+   *   - target tables with zero TFMs but with partition definitions still
+   *     surface their partitions in the tab strip;
+   *   - the canonical ordering rule
+   *     `ORDER BY partition_ordinal ASC NULLS LAST, created_at ASC, id ASC`
+   *     is enforced once on the server (mirrors the Ω.1 backfill #2 rule
+   *     + `lib/utils/partition-binding.ts`).
+   *
+   * For heritage projects (1 TM per target_table), each entry has length 1
+   * and the single PartitionInfo carries `label=null`. The `PartitionTabs`
+   * component auto-hides when `length === 1 AND projects.partitions_enabled
+   * is false` (zero DOM presence → byte-identical to pre-Ω.3.2).
+   *
+   * Optional on the TYPE for back-compat; commit 2's wire shape always emits.
+   */
+  partitionsByTargetTable?: Record<string, PartitionInfo[]>
+
+  /**
+   * PR Ω.3.2 — value of `projects.partitions_enabled` for this project.
+   * Gates the "+ Add Partition" affordance in the UI (also gates whether
+   * the tab strip renders when count=1).
+   *
+   * Optional on the TYPE for back-compat; commit 2's wire shape always emits.
+   */
+  partitionsEnabled?: boolean
+}
+
+/**
+ * PR Ω.3.2 — partition metadata surfaced in `MappingsForRedesignResult.
+ * partitionsByTargetTable`. One entry per `table_mappings` row, decorated
+ * with the joined source-table name for display fallback when
+ * `partition_label` is null.
+ */
+export interface PartitionInfo {
+  /** `table_mappings.id` — the partition's stable identifier. */
+  id: string
+  /** `table_mappings.partition_label` — user-facing name. Null for heritage
+   *  or auto-named partitions; UI falls back to `sourceTableName`. */
+  label: string | null
+  /** `table_mappings.partition_ordinal` — explicit tab ordering. Null
+   *  partitions sort after explicit ones; tiebreak by created_at + id. */
+  ordinal: number | null
+  /** Source table powering this partition. */
+  sourceTableId: string
+  /** `tables.name` for the source table. Display fallback when label is null. */
+  sourceTableName: string
+  /** `table_mappings.filter_sql` — partition's WHERE clause applied by the
+   *  apply path (PR Ω.2) and preview path (PR Ω.3.3). Null in prod today. */
+  filterSql: string | null
+  /** `table_mappings.identity_field_id` — forward-compat for future dedup
+   *  engine. Sibling partitions must share the same identity when set. */
+  identityFieldId: string | null
+  /** `table_mappings.dedup_priority` — forward-compat. Lower = higher
+   *  priority for future dedup tie-breaking. */
+  dedupPriority: number | null
 }
 
 // ─── Row shapes (discriminated union) ────────────────────────────────
@@ -200,8 +261,13 @@ interface MappingRowBase {
   /**
    * Stable rendering key.
    *   mapped / value_assignment   → target_field_mappings.id
-   *   unmapped (canonical
-   *   coverage-only no-source)    → `unmapped::<target_field_id>`
+   *   unmapped (heritage, count(TMs per target_table)=1) → `unmapped::<target_field_id>`
+   *   unmapped (multi-partition,  count(TMs per target_table)>=2) → `unmapped::<target_field_id>::<table_mapping_id>`
+   *
+   * PR Ω.3.2: the synthetic id format becomes partition-aware in multi-
+   * partition projects so each (target_field, partition) pair has a unique
+   * row id. Heritage rendering is byte-identical — the legacy short form is
+   * preserved when the target table has exactly one partition.
    *
    * The `unmapped::` synthetic id is NEVER sent to a TFM-mutating write
    * action. Server actions that accept a TFM id MUST reject the
@@ -209,6 +275,44 @@ interface MappingRowBase {
    * create-TFM path first.
    */
   id: string
+
+  /**
+   * PR Ω.3.2 — the partition (table_mapping) this row belongs to.
+   * References `table_mappings.id`. For heritage projects (exactly 1 TM
+   * per target_table), every row in the same target table carries the same
+   * `tableMappingId` and `partitionLabel=null`.
+   *
+   * When a target table has N partitions (post-Ω.3.2), the row builder
+   * emits up to N rows per target field — one per (target_field_id,
+   * table_mapping_id) pair. Each row's `id` remains the TFM UUID for
+   * mapped/VA rows, or the partition-aware synthetic `unmapped::<tfid>::<tmid>`
+   * for unmapped rows.
+   *
+   * MAY be null only in the rare pre-Ω.1 case where a project has TFMs but
+   * no `table_mappings` rows at all (the migration 107 pre-flight (b) would
+   * have caught this; nothing in prod should hit it today).
+   *
+   * Optional on the TYPE for back-compat (matches the `transformationDescription?`
+   * pattern). Test fixtures + partial-update code paths may omit; the wire
+   * shape (assembler in `lib/ai/mapping-engine.ts`) always emits an explicit
+   * value on real wire payloads.
+   */
+  tableMappingId?: string | null
+
+  /**
+   * PR Ω.3.2 — user-facing partition name from `table_mappings.partition_label`.
+   * NULL when the project has no explicit partition naming (count(TMs per
+   * target_table) === 1 AND partition_label IS NULL on the single TM —
+   * the heritage default). The UI:
+   *   - heritage: tab strip auto-hides, drawer omits the "Partition:" annotation
+   *   - multi-partition + label set: tab shows `partitionLabel`
+   *   - multi-partition + label null: tab falls back to source table name
+   *
+   * Optional on the TYPE for back-compat (matches `transformationDescription?`).
+   * Always emitted on real wire payloads; optional only relaxes the constraint
+   * for synthetic fixtures and partial-update code paths.
+   */
+  partitionLabel?: string | null
 
   /**
    * Target field — the identity that drives every row. Replaces the
