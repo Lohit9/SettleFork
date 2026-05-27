@@ -33,6 +33,13 @@ import { readFileSync } from 'fs'
 import { resolve } from 'path'
 import { config } from 'dotenv'
 import { z } from 'zod'
+import {
+  EIM_IDENTITY_TARGET_FIELD_NAME,
+  EIM_PARTITIONS,
+  EIM_TARGET_TABLE,
+  ICC_TARGET_TABLE,
+  routePartition,
+} from './rootstock-partitions'
 
 config({ path: resolve(process.cwd(), '.env.local') })
 
@@ -345,7 +352,7 @@ async function main(): Promise<void> {
       inner.set(f.name, f)
       fieldByTblId.set(f.table_id, inner)
     }
-    return function resolve(
+    function resolveField(
       tableName: string,
       fieldName: string,
     ): { tableId: string; fieldId: string } | null {
@@ -360,10 +367,24 @@ async function main(): Promise<void> {
       }
       return null
     }
+    // PR Ω.3.6 — table-only resolver for partition TM creation (Phase 6.5
+    // hardcodes EIM partitions; needs source/target table ids without a
+    // specific field reference).
+    function resolveTable(tableName: string): { tableId: string } | null {
+      const tbls = tableByName.get(tableName)
+      if (!tbls || tbls.length === 0) return null
+      // Take the first match; same uniqueness assumption as resolveField.
+      return { tableId: tbls[0]!.id }
+    }
+    return { resolveField, resolveTable }
   }
 
-  const resolveSource = buildResolver(src.tables as TblRow[], src.fields as FldRow[])
-  const resolveTarget = buildResolver(tgt.tables as TblRow[], tgt.fields as FldRow[])
+  const srcResolver = buildResolver(src.tables as TblRow[], src.fields as FldRow[])
+  const tgtResolver = buildResolver(tgt.tables as TblRow[], tgt.fields as FldRow[])
+  const resolveSource = srcResolver.resolveField
+  const resolveTarget = tgtResolver.resolveField
+  const resolveSourceTable = srcResolver.resolveTable
+  const resolveTargetTable = tgtResolver.resolveTable
 
   const unresolved: UnresolvedName[] = []
   for (const c of classified) {
@@ -455,24 +476,53 @@ async function main(): Promise<void> {
   }
 
   // ── Phase 5: build write payloads (in-memory, no DB writes yet) ────────
+  //
+  // PR Ω.3.6 — PARTITION-AWARE GROUPING.
+  //
+  // Cardinality change vs heritage:
+  //   Old: grouped by (target_table, target_field) → 1 TFM per pair,
+  //        multi-source via mapping_sources.
+  //   New: grouped by (target_table, target_field, partition_label) →
+  //        1 TFM per (pair, partition). VAs targeting EIM REPLICATE to
+  //        all 3 partitions (Q5 locked: verbatim replication; Joanna
+  //        edits per-partition post-load).
+  //
+  // ICC-target entries are SKIPPED entirely per Q4 Option A (ICC is
+  // loaded in Rootstock outside Settle). The router returns [] for them.
 
-  // Group mapped entries by (target_table, target_field).
-  const mappedByTarget = new Map<string, EntryT[]>()
+  // Group MAPPED entries by (target_table, target_field, partition_label).
+  // Each entry routes to 1+ partition labels via routePartition().
+  const mappedByTargetAndPartition = new Map<string, EntryT[]>()
+  let skippedIccCount = 0
   for (const c of classified) {
     if (c.kind !== 'mapped') continue
-    const k = `${c.entry.target_table}|${c.entry.target_field}`
-    const arr = mappedByTarget.get(k) ?? []
-    arr.push(c.entry)
-    mappedByTarget.set(k, arr)
+    const partitions = routePartition(c.entry)
+    if (partitions.length === 0) {
+      // ICC entries are intentionally skipped (Option A).
+      if (c.entry.target_table === ICC_TARGET_TABLE) {
+        skippedIccCount++
+        continue
+      }
+      // Otherwise this is a bug — routePartition would have thrown.
+      throw new Error(
+        `[Phase 5] mapped entry returned empty partition list and ` +
+          `isn't ICC: ${JSON.stringify(c.entry)}`,
+      )
+    }
+    for (const partitionLabel of partitions) {
+      const k = `${c.entry.target_table}|${c.entry.target_field}|${partitionLabel}`
+      const arr = mappedByTargetAndPartition.get(k) ?? []
+      arr.push(c.entry)
+      mappedByTargetAndPartition.set(k, arr)
+    }
   }
 
   type TfmRow = {
     project_id: string
     target_field_id: string
     // PR Ω.1 — populated in Phase 6.75 after TMs are written in Phase 6.5.
-    // Mapped TFMs bind to the TM matching (dominant_source_table, target_table).
-    // VA TFMs bind to the deterministically-lowest TM for target_table (mirrors
-    // migration 107 backfill #2).
+    // PR Ω.3.6 — every TFM now carries a specific partition_label resolved
+    // via routePartition(); Phase 6.75 looks up the TM by that label.
     table_mapping_id: string
     ai_reasoning: string
     original_ai_reasoning: string
@@ -502,9 +552,15 @@ async function main(): Promise<void> {
   }
 
   const tfmRows: TfmRow[] = []
+  // PR Ω.3.6 — every tfmRow has a corresponding entry in this sidecar
+  // tracking which partition_label it belongs to. tfmRows[i] ↔
+  // tfmPartitionByIndex[i]. Phase 6.75 binds table_mapping_id by looking
+  // up the partition_label in tmIdByPartitionLabel.
+  const tfmPartitionByIndex: string[] = []
   // mapping_sources are resolved AFTER TFM upsert (we need the inserted ids).
-  // Carry the pending sources keyed by target_field_id so we can join.
-  const pendingSourcesByTargetFieldId = new Map<
+  // PR Ω.3.6 — keyed by `${target_field_id}|${partition_label}` since
+  // multiple TFMs now share a target_field_id (one per partition).
+  const pendingSourcesByTfmKey = new Map<
     string,
     Array<{
       source_field_id: string
@@ -514,27 +570,14 @@ async function main(): Promise<void> {
       join_spec: { via_fk_field: string; to_fk_field: string } | null
     }>
   >()
-  // PR Ω.1 — sidecar tracking the (target_table_id, dominant_source_table_id?)
-  // for each TFM so Phase 6.75 can resolve table_mapping_id per row. Mapped TFMs
-  // carry both; VAs carry only target_table_id (dominantSourceTableId=null).
-  const tfmBindingByTargetFieldId = new Map<
-    string,
-    { targetTableId: string; dominantSourceTableId: string | null }
-  >()
-  // table_mappings rows: one per distinct (dominant_source_table, target_table)
-  // pair. Required to satisfy the Transform-page gate in getTransformData
-  // (lib/actions/transformations.ts:599-605) which returns "No mappings found"
-  // when this table is empty, regardless of TFM count. Contributor source tables
-  // in cross-table TFMs flow through mapping_sources and do NOT get their own
-  // TM row — mirrors the AI fanout convention in lib/ai/mapping-engine.ts:2068.
-  const tablePairs = new Map<
-    string,
-    { source_table_id: string; target_table_id: string; minConfidence: number }
-  >()
 
-  for (const [, group] of mappedByTarget) {
+  for (const [groupKey, group] of mappedByTargetAndPartition) {
+    const [targetTable, targetField, partitionLabel] = groupKey.split('|')
+    if (!targetTable || !targetField || !partitionLabel) {
+      throw new Error(`[Phase 5] malformed groupKey: ${groupKey}`)
+    }
     const head = group[0]!
-    const resolvedTarget = resolveTarget(head.target_table, head.target_field)!
+    const resolvedTarget = resolveTarget(targetTable, targetField)!
     const combinationType: TfmRow['combination_type'] =
       group.length === 1 ? 'single' : 'concat_space'
 
@@ -557,29 +600,13 @@ async function main(): Promise<void> {
       confidence,
       status: 'needs_review',
     })
+    tfmPartitionByIndex.push(partitionLabel)
 
-    // Roll up the (dominant_source_table, target_table) pair for Phase 6.5.
-    // `head` is the dominant entry (group[0]); resolveSource already validated
-    // in Phase 3 so the non-null assertion is safe.
-    const dominantSourceTableId = resolveSource(head.source_table, head.source_field)!.tableId
-    const targetTableId = resolvedTarget.tableId
-    tfmBindingByTargetFieldId.set(resolvedTarget.fieldId, {
-      targetTableId,
-      dominantSourceTableId,
-    })
-    const pairKey = `${dominantSourceTableId}::${targetTableId}`
-    const existingPair = tablePairs.get(pairKey)
-    if (existingPair) {
-      existingPair.minConfidence = Math.min(existingPair.minConfidence, confidence)
-    } else {
-      tablePairs.set(pairKey, {
-        source_table_id: dominantSourceTableId,
-        target_table_id: targetTableId,
-        minConfidence: confidence,
-      })
-    }
-
-    const dominantTableName = group[0]!.source_table
+    // Build mapping_sources rows for THIS partition's TFM. Cross-table
+    // multi-source within a single partition is rare under the new
+    // routing (each entry routes to one partition tied to its source
+    // table), but keep computeJoinSpec wired for future flexibility.
+    const dominantTableName = head.source_table
     const sources: Array<{
       source_field_id: string
       source_table_id: string
@@ -594,7 +621,7 @@ async function main(): Promise<void> {
         dominantTableName,
         e.source_table,
         spec.joins,
-        `${head.target_table}.${head.target_field}`,
+        `${targetTable}.${targetField}@${partitionLabel}`,
       )
       sources.push({
         source_field_id: r.fieldId,
@@ -604,36 +631,52 @@ async function main(): Promise<void> {
         join_spec: joinSpec,
       })
     }
-    pendingSourcesByTargetFieldId.set(resolvedTarget.fieldId, sources)
+    pendingSourcesByTfmKey.set(
+      `${resolvedTarget.fieldId}|${partitionLabel}`,
+      sources,
+    )
   }
 
-  // Value assignments — one per (target_table, target_field).
+  // Value assignments — replicate across the partitions returned by the
+  // router. EIM-targeted VAs replicate to all 3 EIM partitions (Q5).
+  // Non-EIM target VAs are out of scope today; routePartition returns []
+  // and we surface a fail-loud for any unexpected case.
+  let skippedIccVaCount = 0
   for (const c of classified) {
     if (c.kind !== 'value_assignment') continue
     const e = c.entry
     const resolvedTarget = resolveTarget(e.target_table, e.target_field)!
     const literal = extractValueLiteral(e.transformations[0])
-    tfmRows.push({
-      project_id: projectId!,
-      target_field_id: resolvedTarget.fieldId,
-      // table_mapping_id filled in Phase 6.75 (VA branch: first TM for the target table).
-      table_mapping_id: '',
-      ai_reasoning: e.explanation,
-      original_ai_reasoning: e.explanation,
-      transformation_intent: e.transformations[0] ?? null,
-      needs_transformation: e.transformation_needed,
-      combination_type: 'custom_sql',
-      combination_sql: literal,
-      confidence: e.confidence,
-      status: 'needs_review',
-    })
-    // VAs have no source → dominantSourceTableId is null (Phase 6.75 picks the
-    // deterministically-lowest TM for the target table per migration 107 backfill #2).
-    tfmBindingByTargetFieldId.set(resolvedTarget.fieldId, {
-      targetTableId: resolvedTarget.tableId,
-      dominantSourceTableId: null,
-    })
-    // VAs have zero mapping_sources rows — do not add to pendingSourcesByTargetFieldId.
+    const partitions = routePartition(e)
+    if (partitions.length === 0) {
+      if (e.target_table === ICC_TARGET_TABLE) {
+        skippedIccVaCount++
+        continue
+      }
+      throw new Error(
+        `[Phase 5] VA returned empty partition list and isn't ICC: ` +
+          JSON.stringify(e),
+      )
+    }
+    for (const partitionLabel of partitions) {
+      tfmRows.push({
+        project_id: projectId!,
+        target_field_id: resolvedTarget.fieldId,
+        // Filled in Phase 6.75 via partition_label lookup.
+        table_mapping_id: '',
+        ai_reasoning: e.explanation,
+        original_ai_reasoning: e.explanation,
+        transformation_intent: e.transformations[0] ?? null,
+        needs_transformation: e.transformation_needed,
+        combination_type: 'custom_sql',
+        combination_sql: literal,
+        confidence: e.confidence,
+        status: 'needs_review',
+      })
+      tfmPartitionByIndex.push(partitionLabel)
+      // VAs have zero mapping_sources rows — do not add to
+      // pendingSourcesByTfmKey.
+    }
   }
 
   // Source acknowledgments.
@@ -654,9 +697,9 @@ async function main(): Promise<void> {
   }
 
   // ── Summary ────────────────────────────────────────────────────────────
-  const mappedTfmCount = mappedByTarget.size
+  const mappedTfmCount = mappedByTargetAndPartition.size
   const vaTfmCount = tfmRows.length - mappedTfmCount
-  const totalMappingSources = Array.from(pendingSourcesByTargetFieldId.values()).reduce(
+  const totalMappingSources = Array.from(pendingSourcesByTfmKey.values()).reduce(
     (acc, arr) => acc + arr.length,
     0,
   )
@@ -665,10 +708,11 @@ async function main(): Promise<void> {
   ).length
 
   console.log(`[load-rootstock-spec] write plan:`)
-  console.log(`  TFMs (mapped)         : ${mappedTfmCount}`)
-  console.log(`  TFMs (value assignment): ${vaTfmCount} (${literalVaCount} with combination_sql literal)`)
-  console.log(`  mapping_sources rows  : ${totalMappingSources}`)
-  console.log(`  table_mappings rows   : ${tablePairs.size}`)
+  console.log(`  TFMs (mapped, per partition): ${mappedTfmCount}`)
+  console.log(`  TFMs (VA, per partition)    : ${vaTfmCount} (${literalVaCount} with combination_sql literal)`)
+  console.log(`  mapping_sources rows         : ${totalMappingSources}`)
+  console.log(`  table_mappings rows (partitions): ${EIM_PARTITIONS.length} (EIM hardcoded)`)
+  console.log(`  ICC entries skipped          : ${skippedIccCount + skippedIccVaCount}`)
   console.log(`  source_field_acks     : ${ackRows.length}`)
   console.log(`  schema_documents rows : 1 (poc_answer_key)`)
   console.log(`  projects.poc_template : '${POC_TEMPLATE_VALUE}'`)
@@ -736,104 +780,164 @@ async function main(): Promise<void> {
     console.log(`  wipe complete (poc_template preserved if set).`)
   }
 
-  // ── Phase 6.5: bulk INSERT table_mappings ──────────────────────────────
-  // PR Ω.1 — TMs must exist BEFORE Phase 7 so target_field_mappings.table_mapping_id
-  // (NOT NULL after migration 107) can be populated. Was Phase 8.5 pre-Ω.1; moved
-  // earlier because TFMs now FK to TMs.
-  const tmIdByPairKey = new Map<string, string>()
-  const firstTmIdByTargetTable = new Map<string, string>()
-  if (tablePairs.size > 0) {
-    const tmRowsToInsert = Array.from(tablePairs.values()).map((p) => ({
-      project_id: projectId!,
-      source_table_id: p.source_table_id,
-      target_table_id: p.target_table_id,
-      confidence: p.minConfidence,
-      status: 'needs_review' as const,
-      ai_reasoning: 'Seeded from Rootstock POC spec (load-rootstock-spec.ts)',
-    }))
-    console.log(`[load-rootstock-spec] writing ${tmRowsToInsert.length} table_mappings...`)
-    const { error: tmInsertErr } = await supabase
-      .from('table_mappings')
-      .insert(tmRowsToInsert)
-    if (tmInsertErr) {
-      console.error(`  table_mappings insert failed: ${tmInsertErr.message}`)
-      process.exit(1)
-    }
+  // ── Phase 6.5: bulk UPSERT table_mappings (hardcoded EIM partitions) ───
+  //
+  // PR Ω.3.6 — TMs are no longer derived from observed (source, target)
+  // pairs; they're the hardcoded EIM_PARTITIONS array from
+  // scripts/rootstock-partitions.ts. Each partition carries
+  // partition_label, partition_ordinal, filter_sql, identity_field_id,
+  // and dedup_priority per the Ω.3.1 schema.
+  //
+  // identity_field_id is resolved here (after Phase 3 name-resolution
+  // is available) for the EIM target field 'Item Number' shared by all
+  // 3 partitions (Ω.3.1 sibling-consistency contract).
+  //
+  // Idempotency: UPSERT with onConflict on the
+  // (project_id, target_table_id, partition_label) tuple — the same
+  // uniqueness Ω.3.1 enforces server-side.
+  //
+  // Note on Rootstock-only scope: this PR hardcodes EIM. If a future
+  // POC needs partitions for other target tables, extend
+  // EIM_PARTITIONS into a per-POC catalog. For Rootstock the spec
+  // exclusively targets EIM + ICC (the latter skipped per Q4 Option A).
+  const eimIdentityResolved = resolveTarget(
+    EIM_TARGET_TABLE,
+    EIM_IDENTITY_TARGET_FIELD_NAME,
+  )
+  if (!eimIdentityResolved) {
+    console.error(
+      `[load-rootstock-spec] could not resolve identity field "${EIM_IDENTITY_TARGET_FIELD_NAME}" ` +
+        `on target table "${EIM_TARGET_TABLE}". Make sure the target schema was uploaded.`,
+    )
+    process.exit(1)
+  }
+  const eimTargetTableResolved = resolveTargetTable(EIM_TARGET_TABLE)
+  if (!eimTargetTableResolved) {
+    console.error(
+      `[load-rootstock-spec] could not resolve target table "${EIM_TARGET_TABLE}".`,
+    )
+    process.exit(1)
+  }
 
-    // Re-fetch ordered the way migration 107 backfill #2 does, so VA bindings
-    // exactly match what the migration would have chosen post-hoc.
-    const { data: allProjectTms, error: tmFetchErr } = await supabase
-      .from('table_mappings')
-      .select('id, source_table_id, target_table_id, created_at')
-      .eq('project_id', projectId!)
-      .order('created_at', { ascending: true })
-      .order('id', { ascending: true })
-    if (tmFetchErr) {
-      console.error(`  table_mappings refetch failed: ${tmFetchErr.message}`)
+  const tmRowsToUpsert = EIM_PARTITIONS.map((p) => {
+    const sourceTableResolved = resolveSourceTable(p.sourceTableName)
+    if (!sourceTableResolved) {
+      console.error(
+        `[load-rootstock-spec] partition "${p.label}" references missing source table "${p.sourceTableName}"`,
+      )
       process.exit(1)
     }
-    for (const tm of allProjectTms ?? []) {
-      const pairKey = `${tm.source_table_id}::${tm.target_table_id}`
-      if (!tmIdByPairKey.has(pairKey)) tmIdByPairKey.set(pairKey, tm.id as string)
-      const ttid = tm.target_table_id as string
-      if (!firstTmIdByTargetTable.has(ttid)) firstTmIdByTargetTable.set(ttid, tm.id as string)
+    return {
+      project_id: projectId!,
+      source_table_id: sourceTableResolved.tableId,
+      target_table_id: eimTargetTableResolved.tableId,
+      confidence: null,
+      status: 'approved' as const,
+      ai_reasoning: `Seeded from Rootstock POC spec — ${p.label} partition`,
+      filter_sql: p.filterSql,
+      partition_label: p.label,
+      partition_ordinal: p.ordinal,
+      identity_field_id: eimIdentityResolved.fieldId,
+      dedup_priority: p.dedupPriority,
+    }
+  })
+  console.log(
+    `[load-rootstock-spec] upserting ${tmRowsToUpsert.length} table_mappings (EIM partitions)...`,
+  )
+  const { error: tmUpsertErr } = await supabase
+    .from('table_mappings')
+    .upsert(tmRowsToUpsert, {
+      onConflict: 'project_id,target_table_id,partition_label',
+    })
+  if (tmUpsertErr) {
+    console.error(`  table_mappings upsert failed: ${tmUpsertErr.message}`)
+    process.exit(1)
+  }
+
+  // Re-fetch to get the partition ids, indexed by partition_label.
+  const { data: allProjectTms, error: tmFetchErr } = await supabase
+    .from('table_mappings')
+    .select('id, target_table_id, partition_label')
+    .eq('project_id', projectId!)
+  if (tmFetchErr) {
+    console.error(`  table_mappings refetch failed: ${tmFetchErr.message}`)
+    process.exit(1)
+  }
+  const tmIdByPartitionLabel = new Map<string, string>()
+  for (const tm of allProjectTms ?? []) {
+    if (tm.partition_label) {
+      tmIdByPartitionLabel.set(
+        tm.partition_label as string,
+        tm.id as string,
+      )
     }
   }
 
   // ── Phase 6.75: bind table_mapping_id onto each TfmRow ─────────────────
-  // Mapped TFMs → lookup by (dominant_source_table, target_table) pair.
-  // VA TFMs    → lookup by target_table alone (MIN created_at, id rule).
-  for (const tfm of tfmRows) {
-    const binding = tfmBindingByTargetFieldId.get(tfm.target_field_id)
-    if (!binding) {
-      console.error(
-        `  internal: no binding sidecar for target_field_id ${tfm.target_field_id}`,
-      )
+  // Every TFM carries its target partition_label in tfmPartitionByIndex —
+  // a direct map lookup binds it to the correct TM.
+  for (let i = 0; i < tfmRows.length; i++) {
+    const partitionLabel = tfmPartitionByIndex[i]
+    if (!partitionLabel) {
+      console.error(`  internal: no partition_label sidecar for tfmRows[${i}]`)
       process.exit(1)
     }
-    let tmId: string | undefined
-    if (binding.dominantSourceTableId) {
-      const pairKey = `${binding.dominantSourceTableId}::${binding.targetTableId}`
-      tmId = tmIdByPairKey.get(pairKey)
-    } else {
-      tmId = firstTmIdByTargetTable.get(binding.targetTableId)
-    }
+    const tmId = tmIdByPartitionLabel.get(partitionLabel)
     if (!tmId) {
       console.error(
-        `  internal: no table_mapping found for target_field_id ${tfm.target_field_id} ` +
-          `(target_table_id=${binding.targetTableId}, dominant=${binding.dominantSourceTableId ?? 'null (VA)'}). ` +
-          `Spec must include at least one mapped entry per target table referenced by VAs.`,
+        `  internal: no table_mapping found for partition_label "${partitionLabel}" ` +
+          `(target_field_id=${tfmRows[i]!.target_field_id}). Phase 6.5 should have ` +
+          `created all EIM partition TMs.`,
       )
       process.exit(1)
     }
-    tfm.table_mapping_id = tmId
+    tfmRows[i]!.table_mapping_id = tmId
   }
 
   // ── Phase 7: bulk UPSERT target_field_mappings ─────────────────────────
+  // PR Ω.3.6 — returns table_mapping_id so Phase 8 can index by the
+  // composite (target_field_id, table_mapping_id) key. Required because
+  // multiple TFMs share a target_field_id under partitions.
   console.log(`[load-rootstock-spec] writing ${tfmRows.length} TFMs...`)
   const { data: upsertedTfms, error: tfmErr } = await supabase
     .from('target_field_mappings')
     .upsert(tfmRows, { onConflict: 'project_id,target_field_id,table_mapping_id' })
-    .select('id, target_field_id')
+    .select('id, target_field_id, table_mapping_id')
   if (tfmErr) {
     console.error(`  TFM upsert failed: ${tfmErr.message}`)
     process.exit(1)
   }
-  const tfmIdByTargetFieldId = new Map<string, string>()
+  // Indexed by `${target_field_id}|${table_mapping_id}` — the natural
+  // identity for a partition-bound TFM.
+  const tfmIdByCompositeKey = new Map<string, string>()
   for (const row of upsertedTfms ?? []) {
-    tfmIdByTargetFieldId.set(
-      row.target_field_id as string,
-      row.id as string,
-    )
+    const compositeKey = `${row.target_field_id as string}|${row.table_mapping_id as string}`
+    tfmIdByCompositeKey.set(compositeKey, row.id as string)
   }
 
   // ── Phase 8: bulk INSERT mapping_sources ───────────────────────────────
+  // PR Ω.3.6 — pendingSourcesByTfmKey is keyed by
+  // `${target_field_id}|${partition_label}`. Translate via
+  // tmIdByPartitionLabel to the composite TFM key.
   const msRows: MappingSourceRow[] = []
-  for (const [targetFieldId, sources] of pendingSourcesByTargetFieldId) {
-    const tfmId = tfmIdByTargetFieldId.get(targetFieldId)
+  for (const [tfmKey, sources] of pendingSourcesByTfmKey) {
+    const [targetFieldId, partitionLabel] = tfmKey.split('|')
+    if (!targetFieldId || !partitionLabel) {
+      console.error(`  internal: malformed pendingSourcesByTfmKey "${tfmKey}"`)
+      process.exit(1)
+    }
+    const tmId = tmIdByPartitionLabel.get(partitionLabel)
+    if (!tmId) {
+      console.error(
+        `  internal: no TM for partition_label "${partitionLabel}" in Phase 8`,
+      )
+      process.exit(1)
+    }
+    const tfmId = tfmIdByCompositeKey.get(`${targetFieldId}|${tmId}`)
     if (!tfmId) {
       console.error(
-        `  internal: TFM id for target_field_id ${targetFieldId} not found after upsert`,
+        `  internal: TFM id not found for (target_field_id=${targetFieldId}, ` +
+          `partition_label="${partitionLabel}", table_mapping_id=${tmId}) after upsert`,
       )
       process.exit(1)
     }
