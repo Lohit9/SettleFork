@@ -277,6 +277,17 @@ export interface MappingListViewProps {
    * omitting it (test mounts) defaults to the zero-filter state.
    */
   filters?: MappingFilterState
+
+  /**
+   * PR Ω.3.2.2 — flat-view partition chip selection. Empty set =
+   * no partition filter (heritage byte-identity preserved via
+   * filterFlatRows short-circuit). Non-empty = include only rows
+   * whose `parentRow.tableMappingId` is in the set; `unmapped-source`
+   * rows always pass through (no parent / no partition affiliation).
+   * Optional; omitting it (test mounts / pre-Ω.3.2.2 callers) is
+   * equivalent to passing the empty set.
+   */
+  flatPartitionSelection?: ReadonlySet<string>
 }
 
 // ─── Fixed sort (single pass, no UI state) ────────────────────────────────────
@@ -432,6 +443,7 @@ export function MappingListView({
   mutations,
   onOpenDrawer,
   filters = DEFAULT_FILTER_STATE,
+  flatPartitionSelection,
 }: MappingListViewProps) {
   const [openPicker, setOpenPicker] = useState<OpenPickerState>(null)
 
@@ -455,9 +467,19 @@ export function MappingListView({
   // synthesised unmapped-source rows exist only in this projection, so
   // filtering here (not on the wire MappingRow[]) is what makes the
   // source / target / status filters cover every row kind.
+  //
+  // PR Ω.3.2.2 — also feeds `flatPartitionSelection` through. Empty
+  // set / undefined → filterFlatRows short-circuits and returns the
+  // same array reference, preserving downstream memo identity for
+  // heritage projects.
   const flatRows = useMemo(
-    () => filterFlatRows(flattenRowsForListView(filteredResult), filters),
-    [filteredResult, filters],
+    () =>
+      filterFlatRows(
+        flattenRowsForListView(filteredResult),
+        filters,
+        flatPartitionSelection,
+      ),
+    [filteredResult, filters, flatPartitionSelection],
   )
 
   // Fixed single-pass sort — see `compareSortKeys`. No UI state, no
