@@ -61,10 +61,10 @@
         "source_field": "Info",
         "target_field": "Unmapped",
         "target_table": "Unmapped",
-        "explanation": "Restates information already available elsewhere — combines Assy Item with the case-size description, for example 'P-DWS, 1 Case (1000 Sleeves)'. The same content can be reconstructed from Assy Item plus ProductCaseQty.",
+        "explanation": "Per the business context document, the Info column carries the Parent Product identifier for the assembly. The format `<Parent SKU>, <CaseSize>` (e.g., 'P-DWS, 1 Case (1000 Sleeves)') prefixes each Engineering BOM Masters row with its parent finished-good reference, anchoring every component row to its assembly. For the two target tables in scope (Engineering Item Master and Inventory Commodity Code), the parent-product relationship is not a field — these are item-level tables, not relationship tables. The Parent SKU itself is already cleanly available as the Assy Item column; the Info column repackages it with case-size context that would be needed on a future BoM-header or BoM-relationship migration.",
         "transformation_needed": false,
         "transformations": [
-          "No transformation needed — this field is not loaded."
+          "No transformation needed for these tables. Preserve this field for the future BoM-header migration phase where the parent-product reference and case-size context will be needed."
         ],
         "confidence": 94
       },
@@ -97,7 +97,7 @@
         "source_field": "Item",
         "target_field": "Item Description",
         "target_table": "Engineering Item Master",
-        "explanation": "Field type: Text(100), Required.\n\nDescription for components in the Engineering BOM Masters (for example, 'Atlantic 16pt SBS, 23\"x29\"'). Used only for the ~68 Part # values that don't exist in Products. When a Part # also appears in Products.ProductSKU, Products's ProductName takes priority.",
+        "explanation": "Field type: Text(100), Required.\n\nPer the business context document, the Item column describes components of sub-assemblies — RCB's BOMs are structured as Parent Work Orders containing Sub-Assembly Work Orders, and Item is the description at the sub-assembly-component grain (for example, 'Atlantic 16pt SBS, 23\"x29\"' for a paper stock component). Used in our mapping as the Item Description source for the ~68 Part # values that don't exist in Products. When a Part # also appears in Products.ProductSKU, Products.ProductName takes priority because it's more complete and current.",
         "transformation_needed": true,
         "transformations": [
           "Trim whitespace. Use only when the Part # has no corresponding Products.ProductName. Final priority for Item Description: Products.ProductName > Engineering BOM Masters.Assy_Desc > Engineering BOM Masters.Item."
@@ -193,12 +193,12 @@
         "source_field": "Sub-Assembly Flag",
         "target_field": "Eng Type",
         "target_table": "Engineering Item Master",
-        "explanation": "Field type: Picklist {Standard, Phantom, Reference}, Optional (inherits from commodity code if blank).\n\nWhen a component is itself an assembly with its own Bill of Materials, the source data flags it as 'Sub-Assembly'. Sub-assemblies that are never independently inventoried should be marked Eng Type = Phantom in Rootstock. Only one SKU (WHC16) carries this flag in the current data, but the rule applies more broadly to any SKU that appears as both a parent and a component if RCB confirms it should be treated as a phantom.",
+        "explanation": "Field type: Picklist {Standard, Phantom, Reference}, Optional (inherits from commodity code if blank).\n\nIdentifies components that are themselves assemblies (have their own BoM). Per the business context document, RCB's manufacturing model is structured as Parent Work Orders containing Sub-Assembly Work Orders — meaning sub-assemblies are a routine structural element of every BoM, not an exception. The Sub-Assembly Flag column itself explicitly flags only 1 SKU (WHC16) in the source data, but the structural pattern described in the context document is observable directly: 8 SKUs appear as both Assy Item (parent) and Part # (component): `B-CHC08/12/16/20` and `WHC08/12/16/20`. These are the structural sub-assemblies and should all be marked Eng Type = Phantom in Rootstock, since they're never independently inventoried.\n\nApproach: use the structural test (SKU appears in both Assy Item and Part #) as the primary signal, rather than relying on the under-reported Sub-Assembly Flag column. The 1 explicit flag row (WHC16) confirms the convention but doesn't define the population.",
         "transformation_needed": true,
         "transformations": [
-          "Apply this rule when extracting components from Engineering BOM Masters.Part #:\n\n  CASE WHEN sub-assembly flag = 'Sub-Assembly' THEN 'Phantom' ELSE 'Standard' END\n\nIf a SKU appears as both a parent in one Bill of Materials and a sub-assembly component in another, keep Inventory Source = Manufactured but set Eng Type = Phantom. Confirm with RCB whether other SKUs appearing in multiple Bills of Materials should also be marked Phantom."
+          "Apply this structural rule when extracting components:\n\n  CASE \n    WHEN SKU IN (SELECT \"Assy Item\" FROM Engineering BOM Masters)\n     AND SKU IN (SELECT \"Part #\" FROM Engineering BOM Masters)\n    THEN 'Phantom'\n    ELSE 'Standard'\n  END\n\nThis catches all 8 SKUs that appear as both parent and component (B-CHC08/12/16/20, WHC08/12/16/20) and marks them as Phantom. The explicit Sub-Assembly Flag column on the source row (which only populates for WHC16) is treated as confirmatory evidence rather than the population-defining signal.\n\nPhantom items keep Inventory Source = Manufactured (they are manufactured assemblies); only Eng Type changes from Standard to Phantom."
         ],
-        "confidence": 54
+        "confidence": 72
       },
       {
         "source_table": "Products",
@@ -313,12 +313,12 @@
         "source_field": "ProductCaseQty",
         "target_field": "Unmapped",
         "target_table": "Unmapped",
-        "explanation": "Number of pieces per case (for example, 1,000 sleeves per case). This is UOM conversion data — it captures the relationship 'X cases = Y eaches' for purchasing and shipping. It belongs on the Rootstock UOM Conversion table, a separate target object not in the current migration scope.",
+        "explanation": "Number of pieces per case (for example, 1,000 sleeves per case). Per the business context document, RCB sells and inventories in cases but manufactures in each, with BOMs structured as Parent Work Orders containing Sub-Assembly Work Orders. ProductCaseQty captures the quantity relationship between the parent (sold by case) and its sub-assembly components (manufactured in each) — i.e., for P-DWS with ProductCaseQty=1000, one case of the parent contains 1,000 sleeve sub-assembly units. This is parent-to-component quantity data; no destination field exists for it on Engineering Item Master or Inventory Commodity Code (which are item-level objects, not relationship objects). Belongs on whichever BoM-relationship target object handles parent-component quantities, which is out of scope for this migration phase.",
         "transformation_needed": false,
         "transformations": [
-          "No transformation needed for these tables. Preserve this field for the future UOM Conversion migration phase."
+          "No transformation needed for these tables. Preserve this field for the future BoM-relationship migration phase, where it represents the parent-to-sub-assembly quantity link."
         ],
-        "confidence": 92
+        "confidence": 94
       },
       {
         "source_table": "Products",
