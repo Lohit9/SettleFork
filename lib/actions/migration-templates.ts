@@ -333,6 +333,11 @@ export async function getTemplateStats(
 export async function updateTemplateFromApproval(
   projectId: string,
   tfmId: string,
+  labelQuality?: {
+    timeOnTaskMs?: number
+    wasEdited?: boolean
+    approvalMethod?: 'individual' | 'approve_all' | 'approve_high_confidence'
+  },
 ): Promise<void> {
   // Resolve org + system names from the project
   const { data: project } = await supabaseAdmin
@@ -482,6 +487,9 @@ export async function updateTemplateFromApproval(
       human_source_sig: humanSourceSig ?? null,
       human_transform_sql: humanTransformSql ?? null,
       outcome: accepted ? 'accepted' : 'overridden',
+      time_on_task_ms: labelQuality?.timeOnTaskMs ?? null,
+      was_edited: labelQuality?.wasEdited ?? false,
+      approval_method: labelQuality?.approvalMethod ?? null,
     })
 }
 

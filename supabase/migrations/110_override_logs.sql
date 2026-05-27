@@ -1,4 +1,4 @@
--- Migration 107 — override_logs (template flywheel signal)
+-- Migration 110 — override_logs (template flywheel signal)
 -- ============================================================================
 -- Records every instance where a human approves or overrides a template-
 -- suggested mapping. The aggregate signal (reuse_count / override_count) lives
@@ -31,6 +31,14 @@ CREATE TABLE public.override_logs (
 
   -- 'accepted' = human kept template suggestion; 'overridden' = human changed it
   outcome               TEXT        NOT NULL CHECK (outcome IN ('accepted', 'overridden')),
+
+  -- Label quality signals — used to weight this row as a training signal.
+  -- time_on_task_ms: null when approval came from a batch action (approve-all).
+  -- was_edited: true means the human changed source or transform before approving — strongest quality signal.
+  -- approval_method: how the approval was triggered; batch approvals are down-weighted.
+  time_on_task_ms       INTEGER,
+  was_edited            BOOLEAN     NOT NULL DEFAULT false,
+  approval_method       TEXT        CHECK (approval_method IN ('individual', 'approve_all', 'approve_high_confidence')),
 
   created_at            TIMESTAMPTZ NOT NULL DEFAULT now()
 );

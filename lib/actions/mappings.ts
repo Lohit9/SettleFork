@@ -1065,6 +1065,11 @@ export async function cleanupOrphanedContributors(
 export async function updateFieldMappingStatus(
   fieldMappingId: string,
   status: 'approved' | 'rejected' | 'needs_review',
+  labelQuality?: {
+    timeOnTaskMs?: number
+    wasEdited?: boolean
+    approvalMethod?: 'individual' | 'approve_all' | 'approve_high_confidence'
+  },
 ): Promise<{ success: boolean; error?: string; errorCode?: MappingWriteErrorCode }> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -1118,7 +1123,7 @@ export async function updateFieldMappingStatus(
       if (status === 'approved') {
         // fire-and-forget: update template counters + write override_log if a
         // template suggestion existed for this field
-        void updateTemplateFromApproval(tfmLookup.project_id, decoded.tfmId)
+        void updateTemplateFromApproval(tfmLookup.project_id, decoded.tfmId, labelQuality)
       }
     } else {
       // tfm-contributor: reject = delete the contributor row; approve = no-op.
