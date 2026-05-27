@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type RefObject } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import type {
   MappingRow,
+  PartitionInfo,
   SourceFieldWithState,
   TargetTableSummary,
 } from '@/lib/types/mappings-for-redesign'
@@ -11,6 +12,7 @@ import {
   FieldMappingRow,
   type FieldMappingRowOptimisticState,
 } from './FieldMappingRow'
+import { PartitionTabs } from './PartitionTabs'
 import { ChevronRight, MoreHorizontal } from '@/components/icons'
 import { cn } from '@/components/ui/utils'
 
@@ -214,6 +216,35 @@ interface TargetTableGroupProps {
     rowId: string,
     finalSourceFieldIds: string[],
   ) => Promise<{ success: boolean }>
+  /**
+   * PR Ω.3.2 — partition strip props. All optional; when none are
+   * wired (legacy fixtures / storybook / heritage projects that haven't
+   * loaded `partitionsByTargetTable`) the group renders byte-identical
+   * to pre-Ω.3.2 because `PartitionTabs` auto-hides on `length <= 1 &&
+   * !allowCreate`.
+   *
+   * `partitions` — every partition (one per `table_mappings` row) for
+   * this target table, in server-canonical order.
+   * `selectedPartitionId` — the URL-derived selection. `null` means no
+   * filter is active for this table.
+   * `onPartitionChange` — fired on tab click; receives the partition's
+   * `table_mappings.id`.
+   * `partitionsEnabled` — `projects.partitions_enabled` flag. Gates the
+   * "+ Add partition" affordance AND forces the strip to render even
+   * when `partitions.length === 1` (pilot opt-in for partition creation).
+   * `onOpenPartitionModal` — opens `PartitionRulesModal` at page level.
+   * Either `{ kind: 'create' }` (add affordance) or
+   * `{ kind: 'edit', partition }` (per-tab [⚙] icon).
+   */
+  partitions?: PartitionInfo[]
+  selectedPartitionId?: string | null
+  onPartitionChange?: (partitionId: string) => void
+  partitionsEnabled?: boolean
+  onOpenPartitionModal?: (
+    args:
+      | { kind: 'create'; targetTableId: string }
+      | { kind: 'edit'; targetTableId: string; partition: PartitionInfo },
+  ) => void
 }
 
 export function TargetTableGroup({
@@ -240,6 +271,11 @@ export function TargetTableGroup({
   onInlineApprove,
   onInlineReject,
   onInlineSourceCommit,
+  partitions,
+  selectedPartitionId,
+  onPartitionChange,
+  partitionsEnabled,
+  onOpenPartitionModal,
 }: TargetTableGroupProps) {
   const label = resolveFieldCountLabel(targetTable, filteredCount)
   const isFilteredEmpty = filteredCount !== undefined && filteredCount.matching === 0
@@ -370,6 +406,34 @@ export function TargetTableGroup({
           </div>
         ) : null}
       </header>
+
+      {/*
+        PR Ω.3.2 — partition tab strip. Sits between the table header
+        and the rows container. `PartitionTabs` itself enforces the
+        auto-hide invariant (renders null when partitions.length <= 1
+        AND !partitionsEnabled), so threading the props unconditionally
+        is safe for heritage projects. Hidden entirely when the parent
+        does NOT wire `onPartitionChange` (legacy fixtures / storybook).
+      */}
+      {onPartitionChange && partitions && partitions.length > 0 ? (
+        <PartitionTabs
+          partitions={partitions}
+          selectedPartitionId={selectedPartitionId ?? null}
+          onPartitionChange={onPartitionChange}
+          allowCreate={!!partitionsEnabled}
+          onAddPartition={() =>
+            onOpenPartitionModal?.({ kind: 'create', targetTableId: targetTable.id })
+          }
+          onEditPartition={(partition) =>
+            onOpenPartitionModal?.({
+              kind: 'edit',
+              targetTableId: targetTable.id,
+              partition,
+            })
+          }
+          targetTableId={targetTable.id}
+        />
+      ) : null}
 
       {/*
         Phase 4-polish-2 — height-transition wrapper for the rows

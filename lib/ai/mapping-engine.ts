@@ -39,6 +39,7 @@ import type {
   MappingSourceRef,
   MappingTransformationStatus,
   MappingsForRedesignResult,
+  PartitionInfo,
   SourceFieldAcknowledgmentSummary,
   SourceFieldWithState,
   SourceTableSummary,
@@ -106,6 +107,12 @@ interface RawFieldRow {
 interface RawTfmRow {
   id: string
   target_field_id: string
+  /**
+   * PR Ω.3.2 — the partition (table_mapping) this TFM belongs to. NOT NULL
+   * post-Ω.1 (migration 107 SET NOT NULL); the optional `?` only relaxes the
+   * constraint for synthetic test fixtures.
+   */
+  table_mapping_id?: string | null
   confidence: number | null
   status: 'needs_review' | 'approved' | 'rejected' | string
   ai_reasoning: string | null
@@ -115,6 +122,24 @@ interface RawTfmRow {
   combination_sql: string | null
   transformation_intent?: string | null
   needs_transformation?: boolean | null
+}
+
+/**
+ * PR Ω.3.2 — `table_mappings` row read for partition tab strip + per-row
+ * partition binding. Sourced from migration 107 (table_mapping_id, filter_sql,
+ * partitions_enabled) + migration 111 (partition_label, partition_ordinal,
+ * identity_field_id, dedup_priority).
+ */
+interface RawTableMappingRow {
+  id: string
+  source_table_id: string
+  target_table_id: string
+  partition_label: string | null
+  partition_ordinal: number | null
+  filter_sql: string | null
+  identity_field_id: string | null
+  dedup_priority: number | null
+  created_at: string
 }
 
 interface RawMappingSourceRow {
@@ -219,6 +244,20 @@ export interface AssembleInput {
    */
   coverage?: RawCoverageRow[]
   /**
+   * PR Ω.3.2 — `table_mappings` rows for the project. Drives partition
+   * binding on every emitted MappingRow + populates the result envelope's
+   * `partitionsByTargetTable`. Optional with default `[]` so pre-Ω.1
+   * fixtures continue to compile; the wire core always passes a real
+   * (possibly empty) array.
+   */
+  tableMappings?: RawTableMappingRow[]
+  /**
+   * PR Ω.3.2 — value of `projects.partitions_enabled`. Default false so
+   * heritage fixtures don't need to thread the flag. The wire core reads
+   * the column in Round 1 and forwards it onto the result envelope.
+   */
+  partitionsEnabled?: boolean
+  /**
    * Display-only metadata for unmapped source fields, keyed by
    * `fields.id`. Sourced from the static-mappings config's
    * `explanation` + `confidence` fields via
@@ -241,6 +280,7 @@ export type {
   RawSourceAckRow,
   RawTransformationRow,
   RawCoverageRow,
+  RawTableMappingRow,
 }
 
 // ─── Mapping generation: Claude response shapes ──────────────────────
@@ -537,7 +577,15 @@ export function buildTargetFieldRef(
 function buildUnmappedRow(
   targetField: TargetFieldRef,
   coverageRow: RawCoverageRow | null,
-  tfm?: RawTfmRow | null,
+  tfm: RawTfmRow | null,
+  /**
+   * PR Ω.3.2 — partition binding for the unmapped row. Required for
+   * multi-partition projects so each (target_field, partition) pair yields
+   * a unique synthetic id (`unmapped::<tfid>::<tmid>`). Heritage projects
+   * (1 partition per target_table) pass `useShortSyntheticId=true` so the
+   * legacy `unmapped::<tfid>` form is preserved (byte-identity).
+   */
+  partition: { tableMappingId: string | null; partitionLabel: string | null; useShortSyntheticId: boolean },
 ): UnmappedRow {
   // PR γ resolution priority for unmapped rows:
   //   coverage row exists  → status = coverage.status; statusSetBy =
@@ -571,9 +619,21 @@ function buildUnmappedRow(
         ? coverageRow.confidence
         : null
 
+  // PR Ω.3.2 synthetic ID:
+  //   - Heritage (useShortSyntheticId=true): `unmapped::<target_field_id>` — preserves
+  //     pre-Ω.3.2 byte-identity. Used when count(partitions per target_table)===1.
+  //   - Multi-partition (useShortSyntheticId=false): `unmapped::<target_field_id>::<tmid>`
+  //     — guarantees uniqueness per (target_field, partition) so React keys + URL
+  //     deep-links survive the cardinality expansion.
+  const syntheticId = partition.useShortSyntheticId || !partition.tableMappingId
+    ? `unmapped::${targetField.id}`
+    : `unmapped::${targetField.id}::${partition.tableMappingId}`
+
   return {
     kind: 'unmapped',
-    id: `unmapped::${targetField.id}`,
+    id: syntheticId,
+    tableMappingId: partition.tableMappingId,
+    partitionLabel: partition.partitionLabel,
     targetField,
     confidence,
     aiReasoning: tfm?.ai_reasoning ?? coverageRow?.ai_reasoning ?? null,
@@ -595,10 +655,14 @@ function buildValueAssignmentRow(
   targetField: TargetFieldRef,
   transformation: RawTransformationRow | null,
   coverageRow: RawCoverageRow | null,
+  /** PR Ω.3.2 — the partition this VA TFM belongs to. */
+  partition: { tableMappingId: string | null; partitionLabel: string | null },
 ): ValueAssignmentRow {
   return {
     kind: 'value_assignment',
     id: tfm.id,
+    tableMappingId: partition.tableMappingId,
+    partitionLabel: partition.partitionLabel,
     targetField,
     confidence: tfm.confidence,
     status: coerceStatus(tfm.status),
@@ -637,6 +701,8 @@ function buildMappedRow(
   fieldsById: Map<string, RawFieldRow>,
   fieldsByTableId: Map<string, RawFieldRow[]>,
   coverageRow: RawCoverageRow | null,
+  /** PR Ω.3.2 — the partition this mapped TFM belongs to. */
+  partition: { tableMappingId: string | null; partitionLabel: string | null },
 ): MappedRow {
   // Filter out defensively-null sources — a live mapping_source with
   // no source_field_id cannot be rendered.
@@ -663,6 +729,8 @@ function buildMappedRow(
   return {
     kind: 'mapped',
     id: tfm.id,
+    tableMappingId: partition.tableMappingId,
+    partitionLabel: partition.partitionLabel,
     targetField,
     confidence: tfm.confidence,
     status: coerceStatus(tfm.status),
@@ -1259,6 +1327,8 @@ export function assembleMappingsForRedesign(
     transformations,
     coverage = [],
     staticSourceRationale = new Map<string, StaticSourceUnmappedInfo>(),
+    tableMappings = [],
+    partitionsEnabled = false,
   } = input
 
   // ── Build dataset / table / field indexes ──────────────────────────
@@ -1314,79 +1384,202 @@ export function assembleMappingsForRedesign(
     transformationByTfm.set(tr.target_field_mapping_id, tr)
   }
 
-  // ── Build TFMs by target_field_id for row assembly ────────────────
-  const tfmByTargetFieldId = new Map<string, RawTfmRow>()
+  // ── PR Ω.3.2: partition indexes ───────────────────────────────────
+  // tableMappings is already server-sorted by:
+  //   target_table_id ASC, partition_ordinal ASC NULLS LAST, created_at ASC, id ASC
+  // so iterating it produces partitions in canonical order. The two indexes
+  // below preserve that order via Map insertion semantics.
+  const tableMappingsById = new Map<string, RawTableMappingRow>()
+  for (const tm of tableMappings) {
+    tableMappingsById.set(tm.id, tm)
+  }
+  // `partitionsByTargetTableId` — for each target table, its partitions in
+  // canonical order. Used both for row-loop iteration (N rows per target field)
+  // and for the result envelope's `partitionsByTargetTable`.
+  const partitionsByTargetTableId = new Map<string, RawTableMappingRow[]>()
+  for (const tm of tableMappings) {
+    const arr = partitionsByTargetTableId.get(tm.target_table_id) ?? []
+    arr.push(tm)
+    partitionsByTargetTableId.set(tm.target_table_id, arr)
+  }
+
+  // ── Build TFMs by (target_field_id, table_mapping_id) for row assembly ──
+  // Pre-Ω.3.2 this was Map<target_field_id, RawTfmRow> assuming UNIQUE
+  // (project_id, target_field_id). Post-Ω.1 (migration 107), the UNIQUE
+  // is (project_id, target_field_id, table_mapping_id) so a single target
+  // field may have multiple TFMs — one per partition.
+  const tfmByTargetAndPartition = new Map<string, RawTfmRow>()
   for (const t of tfms) {
-    tfmByTargetFieldId.set(t.target_field_id, t)
+    // Defensive: pre-Ω.1 fixtures may carry null/missing table_mapping_id;
+    // fall back to a stable sentinel so heritage assemblers still group.
+    const tmId = t.table_mapping_id ?? '__no_partition__'
+    tfmByTargetAndPartition.set(`${t.target_field_id}::${tmId}`, t)
   }
 
   // ── PR γ — coverage by target_field_id for unified row props ──────
   // Migration 093 enforces UNIQUE (project_id, target_field_id) on
-  // target_field_coverage, so the map collapse is safe.
+  // target_field_coverage, so the map collapse is safe. Coverage is NOT
+  // per-partition today; the same coverage row applies to every partition
+  // of the same target field.
   const coverageByTargetFieldId = new Map<string, RawCoverageRow>()
   for (const c of coverage) {
     coverageByTargetFieldId.set(c.target_field_id, c)
   }
 
   // ── Assemble rows ─────────────────────────────────────────────────
+  // PR Ω.3.2 cardinality contract:
+  //   Heritage (1 TM per target_table): 1 row per target field (mapped/VA/unmapped).
+  //                                     `useShortSyntheticId=true` preserves
+  //                                     `unmapped::<tfid>` for byte-identity.
+  //   Multi-partition (N≥2 TMs per target_table): up to N rows per target field —
+  //     one mapped/VA row for each partition that has a TFM, plus one
+  //     unmapped-per-partition for partitions that lack coverage. Synthetic IDs
+  //     become `unmapped::<tfid>::<tmid>` for uniqueness.
   const rows: MappingRow[] = []
 
   for (const targetField of targetFields) {
     const targetFieldRef = buildTargetFieldRef(targetField, tablesById)
     if (!targetFieldRef) continue // Parent target table missing (shouldn't happen under normal ingestion).
 
-    const tfm = tfmByTargetFieldId.get(targetField.id)
+    const partitionsForTable = partitionsByTargetTableId.get(targetField.table_id) ?? []
     const coverageRow = coverageByTargetFieldId.get(targetField.id) ?? null
+    const useShortSyntheticId = partitionsForTable.length <= 1
 
-    if (!tfm) {
-      rows.push(buildUnmappedRow(targetFieldRef, coverageRow))
-      continue
-    }
+    if (partitionsForTable.length === 0) {
+      // Edge case: target table has zero table_mappings rows. Two sub-cases:
+      //   (a) Pre-Ω.1 production projects (migration 107 not applied) — every
+      //       TFM has table_mapping_id IS NULL; falls back to the legacy
+      //       1-row-per-target-field behavior with tableMappingId=null.
+      //   (b) Synthetic test fixtures that build TFMs without a paired
+      //       tableMappings array — same fallback so existing tests pass.
+      //
+      // In both cases, iterate TFMs for this target_field_id directly. Heritage
+      // assumption preserved: at most one TFM per target_field when no TMs
+      // exist (pre-Ω.1 UNIQUE on (project_id, target_field_id) without
+      // table_mapping_id discriminator).
+      const tfmKey = `${targetField.id}::__no_partition__`
+      const tfm = tfmByTargetAndPartition.get(tfmKey) ?? null
+      const noPartitionBinding = {
+        tableMappingId: null,
+        partitionLabel: null,
+        useShortSyntheticId: true,
+      }
+      const noPartitionMappedBinding = { tableMappingId: null, partitionLabel: null }
 
-    const tfmSources = mappingSourcesByTfm.get(tfm.id) ?? []
-    const transformation = transformationByTfm.get(tfm.id) ?? null
+      if (!tfm) {
+        rows.push(buildUnmappedRow(targetFieldRef, coverageRow, null, noPartitionBinding))
+        continue
+      }
 
-    // Discriminator logic:
-    //   is_acknowledged === true OR zero sources without custom_sql →
-    //     'unmapped' (canonical coverage-approved surface; legacy bare-ack
-    //     TFMs fall through here post-migration-098 backfill)
-    //   combination_type === 'custom_sql' with zero sources →
-    //     'value_assignment'
-    //   otherwise (has ≥ 1 source) → 'mapped'
-    if (tfm.is_acknowledged) {
-      rows.push(buildUnmappedRow(targetFieldRef, coverageRow, tfm))
-      continue
-    }
+      const tfmSources = mappingSourcesByTfm.get(tfm.id) ?? []
+      const transformation = transformationByTfm.get(tfm.id) ?? null
 
-    if (tfm.combination_type === 'custom_sql' && tfmSources.length === 0) {
+      if (tfm.is_acknowledged) {
+        rows.push(buildUnmappedRow(targetFieldRef, coverageRow, tfm, noPartitionBinding))
+        continue
+      }
+      if (tfm.combination_type === 'custom_sql' && tfmSources.length === 0) {
+        rows.push(
+          buildValueAssignmentRow(tfm, targetFieldRef, transformation, coverageRow, noPartitionMappedBinding),
+        )
+        continue
+      }
+      if (tfmSources.length === 0) {
+        rows.push(buildUnmappedRow(targetFieldRef, coverageRow, tfm, noPartitionBinding))
+        continue
+      }
       rows.push(
-        buildValueAssignmentRow(tfm, targetFieldRef, transformation, coverageRow),
+        buildMappedRow(
+          tfm,
+          targetFieldRef,
+          tfmSources,
+          transformation,
+          tablesById,
+          fieldsById,
+          fieldsByTableId,
+          coverageRow,
+          noPartitionMappedBinding,
+        ),
       )
       continue
     }
 
-    // Mapped row. Require at least one source — a TFM with
-    // combination_type != 'custom_sql' and zero sources is
-    // semantically invalid; surface it as unmapped to avoid emitting
-    // a MappedRow with an empty `sources` array that would violate
-    // the Rules 1-4 selector.
-    if (tfmSources.length === 0) {
-      rows.push(buildUnmappedRow(targetFieldRef, coverageRow, tfm))
-      continue
-    }
+    // Iterate partitions in canonical order. For each, look up the TFM bound
+    // to (target_field, partition). Emit one row per partition.
+    for (const partition of partitionsForTable) {
+      const partitionBinding = {
+        tableMappingId: partition.id,
+        partitionLabel: partition.partition_label,
+      }
+      const tfmKey = `${targetField.id}::${partition.id}`
+      const tfm = tfmByTargetAndPartition.get(tfmKey)
 
-    rows.push(
-      buildMappedRow(
-        tfm,
-        targetFieldRef,
-        tfmSources,
-        transformation,
-        tablesById,
-        fieldsById,
-        fieldsByTableId,
-        coverageRow,
-      ),
-    )
+      if (!tfm) {
+        rows.push(
+          buildUnmappedRow(targetFieldRef, coverageRow, null, {
+            ...partitionBinding,
+            useShortSyntheticId,
+          }),
+        )
+        continue
+      }
+
+      const tfmSources = mappingSourcesByTfm.get(tfm.id) ?? []
+      const transformation = transformationByTfm.get(tfm.id) ?? null
+
+      // Discriminator logic (unchanged from pre-Ω.3.2 but applied per-partition):
+      //   is_acknowledged === true OR zero sources without custom_sql →
+      //     'unmapped' (canonical coverage-approved surface; legacy bare-ack
+      //     TFMs fall through here post-migration-098 backfill)
+      //   combination_type === 'custom_sql' with zero sources →
+      //     'value_assignment'
+      //   otherwise (has ≥ 1 source) → 'mapped'
+      if (tfm.is_acknowledged) {
+        rows.push(
+          buildUnmappedRow(targetFieldRef, coverageRow, tfm, {
+            ...partitionBinding,
+            useShortSyntheticId,
+          }),
+        )
+        continue
+      }
+
+      if (tfm.combination_type === 'custom_sql' && tfmSources.length === 0) {
+        rows.push(
+          buildValueAssignmentRow(tfm, targetFieldRef, transformation, coverageRow, partitionBinding),
+        )
+        continue
+      }
+
+      // Mapped row. Require at least one source — a TFM with
+      // combination_type != 'custom_sql' and zero sources is
+      // semantically invalid; surface it as unmapped to avoid emitting
+      // a MappedRow with an empty `sources` array that would violate
+      // the Rules 1-4 selector.
+      if (tfmSources.length === 0) {
+        rows.push(
+          buildUnmappedRow(targetFieldRef, coverageRow, tfm, {
+            ...partitionBinding,
+            useShortSyntheticId,
+          }),
+        )
+        continue
+      }
+
+      rows.push(
+        buildMappedRow(
+          tfm,
+          targetFieldRef,
+          tfmSources,
+          transformation,
+          tablesById,
+          fieldsById,
+          fieldsByTableId,
+          coverageRow,
+          partitionBinding,
+        ),
+      )
+    }
   }
 
   // ── Canonical ordering (§9 Q7) ────────────────────────────────────
@@ -1441,6 +1634,28 @@ export function assembleMappingsForRedesign(
   // ── Project-level counters ────────────────────────────────────────
   const counts: MappingCounts = computeCounts(rows)
 
+  // ── PR Ω.3.2: partitions envelope ─────────────────────────────────
+  // Build the public PartitionInfo[] per target_table from the raw rows,
+  // joining `source_table_id → tables.name` for the display fallback when
+  // partition_label is null. Order is already canonical (the SELECT enforced
+  // partition_ordinal NULLS LAST → created_at → id).
+  const partitionsByTargetTable: Record<string, PartitionInfo[]> = {}
+  for (const [targetTableId, partitions] of partitionsByTargetTableId) {
+    partitionsByTargetTable[targetTableId] = partitions.map((tm) => {
+      const sourceTable = tablesById.get(tm.source_table_id)
+      return {
+        id: tm.id,
+        label: tm.partition_label,
+        ordinal: tm.partition_ordinal,
+        sourceTableId: tm.source_table_id,
+        sourceTableName: sourceTable?.name ?? '',
+        filterSql: tm.filter_sql,
+        identityFieldId: tm.identity_field_id,
+        dedupPriority: tm.dedup_priority,
+      }
+    })
+  }
+
   return {
     projectId,
     rows,
@@ -1450,6 +1665,8 @@ export function assembleMappingsForRedesign(
     sourceFields: sourceFieldsWithState,
     counts,
     targetSchemaEmpty: targetTables.length === 0 || targetFields.length === 0,
+    partitionsByTargetTable,
+    partitionsEnabled,
   }
 }
 
@@ -1472,13 +1689,17 @@ export async function getMappingsForRedesignCore(
   supabase: SupabaseClient,
   projectId: string,
 ): Promise<MappingsForRedesignResult | null> {
-  // ── Round 1 — access gate ─────────────────────────────────────────
+  // ── Round 1 — access gate + project flags ────────────────────────
+  // PR Ω.3.2: also reads `partitions_enabled` (added by migration 107) so
+  // the UI can gate the "+ Add Partition" affordance without an extra
+  // round-trip. Heritage projects default to false.
   const { data: projectRow } = await supabase
     .from('projects')
-    .select('id')
+    .select('id, partitions_enabled')
     .eq('id', projectId)
-    .maybeSingle()
+    .maybeSingle<{ id: string; partitions_enabled: boolean | null }>()
   if (!projectRow) return null
+  const partitionsEnabled = projectRow.partitions_enabled === true
 
   // ── Round 2 — project-scoped parallel fetch ───────────────────────
   const [
@@ -1486,6 +1707,7 @@ export async function getMappingsForRedesignCore(
     { data: tfmsRaw },
     { data: sourceAcksRaw },
     { data: coverageRaw },
+    { data: tableMappingsRaw },
   ] = await Promise.all([
     supabase
       .from('datasets')
@@ -1493,7 +1715,9 @@ export async function getMappingsForRedesignCore(
       .eq('project_id', projectId),
     supabase
       .from('target_field_mappings')
-      .select('id, target_field_id, confidence, status, ai_reasoning, is_acknowledged, acknowledgment_reason, combination_type, combination_sql, transformation_intent, needs_transformation')
+      // PR Ω.3.2: table_mapping_id added so each TFM carries its partition
+      // binding directly (no JOIN needed in the assembler).
+      .select('id, target_field_id, table_mapping_id, confidence, status, ai_reasoning, is_acknowledged, acknowledgment_reason, combination_type, combination_sql, transformation_intent, needs_transformation')
       .eq('project_id', projectId),
     supabase
       .from('source_field_acknowledgments')
@@ -1510,12 +1734,28 @@ export async function getMappingsForRedesignCore(
       .from('target_field_coverage')
       .select('id, target_field_id, coverage_status, ai_reasoning, status, status_set_by, confidence')
       .eq('project_id', projectId),
+    // PR Ω.3.2: table_mappings — partition metadata for the project. Used by
+    // the assembler to populate every row's tableMappingId + partitionLabel
+    // and to build the result envelope's partitionsByTargetTable.
+    //
+    // ORDER BY here is the canonical partition ordering rule (mirrors Ω.1
+    // backfill #2 + lib/utils/partition-binding.ts). Enforced once on the
+    // server; clients do not re-sort.
+    supabase
+      .from('table_mappings')
+      .select('id, source_table_id, target_table_id, partition_label, partition_ordinal, filter_sql, identity_field_id, dedup_priority, created_at')
+      .eq('project_id', projectId)
+      .order('target_table_id', { ascending: true })
+      .order('partition_ordinal', { ascending: true, nullsFirst: false })
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true }),
   ])
 
   const datasets = (datasetsRaw ?? []) as RawDatasetRow[]
   const tfms = (tfmsRaw ?? []) as RawTfmRow[]
   const sourceAcks = (sourceAcksRaw ?? []) as RawSourceAckRow[]
   const coverage = (coverageRaw ?? []) as RawCoverageRow[]
+  const tableMappings = (tableMappingsRaw ?? []) as RawTableMappingRow[]
 
   const datasetIds = datasets.map((d) => d.id)
   const tfmIds = tfms.map((t) => t.id)
@@ -1589,6 +1829,8 @@ export async function getMappingsForRedesignCore(
     transformations,
     coverage,
     staticSourceRationale,
+    tableMappings,
+    partitionsEnabled,
   })
 }
 

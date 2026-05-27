@@ -123,6 +123,19 @@ export function DrawerHeader({ row, titleId, onClose }: DrawerHeaderProps) {
           >
             Mapping
           </div>
+          {/* Row 1.5: partition annotation (Ω.3.2). Only rendered for
+              multi-partition tables — heritage rows have
+              `partitionLabel == null` and the line collapses entirely so
+              the drawer is byte-identical to pre-Ω.3.2. */}
+          {row.partitionLabel ? (
+            <div
+              data-testid="mapping-drawer-header-partition"
+              className="mt-0.5 text-xs text-slate-500"
+            >
+              <span className="font-medium text-slate-600">Partition:</span>{' '}
+              <span className="text-slate-700">{row.partitionLabel}</span>
+            </div>
+          ) : null}
           {/* Row 2: title — kind-specific. */}
           <h2
             id={titleId}

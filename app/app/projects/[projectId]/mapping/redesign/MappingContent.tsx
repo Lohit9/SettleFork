@@ -45,6 +45,7 @@ import { PageHeader } from '@/components/app/PageHeader'
 import type {
   MappingRow,
   MappingsForRedesignResult,
+  PartitionInfo,
   TargetFieldRef,
   TargetTableSummary,
 } from '@/lib/types/mappings-for-redesign'
@@ -60,6 +61,7 @@ import {
   shouldHideEmptyGroups,
 } from '@/lib/utils/mapping-filters'
 import { FilterRow } from './components/FilterRow'
+import { PartitionRulesModal } from './components/PartitionRulesModal'
 import { TargetTableGroup } from './components/TargetTableGroup'
 import { MappingDrawer, type DrawerRow, type SourceFieldDrawerRow } from './components/MappingDrawer'
 import { MappingSummaryStrip } from './components/MappingSummaryStrip'
@@ -556,6 +558,54 @@ function MappingContentLoaded({
   const [drawerHighlightedSourceFieldId, setDrawerHighlightedSourceFieldId] =
     useState<string | null>(null)
 
+  // PR Ω.3.2 — selected partition per target table.
+  //
+  // KEYED BY: target_table_id. VALUE: table_mappings.id (the partition's
+  // canonical id). Only entries with a non-null selection are stored —
+  // a missing entry means "no partition filter active for that table"
+  // (the group renders ALL partitions' rows).
+  //
+  // URL FORM: `?partition=<tm-id>[,<tm-id>...]`. Each token is a
+  // table_mappings.id. Because partition ids are globally unique and
+  // each carries an implicit target_table via
+  // `data.partitionsByTargetTable`, we don't need to encode the table
+  // id in the URL — reverse-lookup happens on parse.
+  //
+  // Heritage projects: the URL is never written (no tab affordance ever
+  // fires `onPartitionChange`), and the parser yields an empty map.
+  // Byte-identical to pre-Ω.3.2.
+  const [selectedPartitionByTable, setSelectedPartitionByTable] = useState<
+    Map<string, string>
+  >(() => {
+    const raw = (searchParams ?? new URLSearchParams()).get('partition')
+    if (!raw) return new Map()
+    const out = new Map<string, string>()
+    const ids = raw.split(',').filter((s) => s.length > 0)
+    if (ids.length === 0) return out
+    // Reverse-index: partition_id → target_table_id.
+    const partitionIdToTableId = new Map<string, string>()
+    for (const [tableId, partitions] of Object.entries(
+      data.partitionsByTargetTable ?? {},
+    )) {
+      for (const p of partitions) partitionIdToTableId.set(p.id, tableId)
+    }
+    for (const id of ids) {
+      const tableId = partitionIdToTableId.get(id)
+      if (tableId) out.set(tableId, id)
+    }
+    return out
+  })
+
+  // Single page-level mount for the partition create/edit modal. Owned
+  // here (not per-TargetTableGroup) so we can keep one focus trap and
+  // one Esc handler. `null` means closed; the object describes which
+  // target table the form binds to and whether we're editing an
+  // existing partition.
+  const [partitionModalState, setPartitionModalState] = useState<
+    | { targetTableId: string; editing: PartitionInfo | null }
+    | null
+  >(null)
+
   // ── Phase 4a-2 — pendingDrawerRowId sentinel ──────────────────────
   //
   // After a successful `createFieldMapping`, we swap the drawer URL
@@ -607,26 +657,38 @@ function MappingContentLoaded({
       next: MappingFilterState,
       nextDrawerRowId: string | null,
       overrideViewMode?: MappingViewMode,
+      overridePartitionSelection?: Map<string, string>,
     ) => {
       // Pattern U1 (single source of truth): one writer composes the
-      // filter query string, the drawer param, and the view-mode param
-      // together. This keeps any single concern's write from clobbering
-      // the others. `overrideViewMode` is an opt-in escape hatch used
-      // by `handleViewModeChange` so it doesn't have to await a re-
-      // render of `viewMode` state to write the new value.
+      // filter query string, the drawer param, the view-mode param, and
+      // the partition param together. This keeps any single concern's
+      // write from clobbering the others. `overrideViewMode` /
+      // `overridePartitionSelection` are opt-in escape hatches for
+      // handlers that don't have to await a re-render of the underlying
+      // state before writing the new value (e.g. `handleViewModeChange`,
+      // `handlePartitionChange`).
       const filterQs = serializeFilterStateToQuery(next)
       const params = new URLSearchParams(filterQs)
       if (nextDrawerRowId !== null) {
         params.set('drawer', nextDrawerRowId)
       }
       applyViewModeToParams(params, overrideViewMode ?? viewMode)
+      const partitionMap =
+        overridePartitionSelection ?? selectedPartitionByTable
+      if (partitionMap.size > 0) {
+        // Sort partition ids for URL stability across re-renders so
+        // bookmarks / history don't churn just because of insertion
+        // order. Tab order itself is governed by server canonical sort.
+        const ids = Array.from(partitionMap.values()).sort()
+        params.set('partition', ids.join(','))
+      }
       const qs = params.toString()
       router.replace(
         `/app/projects/${projectId}/mapping${qs ? `?${qs}` : ''}`,
         { scroll: false },
       )
     },
-    [router, projectId, viewMode],
+    [router, projectId, viewMode, selectedPartitionByTable],
   )
 
   const handleViewModeChange = useCallback(
@@ -702,6 +764,70 @@ function MappingContentLoaded({
     setDrawerHighlightedSourceFieldId(null)
     writeUrl(filters, null)
   }, [writeUrl, filters])
+
+  // ─── PR Ω.3.2 — partition tab handlers ────────────────────────────
+  //
+  // `handlePartitionChange` updates the per-table selection map and,
+  // per design Q2, auto-closes the drawer when:
+  //   1. A drawer is currently open,
+  //   2. The open row belongs to the target table whose partition just
+  //      changed, AND
+  //   3. The open row's `tableMappingId` no longer matches the new
+  //      selection (i.e. the partition switch would hide it from view).
+  //
+  // The lookup uses raw `data.rows` (not filteredRows or drawerRow,
+  // which are computed downstream) so the handler can be defined
+  // alongside the other URL writers without lexical-order ceremony.
+  const handlePartitionChange = useCallback(
+    (targetTableId: string, partitionId: string) => {
+      const next = new Map(selectedPartitionByTable)
+      next.set(targetTableId, partitionId)
+      setSelectedPartitionByTable(next)
+
+      let nextDrawerRowId: string | null = drawerRowId
+      if (drawerRowId !== null) {
+        const openRow = data.rows.find((r) => r.id === drawerRowId)
+        if (
+          openRow !== undefined &&
+          openRow.targetField.targetTable.id === targetTableId &&
+          openRow.tableMappingId !== partitionId
+        ) {
+          nextDrawerRowId = null
+          setDrawerRowId(null)
+          setDrawerHighlightedSourceFieldId(null)
+        }
+      }
+
+      writeUrl(filters, nextDrawerRowId, undefined, next)
+    },
+    [selectedPartitionByTable, drawerRowId, data.rows, filters, writeUrl],
+  )
+
+  const handleOpenPartitionModal = useCallback(
+    (
+      args:
+        | { kind: 'create'; targetTableId: string }
+        | { kind: 'edit'; targetTableId: string; partition: PartitionInfo },
+    ) => {
+      setPartitionModalState({
+        targetTableId: args.targetTableId,
+        editing: args.kind === 'edit' ? args.partition : null,
+      })
+    },
+    [],
+  )
+
+  const handleClosePartitionModal = useCallback(() => {
+    setPartitionModalState(null)
+  }, [])
+
+  const handlePartitionSaved = useCallback(() => {
+    // Server-side state changed (new TM, label edit, filter edit, etc.)
+    // — pull fresh data so partitionsByTargetTable + row tableMappingId
+    // values reflect the write. The modal closes itself via
+    // `onClose` regardless.
+    router.refresh()
+  }, [router])
 
   // PR 3b commit 3 — `handleFormDirtyChange` / `handleRestoreConsumed`
   // and the `CreateMappingFormSnapshot` import retired with
@@ -1842,18 +1968,42 @@ function MappingContentLoaded({
   }, [drawerRow, pendingDrawerRowId])
 
   /**
-   * Group filtered rows by target-table id WHILE preserving server order.
-   * We rely on Map insertion order (the server emits rows sorted by
-   * targetTable.name ASC + ordinalPosition ASC), so the Map's native
-   * iteration yields groups in canonical order too.
+   * PR Ω.3.2 — partition filter pipeline extension.
+   *
+   * Applied AFTER the search/status/target/source filter pass and
+   * BEFORE per-table grouping, so a partition selection narrows the
+   * visible rows in its target table without affecting any other
+   * group. Heritage projects have an empty `selectedPartitionByTable`
+   * and short-circuit to byte-identical behaviour (returns the same
+   * array reference, so downstream memo identity is preserved).
+   *
+   * Only target-led rendering is affected. The flat (list) view
+   * consumes `effectiveResult` directly and runs its own filter
+   * machinery in `MappingListView`; partition filtering for flat view
+   * is a deferred follow-up.
+   */
+  const partitionFilteredRows = useMemo(() => {
+    if (selectedPartitionByTable.size === 0) return filteredRows
+    return filteredRows.filter((r) => {
+      const sel = selectedPartitionByTable.get(r.targetField.targetTable.id)
+      if (sel === undefined) return true
+      return r.tableMappingId === sel
+    })
+  }, [filteredRows, selectedPartitionByTable])
+
+  /**
+   * Group partition-filtered rows by target-table id WHILE preserving
+   * server order. We rely on Map insertion order (the server emits rows
+   * sorted by targetTable.name ASC + ordinalPosition ASC), so the Map's
+   * native iteration yields groups in canonical order too.
    *
    * CONTRACT: NO client-side sort anywhere in this module. The no-client-
    * sort guard test (tests/lib/no-shim-in-redesign-path.test.ts) will
    * fail if anyone adds `.sort(` to this path.
    */
   const groupedRows = useMemo(
-    () => groupRowsByTargetTable(filteredRows),
-    [filteredRows],
+    () => groupRowsByTargetTable(partitionFilteredRows),
+    [partitionFilteredRows],
   )
 
   const tablesById = useMemo(() => {
@@ -2095,6 +2245,8 @@ function MappingContentLoaded({
                 {visibleTargetTables.map((summary) => {
                   const rowsInGroup = groupedRows.get(summary.id) ?? []
                   const perGroup = perGroupCounts.get(summary.id)
+                  const partitionsForTable =
+                    data.partitionsByTargetTable?.[summary.id] ?? []
                   return (
                     <TargetTableGroup
                       key={summary.id}
@@ -2121,6 +2273,15 @@ function MappingContentLoaded({
                       onInlineApprove={handleInlineApprove}
                       onInlineReject={handleInlineRejectClick}
                       onInlineSourceCommit={handleInlineSourceCommit}
+                      partitions={partitionsForTable}
+                      selectedPartitionId={
+                        selectedPartitionByTable.get(summary.id) ?? null
+                      }
+                      onPartitionChange={(partitionId) =>
+                        handlePartitionChange(summary.id, partitionId)
+                      }
+                      partitionsEnabled={data.partitionsEnabled ?? false}
+                      onOpenPartitionModal={handleOpenPartitionModal}
                     />
                   )
                 })}
@@ -2217,6 +2378,55 @@ function MappingContentLoaded({
         onCancel={handleBulkCancel}
         onConfirm={handleBulkConfirm}
       />
+
+      {/*
+        PR Ω.3.2 — single page-level mount for the partition
+        create/edit modal. Renders nothing when no group has requested
+        it (state is null). Identity-field options are derived per-table
+        from `data.rows` so the modal only offers fields under the
+        target table whose partition we're editing.
+      */}
+      {partitionModalState !== null
+        ? (() => {
+            const { targetTableId, editing } = partitionModalState
+            const targetTableName =
+              data.targetTables.find((t) => t.id === targetTableId)?.name ?? ''
+            // Identity-field options: dedupe target fields in this
+            // table off `data.rows` (each field appears once per
+            // partition; one entry per field is enough).
+            const seenFieldIds = new Set<string>()
+            const identityFieldOptions: { id: string; name: string }[] = []
+            for (const r of data.rows) {
+              if (r.targetField.targetTable.id !== targetTableId) continue
+              if (seenFieldIds.has(r.targetField.id)) continue
+              seenFieldIds.add(r.targetField.id)
+              identityFieldOptions.push({
+                id: r.targetField.id,
+                name: r.targetField.name,
+              })
+            }
+            const siblings =
+              data.partitionsByTargetTable?.[targetTableId] ?? []
+            return (
+              <PartitionRulesModal
+                projectId={projectId}
+                targetTableId={targetTableId}
+                targetTableName={targetTableName}
+                sourceTables={data.sourceTables.map((t) => ({
+                  id: t.id,
+                  name: t.name,
+                  datasetName: t.datasetName,
+                }))}
+                identityFieldOptions={identityFieldOptions}
+                siblings={siblings}
+                editing={editing}
+                open={true}
+                onClose={handleClosePartitionModal}
+                onSaved={handlePartitionSaved}
+              />
+            )
+          })()
+        : null}
     </>
   )
 }
