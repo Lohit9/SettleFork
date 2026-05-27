@@ -27,6 +27,7 @@ import { logActivity } from '@/lib/actions/activity-log'
 import { logAIEdit } from '@/lib/actions/ai-edit-history'
 import { assertMappingWritesEnabled } from '@/lib/auth/mapping-writes'
 import { computeOrphanedTfmsForTmDelete } from '@/lib/mappings/tm-ownership'
+import { applyTemplateToProject } from '@/lib/actions/migration-templates'
 import { APPROVE_ALL_REASON } from '@/lib/constants/approve-all-reason'
 import { validatePackageConsistency, type PackageValidationResult } from '@/lib/validation/package-validator'
 import {
@@ -244,12 +245,68 @@ export async function runMappingGenerationForPair(args: {
     const sourceSection = formatSchemaForPrompt([sourceCtx], 'source')
     const targetSection = formatSchemaForPrompt(aiCtx.target_tables, 'target')
     const docBlock = formatDocumentsForPrompt(aiCtx.documents)
-    const userMessage = buildMappingUserMessage({
+    let userMessage = buildMappingUserMessage({
       sourceSection,
       targetSection,
       docBlock,
       intelligenceCtx: aiCtx.intelligence_context ?? null,
     })
+
+    try {
+      const [{ data: projectRow }, { data: projectDatasets }] = await Promise.all([
+        supabaseAdmin
+          .from('projects')
+          .select('org_id')
+          .eq('id', projectId)
+          .maybeSingle(),
+        supabaseAdmin
+          .from('datasets')
+          .select('name, role')
+          .eq('project_id', projectId)
+          .in('role', ['source', 'target']),
+      ])
+      const sourceSystem = (projectDatasets ?? []).find((d) => d.role === 'source')?.name
+      const targetSystem = (projectDatasets ?? []).find((d) => d.role === 'target')?.name
+
+      if (projectRow?.org_id && sourceSystem && targetSystem && targetTables[0]?.name) {
+        const targetFieldSignatures = (targetFields ?? []).map((f) => ({
+          tableName: targetTables[0].name.toLowerCase(),
+          fieldName: f.name.toLowerCase(),
+          dataType: f.data_type.toLowerCase().trim().replace(/\s+/g, ' '),
+          isNullable: Boolean(f.is_nullable),
+          isForeignKey: Boolean(f.is_foreign_key),
+        }))
+
+        const templateResult = await applyTemplateToProject(
+          projectRow.org_id,
+          sourceSystem,
+          targetSystem,
+          targetFieldSignatures,
+        )
+
+        if (templateResult.success && templateResult.data && templateResult.data.matched > 0) {
+          const priors = templateResult.data.matches
+            .filter((m) => m.templateEntry !== null)
+            .slice(0, 5)
+            .map((m, idx) => {
+              const entry = m.templateEntry!
+              return [
+                `${idx + 1}. target=${m.targetField.tableName}.${m.targetField.fieldName} (${m.targetField.dataType})`,
+                `   source=${entry.source.tableName}.${entry.source.fieldName} (${entry.source.dataType})`,
+                `   match_type=${m.matchType}; historical_confidence=${Math.round(entry.confidence)}`,
+                `   transform=${entry.transformSql ?? 'direct map (no transform SQL)'}`,
+                `   rationale=${entry.explanation}`,
+              ].join('\n')
+            })
+
+          if (priors.length > 0) {
+            userMessage += `\n\n<TEMPLATE_PRIORS>\nThese are prior approved mappings, not auto-approvals.\nUse them as historical signal only while still evaluating this project's schema, profiling, and documents.\n${priors.join('\n')}\n</TEMPLATE_PRIORS>`
+          }
+        }
+      }
+    } catch (templateErr) {
+      console.warn('[mappings] Failed to load template priors, continuing without template context.', templateErr)
+    }
 
     // PR 3.4b — agent-mode preludes (read once before the callLLM/agent
     // gate). Both null/empty under flag-OFF.
