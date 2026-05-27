@@ -133,6 +133,15 @@ interface PartitionRulesModalProps {
    *  CREATED PartitionInfo if known; for create mode we can't fabricate
    *  one without re-fetching, so the callback is fire-and-forget. */
   onSaved: () => void
+  /** PR Ω.3.2.1 — fired when the user clicks "Delete partition" in
+   *  edit mode. Parent owns mounting `PartitionDeleteConfirmDialog`
+   *  (and the deletePartition action that follows). This callback
+   *  does NOT close the modal — the parent decides whether to keep
+   *  the modal mounted while the confirm dialog is up (per the
+   *  "modal stays open while dialog is open" contract from §4 PRMD4).
+   *  Optional; when omitted (legacy fixtures / storybook / create-mode
+   *  callers), the Delete affordance is hidden entirely. */
+  onDelete?: () => void
 }
 
 // ─── Component ─────────────────────────────────────────────────────────────
@@ -148,6 +157,7 @@ export function PartitionRulesModal({
   open,
   onClose,
   onSaved,
+  onDelete,
 }: PartitionRulesModalProps) {
   const isEdit = editing !== null
 
@@ -531,24 +541,49 @@ export function PartitionRulesModal({
           </div>
         )}
 
-        <div className="mt-6 flex items-center justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={saving}
-            className="inline-flex items-center rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={handleSave}
-            disabled={!canSubmit}
-            data-testid="partition-modal-submit"
-            className="inline-flex items-center rounded-md bg-gray-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {saving ? (isEdit ? 'Saving…' : 'Adding…') : isEdit ? 'Save partition' : 'Add partition'}
-          </button>
+        {/*
+          Footer split: destructive "Delete partition" on the left,
+          Cancel + Save cluster on the right. Visual separation matches
+          the safety-first pattern used by GitHub / Linear / Notion —
+          the destructive trigger is intentionally far from the primary
+          confirm so a fast click can't land on it by accident. The
+          left wrapper is ALWAYS rendered (empty in create mode) so the
+          right cluster stays right-aligned via `justify-between`
+          regardless of whether the Delete affordance is mounted.
+        */}
+        <div className="mt-6 flex items-center justify-between gap-2">
+          <div>
+            {isEdit && onDelete ? (
+              <button
+                type="button"
+                onClick={onDelete}
+                disabled={saving}
+                data-testid="partition-modal-delete"
+                className="inline-flex items-center rounded-md border border-red-300 bg-white px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Delete partition
+              </button>
+            ) : null}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={saving}
+              className="inline-flex items-center rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={!canSubmit}
+              data-testid="partition-modal-submit"
+              className="inline-flex items-center rounded-md bg-gray-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {saving ? (isEdit ? 'Saving…' : 'Adding…') : isEdit ? 'Save partition' : 'Add partition'}
+            </button>
+          </div>
         </div>
       </div>
     </div>
