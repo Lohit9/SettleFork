@@ -260,14 +260,16 @@ export type MappingTransformationStatus =
 interface MappingRowBase {
   /**
    * Stable rendering key.
-   *   mapped / value_assignment   → target_field_mappings.id
-   *   unmapped (heritage, count(TMs per target_table)=1) → `unmapped::<target_field_id>`
-   *   unmapped (multi-partition,  count(TMs per target_table)>=2) → `unmapped::<target_field_id>::<table_mapping_id>`
+   *   mapped / value_assignment   → target_field_mappings.id (canonical
+   *                                 TFM among the collapsed partition siblings)
+   *   unmapped                    → `unmapped::<target_field_id>`
    *
-   * PR Ω.3.2: the synthetic id format becomes partition-aware in multi-
-   * partition projects so each (target_field, partition) pair has a unique
-   * row id. Heritage rendering is byte-identical — the legacy short form is
-   * preserved when the target table has exactly one partition.
+   * PR Ω.3.8: the synthetic id form is always `unmapped::<target_field_id>`.
+   * The partition-suffixed long form `unmapped::<tfid>::<tmid>` (introduced
+   * by PR Ω.3.2 when each (target_field, partition) pair emitted its own
+   * row) is retired now that the assembler emits one row per
+   * (target_field, source_field) — the full partition set the row spans
+   * is carried on `tableMappingIds[]` below.
    *
    * The `unmapped::` synthetic id is NEVER sent to a TFM-mutating write
    * action. Server actions that accept a TFM id MUST reject the
@@ -277,16 +279,15 @@ interface MappingRowBase {
   id: string
 
   /**
-   * PR Ω.3.2 — the partition (table_mapping) this row belongs to.
-   * References `table_mappings.id`. For heritage projects (exactly 1 TM
-   * per target_table), every row in the same target table carries the same
-   * `tableMappingId` and `partitionLabel=null`.
+   * PR Ω.3.2 / Ω.3.8 — the canonical (primary) partition (table_mapping)
+   * for this row. References `table_mappings.id`. For a row that spans N
+   * partitions (post-Ω.3.8 collapse), this is the FIRST partition in
+   * canonical order (`partition_ordinal ASC NULLS LAST, created_at, id`);
+   * the full set is on `tableMappingIds[]`.
    *
-   * When a target table has N partitions (post-Ω.3.2), the row builder
-   * emits up to N rows per target field — one per (target_field_id,
-   * table_mapping_id) pair. Each row's `id` remains the TFM UUID for
-   * mapped/VA rows, or the partition-aware synthetic `unmapped::<tfid>::<tmid>`
-   * for unmapped rows.
+   * For heritage projects (exactly 1 TM per target_table), every row in
+   * the same target table carries the same `tableMappingId` and
+   * `partitionLabel=null`.
    *
    * MAY be null only in the rare pre-Ω.1 case where a project has TFMs but
    * no `table_mappings` rows at all (the migration 107 pre-flight (b) would
@@ -300,7 +301,36 @@ interface MappingRowBase {
   tableMappingId?: string | null
 
   /**
+   * PR Ω.3.8 — the full set of partitions this row spans, in canonical
+   * partition order. Co-introduced with the row-collapse contract:
+   *
+   *   mapped row          → partitions where the same (target_field,
+   *                         source_field) tuple has a TFM (today: always
+   *                         length 1 for Rootstock per loader funneling)
+   *   value_assignment    → partitions where a VA TFM exists for this
+   *                         target_field (typically all N partitions of
+   *                         the target table for Rootstock VAs)
+   *   unmapped (no TFM)   → partitions that lack any TFM for this
+   *                         target_field (typically all N partitions when
+   *                         the target field has nothing authored yet)
+   *
+   * `tableMappingId` above is `tableMappingIds[0]` for convenience.
+   *
+   * Partition filtering reads this set: a row matches if any element
+   * intersects the selected partition set (`flatRowMatchesPartition`).
+   *
+   * Optional on the TYPE for back-compat with pre-Ω.3.8 fixture builders
+   * that emit the older one-row-per-partition shape; the wire shape
+   * always emits an explicit array (possibly empty for the heritage /
+   * no-partitions edge case).
+   */
+  tableMappingIds?: string[]
+
+  /**
    * PR Ω.3.2 — user-facing partition name from `table_mappings.partition_label`.
+   * For a row that spans N partitions (post-Ω.3.8 collapse), this is the
+   * label of the CANONICAL partition (`tableMappingIds[0]`).
+   *
    * NULL when the project has no explicit partition naming (count(TMs per
    * target_table) === 1 AND partition_label IS NULL on the single TM —
    * the heritage default). The UI:

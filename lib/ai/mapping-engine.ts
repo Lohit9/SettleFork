@@ -579,13 +579,17 @@ function buildUnmappedRow(
   coverageRow: RawCoverageRow | null,
   tfm: RawTfmRow | null,
   /**
-   * PR Ω.3.2 — partition binding for the unmapped row. Required for
-   * multi-partition projects so each (target_field, partition) pair yields
-   * a unique synthetic id (`unmapped::<tfid>::<tmid>`). Heritage projects
-   * (1 partition per target_table) pass `useShortSyntheticId=true` so the
-   * legacy `unmapped::<tfid>` form is preserved (byte-identity).
+   * PR Ω.3.8 — partition binding for the (collapsed) unmapped row.
+   * `tableMappingId` is the canonical / first partition the collapsed row
+   * spans; `tableMappingIds` carries the full set (`partitionLabel` is the
+   * canonical partition's label). For the heritage / no-partitions case,
+   * `tableMappingId` is null and `tableMappingIds` is `[]`.
    */
-  partition: { tableMappingId: string | null; partitionLabel: string | null; useShortSyntheticId: boolean },
+  partition: {
+    tableMappingId: string | null
+    partitionLabel: string | null
+    tableMappingIds: string[]
+  },
 ): UnmappedRow {
   // PR γ resolution priority for unmapped rows:
   //   coverage row exists  → status = coverage.status; statusSetBy =
@@ -619,20 +623,17 @@ function buildUnmappedRow(
         ? coverageRow.confidence
         : null
 
-  // PR Ω.3.2 synthetic ID:
-  //   - Heritage (useShortSyntheticId=true): `unmapped::<target_field_id>` — preserves
-  //     pre-Ω.3.2 byte-identity. Used when count(partitions per target_table)===1.
-  //   - Multi-partition (useShortSyntheticId=false): `unmapped::<target_field_id>::<tmid>`
-  //     — guarantees uniqueness per (target_field, partition) so React keys + URL
-  //     deep-links survive the cardinality expansion.
-  const syntheticId = partition.useShortSyntheticId || !partition.tableMappingId
-    ? `unmapped::${targetField.id}`
-    : `unmapped::${targetField.id}::${partition.tableMappingId}`
+  // PR Ω.3.8 synthetic ID: always `unmapped::<target_field_id>`. Post-collapse
+  // there is at most one unmapped row per target_field (covering every
+  // partition that lacks a TFM), so the partition-suffixed long form from
+  // PR Ω.3.2 is no longer needed for React-key uniqueness.
+  const syntheticId = `unmapped::${targetField.id}`
 
   return {
     kind: 'unmapped',
     id: syntheticId,
     tableMappingId: partition.tableMappingId,
+    tableMappingIds: partition.tableMappingIds,
     partitionLabel: partition.partitionLabel,
     targetField,
     confidence,
@@ -655,13 +656,24 @@ function buildValueAssignmentRow(
   targetField: TargetFieldRef,
   transformation: RawTransformationRow | null,
   coverageRow: RawCoverageRow | null,
-  /** PR Ω.3.2 — the partition this VA TFM belongs to. */
-  partition: { tableMappingId: string | null; partitionLabel: string | null },
+  /**
+   * PR Ω.3.8 — the (collapsed) partition binding for this VA row.
+   * `tableMappingId` is the canonical partition (the one whose TFM uuid
+   * lands on `id`); `tableMappingIds` carries every partition the VA
+   * spans (Rootstock VAs replicate byte-identically across all
+   * partitions of the target table, so this is typically all N).
+   */
+  partition: {
+    tableMappingId: string | null
+    partitionLabel: string | null
+    tableMappingIds: string[]
+  },
 ): ValueAssignmentRow {
   return {
     kind: 'value_assignment',
     id: tfm.id,
     tableMappingId: partition.tableMappingId,
+    tableMappingIds: partition.tableMappingIds,
     partitionLabel: partition.partitionLabel,
     targetField,
     confidence: tfm.confidence,
@@ -701,8 +713,20 @@ function buildMappedRow(
   fieldsById: Map<string, RawFieldRow>,
   fieldsByTableId: Map<string, RawFieldRow[]>,
   coverageRow: RawCoverageRow | null,
-  /** PR Ω.3.2 — the partition this mapped TFM belongs to. */
-  partition: { tableMappingId: string | null; partitionLabel: string | null },
+  /**
+   * PR Ω.3.8 — the (collapsed) partition binding for this mapped row.
+   * `tableMappingId` is the canonical partition (the one whose TFM uuid
+   * lands on `id`); `tableMappingIds` carries every partition where the
+   * SAME (target_field, dominant source_field) tuple has a TFM. In
+   * Rootstock today this is always length 1 because the loader funnels
+   * each (target, source) tuple into exactly one partition — a future
+   * writer that mirrors a mapping across partitions would lengthen it.
+   */
+  partition: {
+    tableMappingId: string | null
+    partitionLabel: string | null
+    tableMappingIds: string[]
+  },
 ): MappedRow {
   // Filter out defensively-null sources — a live mapping_source with
   // no source_field_id cannot be rendered.
@@ -1427,14 +1451,83 @@ export function assembleMappingsForRedesign(
   }
 
   // ── Assemble rows ─────────────────────────────────────────────────
-  // PR Ω.3.2 cardinality contract:
-  //   Heritage (1 TM per target_table): 1 row per target field (mapped/VA/unmapped).
-  //                                     `useShortSyntheticId=true` preserves
-  //                                     `unmapped::<tfid>` for byte-identity.
-  //   Multi-partition (N≥2 TMs per target_table): up to N rows per target field —
-  //     one mapped/VA row for each partition that has a TFM, plus one
-  //     unmapped-per-partition for partitions that lack coverage. Synthetic IDs
-  //     become `unmapped::<tfid>::<tmid>` for uniqueness.
+  // PR Ω.3.8 cardinality contract — one row per distinct
+  // (target_field_id, source_field_id) tuple. Replaces the per-partition
+  // fan-out introduced by PR Ω.3.2.
+  //
+  //   Heritage (0 partitions in `partitionsForTable` — pre-Ω.1 projects):
+  //     1 row per target field. `tableMappingIds` is `[]`.
+  //
+  //   Partition-aware (1+ partitions):
+  //     Group the per-partition TFMs for each target_field into buckets:
+  //       mapped TFM     → keyed by dominant `source_field_id`
+  //                        (the same (target, source) tuple appearing in
+  //                        multiple partitions collapses to one row)
+  //       VA TFM         → single bucket (one row per target_field
+  //                        regardless of how many partitions replicate
+  //                        the VA)
+  //       no TFM / ack   → single bucket per target_field
+  //     Each bucket emits ONE row. `tableMappingIds[]` carries every
+  //     partition that contributed to the bucket; `tableMappingId` /
+  //     `partitionLabel` are the canonical (first / lowest-ordinal)
+  //     partition's values, since `partitionsForTable` already iterates
+  //     in canonical order.
+  //
+  // Divergence detection: `assertCollapseConsistency` warns when a
+  // mapped or VA bucket contains sibling TFMs whose combination SQL
+  // differs across partitions. This never happens in the Rootstock
+  // loader (each mapped tuple routes to exactly one partition; VAs are
+  // byte-identical replicas) — the warning exists so a future writer
+  // mirroring a mapping across partitions with different transformations
+  // gets a visible operator signal before the canonical TFM wins.
+  //
+  // Status mutation contract (PR Ω.3.8 → deferred to PR Ω.3.8.1):
+  // approve/reject/edit mutations in `lib/actions/mappings-for-redesign.ts`
+  // take a single TFM uuid (the row's canonical `id`) and update only
+  // that one DB row. A collapsed row that spans N partitions therefore
+  // updates only its canonical TFM's status; the N-1 sibling TFMs keep
+  // their pre-action status. This is load-time correct — `staging.ts`
+  // and `lib/actions/_outputs-core.ts` both gate on
+  // `.neq('status', 'rejected')`, so `needs_review` siblings still flow
+  // their constants / source values into partitions B, C, … — but it
+  // creates an informational counter divergence between the mapping
+  // page (which counts collapsed rows: 1/1 approved) and the Migration
+  // Center (which counts TFMs via `lib/quality/stat-formulas.ts`
+  // `mappingApproved`: 1/N approved). PR Ω.3.8.1 will fan status
+  // mutations across `tableMappingIds[]` to close that divergence.
+
+  /**
+   * Inline because it references the local `RawTfmRow` / `RawTableMappingRow`
+   * types defined inside `assembleResult`. Side-effect: one `console.warn`
+   * per divergent group.
+   */
+  function assertCollapseConsistency(
+    targetFieldId: string,
+    kind: 'mapped' | 'value_assignment',
+    entries: ReadonlyArray<{ partition: RawTableMappingRow; tfm: RawTfmRow }>,
+  ): void {
+    if (entries.length <= 1) return
+    const first = entries[0]!.tfm
+    for (let i = 1; i < entries.length; i++) {
+      const sibling = entries[i]!.tfm
+      if (
+        sibling.combination_sql !== first.combination_sql ||
+        sibling.combination_type !== first.combination_type ||
+        sibling.transformation_intent !== first.transformation_intent
+      ) {
+        console.warn(
+          `[mapping-engine] ${kind} TFM collapse divergence for ` +
+            `target_field_id=${targetFieldId}: partition ` +
+            `${entries[0]!.partition.id} (tfm=${first.id}) and partition ` +
+            `${entries[i]!.partition.id} (tfm=${sibling.id}) differ on ` +
+            `combination_sql/combination_type/transformation_intent. ` +
+            `Collapsing to canonical (first partition).`,
+        )
+        return
+      }
+    }
+  }
+
   const rows: MappingRow[] = []
 
   for (const targetField of targetFields) {
@@ -1443,28 +1536,25 @@ export function assembleMappingsForRedesign(
 
     const partitionsForTable = partitionsByTargetTableId.get(targetField.table_id) ?? []
     const coverageRow = coverageByTargetFieldId.get(targetField.id) ?? null
-    const useShortSyntheticId = partitionsForTable.length <= 1
 
     if (partitionsForTable.length === 0) {
-      // Edge case: target table has zero table_mappings rows. Two sub-cases:
+      // Heritage path — target table has zero `table_mappings` rows. Two
+      // sub-cases:
       //   (a) Pre-Ω.1 production projects (migration 107 not applied) — every
-      //       TFM has table_mapping_id IS NULL; falls back to the legacy
-      //       1-row-per-target-field behavior with tableMappingId=null.
+      //       TFM has `table_mapping_id IS NULL`; legacy 1-row-per-target
+      //       behavior with `tableMappingId=null` and `tableMappingIds=[]`.
       //   (b) Synthetic test fixtures that build TFMs without a paired
-      //       tableMappings array — same fallback so existing tests pass.
+      //       `tableMappings` array — same fallback so existing tests pass.
       //
-      // In both cases, iterate TFMs for this target_field_id directly. Heritage
-      // assumption preserved: at most one TFM per target_field when no TMs
-      // exist (pre-Ω.1 UNIQUE on (project_id, target_field_id) without
-      // table_mapping_id discriminator).
+      // At most one TFM per target_field in this case (pre-Ω.1 UNIQUE on
+      // (project_id, target_field_id) without table_mapping_id discriminator).
       const tfmKey = `${targetField.id}::__no_partition__`
       const tfm = tfmByTargetAndPartition.get(tfmKey) ?? null
       const noPartitionBinding = {
         tableMappingId: null,
         partitionLabel: null,
-        useShortSyntheticId: true,
+        tableMappingIds: [] as string[],
       }
-      const noPartitionMappedBinding = { tableMappingId: null, partitionLabel: null }
 
       if (!tfm) {
         rows.push(buildUnmappedRow(targetFieldRef, coverageRow, null, noPartitionBinding))
@@ -1480,7 +1570,7 @@ export function assembleMappingsForRedesign(
       }
       if (tfm.combination_type === 'custom_sql' && tfmSources.length === 0) {
         rows.push(
-          buildValueAssignmentRow(tfm, targetFieldRef, transformation, coverageRow, noPartitionMappedBinding),
+          buildValueAssignmentRow(tfm, targetFieldRef, transformation, coverageRow, noPartitionBinding),
         )
         continue
       }
@@ -1498,86 +1588,128 @@ export function assembleMappingsForRedesign(
           fieldsById,
           fieldsByTableId,
           coverageRow,
-          noPartitionMappedBinding,
+          noPartitionBinding,
         ),
       )
       continue
     }
 
-    // Iterate partitions in canonical order. For each, look up the TFM bound
-    // to (target_field, partition). Emit one row per partition.
+    // Partition-aware path. Walk each partition once, bucketing the
+    // (partition, tfm) entries by the collapse key. Insertion order =
+    // canonical partition order (since `partitionsForTable` is already
+    // sorted), so the FIRST entry in each bucket becomes the canonical
+    // partition for its emitted row.
+    const mappedGroups = new Map<
+      string,
+      Array<{
+        partition: RawTableMappingRow
+        tfm: RawTfmRow
+        tfmSources: RawMappingSourceRow[]
+      }>
+    >()
+    const vaEntries: Array<{ partition: RawTableMappingRow; tfm: RawTfmRow }> = []
+    const unmappedEntries: Array<{
+      partition: RawTableMappingRow
+      tfm: RawTfmRow | null
+    }> = []
+
     for (const partition of partitionsForTable) {
-      const partitionBinding = {
-        tableMappingId: partition.id,
-        partitionLabel: partition.partition_label,
-      }
-      const tfmKey = `${targetField.id}::${partition.id}`
-      const tfm = tfmByTargetAndPartition.get(tfmKey)
+      const tfm =
+        tfmByTargetAndPartition.get(`${targetField.id}::${partition.id}`) ?? null
 
       if (!tfm) {
-        rows.push(
-          buildUnmappedRow(targetFieldRef, coverageRow, null, {
-            ...partitionBinding,
-            useShortSyntheticId,
-          }),
-        )
+        unmappedEntries.push({ partition, tfm: null })
         continue
       }
 
       const tfmSources = mappingSourcesByTfm.get(tfm.id) ?? []
-      const transformation = transformationByTfm.get(tfm.id) ?? null
 
-      // Discriminator logic (unchanged from pre-Ω.3.2 but applied per-partition):
-      //   is_acknowledged === true OR zero sources without custom_sql →
-      //     'unmapped' (canonical coverage-approved surface; legacy bare-ack
-      //     TFMs fall through here post-migration-098 backfill)
-      //   combination_type === 'custom_sql' with zero sources →
-      //     'value_assignment'
-      //   otherwise (has ≥ 1 source) → 'mapped'
+      // Discriminator: matches the pre-Ω.3.8 per-partition logic — only
+      // the EMIT step has been hoisted out so siblings can collapse.
       if (tfm.is_acknowledged) {
-        rows.push(
-          buildUnmappedRow(targetFieldRef, coverageRow, tfm, {
-            ...partitionBinding,
-            useShortSyntheticId,
-          }),
-        )
+        unmappedEntries.push({ partition, tfm })
         continue
       }
-
       if (tfm.combination_type === 'custom_sql' && tfmSources.length === 0) {
-        rows.push(
-          buildValueAssignmentRow(tfm, targetFieldRef, transformation, coverageRow, partitionBinding),
-        )
+        vaEntries.push({ partition, tfm })
         continue
       }
-
-      // Mapped row. Require at least one source — a TFM with
-      // combination_type != 'custom_sql' and zero sources is
-      // semantically invalid; surface it as unmapped to avoid emitting
-      // a MappedRow with an empty `sources` array that would violate
-      // the Rules 1-4 selector.
       if (tfmSources.length === 0) {
-        rows.push(
-          buildUnmappedRow(targetFieldRef, coverageRow, tfm, {
-            ...partitionBinding,
-            useShortSyntheticId,
-          }),
-        )
+        // Defensive: a TFM with non-custom_sql combination_type and zero
+        // sources is semantically invalid; surface as unmapped to avoid
+        // emitting a MappedRow with an empty `sources` array that would
+        // violate the Rules 1-4 selector.
+        unmappedEntries.push({ partition, tfm })
         continue
       }
 
+      const dominantSource =
+        tfmSources.find((s) => s.ordinal === 0) ?? tfmSources[0]!
+      if (!dominantSource.source_field_id) {
+        // Defensive: missing source_field_id on the dominant source —
+        // not renderable as a mapped row.
+        unmappedEntries.push({ partition, tfm })
+        continue
+      }
+      const groupKey = dominantSource.source_field_id
+      const bucket = mappedGroups.get(groupKey) ?? []
+      bucket.push({ partition, tfm, tfmSources })
+      mappedGroups.set(groupKey, bucket)
+    }
+
+    // Emit one row per bucket. `rows.sort(compareRows)` below normalizes
+    // the final wire ordering, so the emit order here only matters for
+    // stable insertion under tied compareRows keys.
+    for (const entries of mappedGroups.values()) {
+      assertCollapseConsistency(targetField.id, 'mapped', entries)
+      const canonical = entries[0]!
+      const transformation = transformationByTfm.get(canonical.tfm.id) ?? null
       rows.push(
         buildMappedRow(
-          tfm,
+          canonical.tfm,
           targetFieldRef,
-          tfmSources,
+          canonical.tfmSources,
           transformation,
           tablesById,
           fieldsById,
           fieldsByTableId,
           coverageRow,
-          partitionBinding,
+          {
+            tableMappingId: canonical.partition.id,
+            partitionLabel: canonical.partition.partition_label,
+            tableMappingIds: entries.map((e) => e.partition.id),
+          },
         ),
+      )
+    }
+
+    if (vaEntries.length > 0) {
+      assertCollapseConsistency(targetField.id, 'value_assignment', vaEntries)
+      const canonical = vaEntries[0]!
+      const transformation = transformationByTfm.get(canonical.tfm.id) ?? null
+      rows.push(
+        buildValueAssignmentRow(
+          canonical.tfm,
+          targetFieldRef,
+          transformation,
+          coverageRow,
+          {
+            tableMappingId: canonical.partition.id,
+            partitionLabel: canonical.partition.partition_label,
+            tableMappingIds: vaEntries.map((e) => e.partition.id),
+          },
+        ),
+      )
+    }
+
+    if (unmappedEntries.length > 0) {
+      const canonical = unmappedEntries[0]!
+      rows.push(
+        buildUnmappedRow(targetFieldRef, coverageRow, canonical.tfm, {
+          tableMappingId: canonical.partition.id,
+          partitionLabel: canonical.partition.partition_label,
+          tableMappingIds: unmappedEntries.map((e) => e.partition.id),
+        }),
       )
     }
   }

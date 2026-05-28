@@ -341,15 +341,19 @@ interface GroupSortKeys {
 function buildSortKeys(row: FlatRow): GroupSortKeys {
   switch (row.kind) {
     case 'mapped':
-      // Multi-source rows sort by their PRIMARY source (sources[0],
-      // ordinal=0 by flatten contract) — same source the renderer
-      // shows inline on the main row and the user scans first.
+      // PR Ω.3.8 — bucket 0 (mapped) now sorts TARGET-anchored (primary)
+      // with the primary source as the tiebreaker. The data-layer collapse
+      // produces M separate mapped rows when a target field has M distinct
+      // dominant sources (e.g. `Item Number` from Assy.Item / ProductSKU /
+      // Part #). Anchoring the primary key on target ensures those M rows
+      // land consecutively under their shared target field; the source
+      // tiebreaker keeps the within-target ordering deterministic.
       return {
         bucket: 0,
         sourceTable: row.sources[0].sourceTable.name,
         sourceField: row.sources[0].sourceField.name,
-        targetTable: '',
-        targetField: '',
+        targetTable: row.targetField.targetTable.name,
+        targetField: row.targetField.name,
       }
     case 'unmapped-source':
       return {
@@ -377,12 +381,21 @@ function compareStringsAsc(a: string, b: string): number {
 
 function compareSortKeys(a: GroupSortKeys, b: GroupSortKeys): number {
   if (a.bucket !== b.bucket) return a.bucket - b.bucket
-  if (a.bucket === 2) {
-    const tt = compareStringsAsc(a.targetTable, b.targetTable)
-    if (tt !== 0) return tt
-    return compareStringsAsc(a.targetField, b.targetField)
+  if (a.bucket === 1) {
+    // Unmapped-source — source-anchored (these rows have no target).
+    const st = compareStringsAsc(a.sourceTable, b.sourceTable)
+    if (st !== 0) return st
+    return compareStringsAsc(a.sourceField, b.sourceField)
   }
-  // Buckets 0 and 1 — source-anchored.
+  // Buckets 0 (mapped) and 2 (VA + unmapped-target) — target-anchored.
+  // PR Ω.3.8 flipped bucket 0 from source-anchored to target-anchored;
+  // bucket 2 was target-anchored pre-Ω.3.8. Source is carried as a
+  // tiebreaker for bucket 0 (multi-source target fields); bucket 2
+  // rows carry empty source keys so the tiebreaker is a no-op there.
+  const tt = compareStringsAsc(a.targetTable, b.targetTable)
+  if (tt !== 0) return tt
+  const tf = compareStringsAsc(a.targetField, b.targetField)
+  if (tf !== 0) return tf
   const st = compareStringsAsc(a.sourceTable, b.sourceTable)
   if (st !== 0) return st
   return compareStringsAsc(a.sourceField, b.sourceField)
@@ -1269,7 +1282,6 @@ function FlatRowView({
               description: row.targetField.description,
               dataType: row.targetField.dataType,
               isNullable: row.targetField.isNullable,
-              partitionLabel: row.parentRow.partitionLabel,
             })
             return (
               <span
