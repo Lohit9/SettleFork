@@ -1384,12 +1384,24 @@ CRITICAL RULES FOR THE JSON:
             "contributing_source_fields": ["contact_last"],
             "combination_hint": "Concatenate first and last name with space separator"
           }
+        ],
+        "unmapped_fields": [
+          {
+            "target_field": "CREATED_AT",
+            "assignment": "Constant: NOW()",
+            "reasoning": "Target requires creation timestamp; no source equivalent"
+          },
+          {
+            "target_field": "LEGACY_ID",
+            "assignment": "Leave NULL",
+            "reasoning": "Optional field; no source data available"
+          }
         ]
     }
   ]
 }
 
-Map ALL source fields to their best target match. If a source field has no reasonable target match, omit it.`
+Map ALL source fields to their best target match. If a source field has no reasonable target match, omit it. For every target field you did NOT map, include it in the unmapped_fields array with a structured assignment.`
 }
 
 // ─── Pure assembly ───────────────────────────────────────────────────
