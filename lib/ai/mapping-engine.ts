@@ -754,6 +754,7 @@ function buildMappedRow(
     kind: 'mapped',
     id: tfm.id,
     tableMappingId: partition.tableMappingId,
+    tableMappingIds: partition.tableMappingIds,
     partitionLabel: partition.partitionLabel,
     targetField,
     confidence: tfm.confidence,
@@ -1473,6 +1474,14 @@ export function assembleMappingsForRedesign(
   //     partition's values, since `partitionsForTable` already iterates
   //     in canonical order.
   //
+  //     PR Ω.3.8.2 emit guard: the unmapped bucket emits ONLY when both
+  //     the mapped and VA buckets are empty for this target field. A
+  //     field with ANY mapped or VA TFM is a mapped/VA field — partitions
+  //     where it lacks a TFM fold into the mapped/VA row's transformation
+  //     context, not a separate unmapped row. Fields with zero TFMs in
+  //     any partition (skipped ICC, truly-unmapped EIM) still emit their
+  //     single unmapped row.
+  //
   // Divergence detection: `assertCollapseConsistency` warns when a
   // mapped or VA bucket contains sibling TFMs whose combination SQL
   // differs across partitions. This never happens in the Rootstock
@@ -1702,7 +1711,18 @@ export function assembleMappingsForRedesign(
       )
     }
 
-    if (unmappedEntries.length > 0) {
+    // PR Ω.3.8.2 — only emit the collapsed unmapped row when the field
+    // is FULLY uncovered (no mapped TFM, no VA TFM). A field with any
+    // source mapping or value-assignment is a mapped/VA field; the
+    // partitions where it lacks a TFM are handled in the mapped/VA
+    // row's transformation context, not as a separate unmapped row.
+    // Truly-unmapped fields (skipped ICC, EIM fields with zero TFMs in
+    // any partition) still emit their single unmapped row.
+    if (
+      unmappedEntries.length > 0 &&
+      mappedGroups.size === 0 &&
+      vaEntries.length === 0
+    ) {
       const canonical = unmappedEntries[0]!
       rows.push(
         buildUnmappedRow(targetFieldRef, coverageRow, canonical.tfm, {
