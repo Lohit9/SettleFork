@@ -1,9 +1,8 @@
 /**
  * Build the rationale text for an "empty-slot" row in the Mapping First
- * view — an `unmapped-target` flat row where `(target_field × partition)`
- * has no TFM yet. PR Ω.3.7.5 replaces the bare "—" placeholder with a
- * two-tier fallback so the column carries real schema signal even
- * before any AI mapping has been authored.
+ * view — an `unmapped-target` flat row with no TFM yet. PR Ω.3.7.5
+ * introduced this as the fallback when the bare "—" placeholder would
+ * otherwise render.
  *
  *   Tier 1 — `fields.description` (loader-populated; in Rootstock this
  *            is a `Field type: …, Required|Optional. <body>` sentence
@@ -17,10 +16,11 @@
  * is invoked only for `unmapped-target` rows; other row kinds with
  * nothing to surface continue to render the gray em-dash.
  *
- * Suffix — appends `· Not mapped in <partition_label>` for partitioned
- *          projects, or `· Not mapped` for heritage (single-partition,
- *          null label) projects. Mirrors the partition copy used in the
- *          drawer header.
+ * Suffix — always `· Not mapped`. PR Ω.3.8 collapsed empty-slot rows
+ * from one-per-partition to one-per-target_field, so the row no longer
+ * corresponds to a single partition; the prior `in <partition_label>`
+ * suffix was dropped (it would have shown only the canonical partition,
+ * misrepresenting a row that spans the full unmapped set).
  *
  * Pure: no React, no DOM. The caller wraps the return string in
  * `<span className="text-slate-500 italic">` so the metadata fallback
@@ -30,14 +30,10 @@ export function formatEmptySlotRationale(args: {
   description: string | null
   dataType: string
   isNullable: boolean
-  partitionLabel: string | null | undefined
 }): string {
   const description = args.description?.trim()
   const tier = description
     ? description
     : `${args.dataType}, ${args.isNullable ? 'Optional' : 'Required'}`
-  const suffix = args.partitionLabel
-    ? ` · Not mapped in ${args.partitionLabel}`
-    : ' · Not mapped'
-  return `${tier}${suffix}`
+  return `${tier} · Not mapped`
 }

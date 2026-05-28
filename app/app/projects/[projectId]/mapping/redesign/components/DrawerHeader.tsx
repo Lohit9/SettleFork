@@ -123,11 +123,15 @@ export function DrawerHeader({ row, titleId, onClose }: DrawerHeaderProps) {
           >
             Mapping
           </div>
-          {/* Row 1.5: partition annotation (Ω.3.2). Only rendered for
-              multi-partition tables — heritage rows have
-              `partitionLabel == null` and the line collapses entirely so
-              the drawer is byte-identical to pre-Ω.3.2. */}
-          {row.partitionLabel ? (
+          {/* Row 1.5: partition annotation. Rendered only when the row
+              belongs to exactly one partition AND that partition has a
+              label. Heritage rows (`partitionLabel == null`) collapse the
+              line. PR Ω.3.8 collapse: a row spanning N partitions
+              (`tableMappingIds.length > 1` — typical for VAs and
+              fully-unmapped target fields) ALSO collapses the line, since
+              showing the canonical partition's label would misrepresent
+              the row as belonging only to that partition. */}
+          {row.partitionLabel && (row.tableMappingIds?.length ?? 0) <= 1 ? (
             <div
               data-testid="mapping-drawer-header-partition"
               className="mt-0.5 text-xs text-slate-500"

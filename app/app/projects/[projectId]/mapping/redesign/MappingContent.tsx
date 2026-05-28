@@ -865,14 +865,19 @@ function MappingContentLoaded({
       let nextDrawerRowId: string | null = drawerRowId
       if (drawerRowId !== null) {
         const openRow = data.rows.find((r) => r.id === drawerRowId)
-        if (
-          openRow !== undefined &&
-          openRow.targetField.targetTable.id === targetTableId &&
-          openRow.tableMappingId !== partitionId
-        ) {
-          nextDrawerRowId = null
-          setDrawerRowId(null)
-          setDrawerHighlightedSourceFieldId(null)
+        if (openRow !== undefined && openRow.targetField.targetTable.id === targetTableId) {
+          // PR Ω.3.8 — open row may span N partitions; keep the drawer
+          // open if any of them matches the new selection. Pre-Ω.3.8
+          // fixtures may omit `tableMappingIds`; fall back to the
+          // canonical scalar so existing tests still pass.
+          const openRowPartitionIds =
+            openRow.tableMappingIds ??
+            (openRow.tableMappingId != null ? [openRow.tableMappingId] : [])
+          if (!openRowPartitionIds.includes(partitionId)) {
+            nextDrawerRowId = null
+            setDrawerRowId(null)
+            setDrawerHighlightedSourceFieldId(null)
+          }
         }
       }
 
@@ -2218,7 +2223,13 @@ function MappingContentLoaded({
     return filteredRows.filter((r) => {
       const sel = selectedPartitionByTable.get(r.targetField.targetTable.id)
       if (sel === undefined) return true
-      return r.tableMappingId === sel
+      // PR Ω.3.8 — a row may span N partitions (`tableMappingIds[]`).
+      // Match when the selected partition is in the row's set. Fall back
+      // to the canonical scalar for pre-Ω.3.8 fixtures.
+      const ids =
+        r.tableMappingIds ??
+        (r.tableMappingId != null ? [r.tableMappingId] : [])
+      return ids.includes(sel)
     })
   }, [filteredRows, selectedPartitionByTable])
 
