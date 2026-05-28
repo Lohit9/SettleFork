@@ -892,3 +892,124 @@ describe('assembleMappingsForRedesign — discriminator cases', () => {
     )
   })
 })
+
+// ─── PR Ω.3.8.2 — partition collapse emit guard ──────────────────────
+//
+// The data-layer collapse from PR Ω.3.8 groups per-partition TFMs into
+// mapped / VA / unmapped buckets, then emits one row per bucket. PR
+// Ω.3.8.2 adds the guard that the unmapped bucket emits ONLY when both
+// the mapped AND VA buckets are empty for the target field. Without
+// the guard, a partially-covered target field renders twice — once as
+// its mapped row, once as a redundant collapsed unmapped row for the
+// partitions that lack a TFM.
+
+describe('assembleMappingsForRedesign — partition collapse emit guard (PR Ω.3.8.2)', () => {
+  // Three partitions of TBL_T_CUST. `partition_ordinal` controls
+  // iteration order in `assembleMappingsForRedesign`; the canonical
+  // (first / lowest-ordinal) partition becomes the canonical of any
+  // collapsed group.
+  const TM_A: { id: string; source_table_id: string; target_table_id: string; partition_label: string | null; partition_ordinal: number | null; filter_sql: string | null; identity_field_id: string | null; dedup_priority: number | null; created_at: string } = {
+    id: 'tm-a',
+    source_table_id: TBL_S_CUST.id,
+    target_table_id: TBL_T_CUST.id,
+    partition_label: 'Partition A',
+    partition_ordinal: 0,
+    filter_sql: null,
+    identity_field_id: null,
+    dedup_priority: null,
+    created_at: '2026-05-01T00:00:00Z',
+  }
+  const TM_B = { ...TM_A, id: 'tm-b', partition_label: 'Partition B', partition_ordinal: 1 }
+  const TM_C = { ...TM_A, id: 'tm-c', partition_label: 'Partition C', partition_ordinal: 2 }
+  const THREE_PARTITIONS = [TM_A, TM_B, TM_C]
+
+  it('partial coverage — mapped TFM in partition A, no TFM in B/C → exactly one (mapped) row, zero unmapped', () => {
+    // The exact bug Ω.3.8.2 fixes. Without the guard, this field
+    // would emit BOTH a mapped row (from partition A) AND a collapsed
+    // unmapped row (covering partitions B + C). The visible symptom
+    // in Rootstock: Inactive Status / Inventory Source / Status / Eng
+    // Type / enguom / iccomcod each appeared twice on Mapping First.
+    const t = tfm({
+      id: 'tfm-partial-mapped',
+      target_field_id: F_T_CUSTID.id,
+      table_mapping_id: TM_A.id,
+      combination_type: 'single',
+    })
+    const m = ms({
+      id: 'ms-partial',
+      target_field_mapping_id: 'tfm-partial-mapped',
+      source_field_id: F_S_CUSTID.id,
+      source_table_id: F_S_CUSTID.table_id,
+      ordinal: 0,
+    })
+    const out = assembleMappingsForRedesign(
+      baseInput({
+        tableMappings: THREE_PARTITIONS,
+        tfms: [t],
+        mappingSources: [m],
+      }),
+    )
+    const rowsForField = out.rows.filter(
+      (r) => r.targetField.id === F_T_CUSTID.id,
+    )
+    expect(rowsForField).toHaveLength(1)
+    expect(rowsForField[0]!.kind).toBe('mapped')
+    expect(rowsForField[0]!.id).toBe('tfm-partial-mapped')
+    // The mapped row spans only partition A (where the TFM exists).
+    expect(rowsForField[0]!.tableMappingIds).toEqual(['tm-a'])
+    // Explicit pin: no unmapped sibling for this field.
+    expect(rowsForField.filter((r) => r.kind === 'unmapped')).toHaveLength(0)
+  })
+
+  it("truly unmapped — zero TFMs in any partition → exactly one (unmapped) row spanning all partitions", () => {
+    // Guard's third arm: when mapped AND VA buckets are both empty,
+    // the unmapped bucket still emits. Truly-uncovered target fields
+    // (skipped ICC, EIM fields with no mapping in any partition) keep
+    // their canonical "needs mapping" surface.
+    const out = assembleMappingsForRedesign(
+      baseInput({
+        tableMappings: THREE_PARTITIONS,
+        tfms: [],
+      }),
+    )
+    const rowsForField = out.rows.filter(
+      (r) => r.targetField.id === F_T_CUSTID.id,
+    )
+    expect(rowsForField).toHaveLength(1)
+    expect(rowsForField[0]!.kind).toBe('unmapped')
+    expect(rowsForField[0]!.id).toBe(`unmapped::${F_T_CUSTID.id}`)
+    expect(rowsForField[0]!.tableMappingIds).toEqual(['tm-a', 'tm-b', 'tm-c'])
+  })
+
+  it('VA replicated — custom_sql/no-source TFM in all 3 partitions → exactly one (value_assignment) row, zero unmapped', () => {
+    // The Rootstock loader replicates VAs byte-identically across
+    // every partition of the target table. The collapse folds them
+    // into one VA row; the guard prevents any redundant unmapped
+    // emission (vaEntries non-empty → unmapped suppressed).
+    const vaA = tfm({
+      id: 'tfm-va-a',
+      target_field_id: F_T_TENANT.id,
+      table_mapping_id: TM_A.id,
+      combination_type: 'custom_sql',
+      combination_sql: "'tenant-x'",
+      confidence: 100,
+    })
+    const vaB = { ...vaA, id: 'tfm-va-b', table_mapping_id: TM_B.id }
+    const vaC = { ...vaA, id: 'tfm-va-c', table_mapping_id: TM_C.id }
+    const out = assembleMappingsForRedesign(
+      baseInput({
+        tableMappings: THREE_PARTITIONS,
+        tfms: [vaA, vaB, vaC],
+      }),
+    )
+    const rowsForField = out.rows.filter(
+      (r) => r.targetField.id === F_T_TENANT.id,
+    )
+    expect(rowsForField).toHaveLength(1)
+    expect(rowsForField[0]!.kind).toBe('value_assignment')
+    // Canonical = partition A's TFM uuid (lowest ordinal wins).
+    expect(rowsForField[0]!.id).toBe('tfm-va-a')
+    expect(rowsForField[0]!.tableMappingIds).toEqual(['tm-a', 'tm-b', 'tm-c'])
+    expect(rowsForField.filter((r) => r.kind === 'unmapped')).toHaveLength(0)
+  })
+})
