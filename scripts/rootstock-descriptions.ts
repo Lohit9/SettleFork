@@ -10,6 +10,12 @@
  * its first paragraph after the blank line (VAs are target-field-focused).
  * Return null if no entry carries the prefix; the UI falls back to
  * `data_type` + required-ness rendering at that tier.
+ *
+ * Assumes each (target_table, target_field) group is homogeneous: either
+ * all-mapped or VA-only, never both. Mixed groups do not occur in the
+ * Rootstock JSON. If they ever did, combining one entry's prefix with
+ * another entry's body could mismatch on field type (the prefix is taken
+ * from the highest-confidence entry, the body only from a VA entry).
  */
 
 export interface DescriptionEntry {
