@@ -321,6 +321,178 @@ export async function getTemplateStats(
   }
 }
 
+/**
+ * Fire-and-forget: called at TFM approval time.
+ * Looks up whether the project has a template for its system pair and whether
+ * the approved mapping matches or diverges from the template suggestion.
+ * Updates template counters and writes an override_log row.
+ *
+ * Exits silently if no template exists — snapshotTemplate handles new-template
+ * creation on project completion.
+ */
+export async function updateTemplateFromApproval(
+  projectId: string,
+  tfmId: string,
+  labelQuality?: {
+    timeOnTaskMs?: number
+    wasEdited?: boolean
+    approvalMethod?: 'individual' | 'approve_all' | 'approve_high_confidence'
+  },
+): Promise<void> {
+  // Resolve org + system names from the project
+  const { data: project } = await supabaseAdmin
+    .from('projects')
+    .select('org_id')
+    .eq('id', projectId)
+    .single()
+  if (!project) return
+
+  const { data: datasets } = await supabaseAdmin
+    .from('datasets')
+    .select('role, name')
+    .eq('project_id', projectId)
+    .in('role', ['source', 'target'])
+  if (!datasets || datasets.length < 2) return
+
+  const sourceSystem = datasets.find(d => d.role === 'source')?.name
+  const targetSystem = datasets.find(d => d.role === 'target')?.name
+  if (!sourceSystem || !targetSystem) return
+
+  // Check if a template exists for this system pair
+  const templateResult = await findTemplate(project.org_id, sourceSystem, targetSystem)
+  if (!templateResult.success || !templateResult.data) return
+
+  const template = templateResult.data
+
+  // Resolve the target field's signature
+  const { data: tfmRow } = await supabaseAdmin
+    .from('target_field_mappings')
+    .select('target_field_id')
+    .eq('id', tfmId)
+    .single()
+  if (!tfmRow) return
+
+  const { data: targetField } = await supabaseAdmin
+    .from('fields')
+    .select('name, data_type, is_nullable, is_foreign_key, tables!inner(name)')
+    .eq('id', tfmRow.target_field_id)
+    .single()
+  if (!targetField) return
+
+  const tables = targetField.tables as unknown as { name: string }
+  const targetSig: FieldSignature = {
+    tableName: tables.name.toLowerCase(),
+    fieldName: targetField.name.toLowerCase(),
+    dataType: targetField.data_type.toLowerCase(),
+    isNullable: targetField.is_nullable ?? true,
+    isForeignKey: targetField.is_foreign_key ?? false,
+  }
+
+  // Find the matching template entry for this target sig
+  const targetKey = sigKey(targetSig)
+  const matchingEntry = template.entries.find(e => sigKey(e.target) === targetKey)
+  if (!matchingEntry) return
+
+  // Get the template entry DB row id
+  const { data: entryRow } = await supabaseAdmin
+    .from('template_entries')
+    .select('id, source_sig, transform_sql, reuse_count, override_count')
+    .eq('template_id', template.id)
+    .filter('target_sig->>fieldName', 'eq', targetSig.fieldName)
+    .filter('target_sig->>tableName', 'eq', targetSig.tableName)
+    .maybeSingle()
+  if (!entryRow) return
+
+  // Resolve the current (human-approved) primary source field
+  const { data: primarySource } = await supabaseAdmin
+    .from('mapping_sources')
+    .select('source_field_id, ordinal')
+    .eq('target_field_mapping_id', tfmId)
+    .order('ordinal', { ascending: true })
+    .limit(1)
+    .maybeSingle()
+
+  let humanSourceSig: FieldSignature | undefined
+  let humanTransformSql: string | undefined
+
+  if (primarySource) {
+    const { data: srcField } = await supabaseAdmin
+      .from('fields')
+      .select('name, data_type, is_nullable, is_foreign_key, tables!inner(name)')
+      .eq('id', primarySource.source_field_id)
+      .single()
+
+    if (srcField) {
+      const srcTables = srcField.tables as unknown as { name: string }
+      humanSourceSig = {
+        tableName: srcTables.name.toLowerCase(),
+        fieldName: srcField.name.toLowerCase(),
+        dataType: srcField.data_type.toLowerCase(),
+        isNullable: srcField.is_nullable ?? true,
+        isForeignKey: srcField.is_foreign_key ?? false,
+      }
+    }
+
+    // Fetch the TFM's approved transform SQL if any
+    const { data: tfmFull } = await supabaseAdmin
+      .from('target_field_mappings')
+      .select('transform_sql')
+      .eq('id', tfmId)
+      .maybeSingle()
+    humanTransformSql = tfmFull?.transform_sql ?? undefined
+  }
+
+  // Determine outcome: did the human's choice match the template's suggestion?
+  const suggestedKey = sigKey(matchingEntry.source)
+  const humanKey = humanSourceSig ? sigKey(humanSourceSig) : null
+  const accepted = humanKey === suggestedKey
+
+  // Update template entry counters
+  const newReuseCount = accepted ? entryRow.reuse_count + 1 : entryRow.reuse_count
+  const newOverrideCount = accepted ? entryRow.override_count : entryRow.override_count + 1
+  const shouldSelfCorrect = !accepted && newOverrideCount > newReuseCount && humanSourceSig
+
+  if (shouldSelfCorrect && humanSourceSig) {
+    await supabaseAdmin
+      .from('template_entries')
+      .update({
+        source_sig: humanSourceSig,
+        transform_sql: humanTransformSql ?? null,
+        reuse_count: 0,
+        override_count: 0,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', entryRow.id)
+  } else {
+    await supabaseAdmin
+      .from('template_entries')
+      .update({
+        reuse_count: newReuseCount,
+        override_count: newOverrideCount,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', entryRow.id)
+  }
+
+  // Write the audit log row
+  await supabaseAdmin
+    .from('override_logs')
+    .insert({
+      org_id: project.org_id,
+      project_id: projectId,
+      template_entry_id: entryRow.id,
+      target_sig: targetSig,
+      suggested_source_sig: matchingEntry.source,
+      suggested_transform_sql: matchingEntry.transformSql,
+      human_source_sig: humanSourceSig ?? null,
+      human_transform_sql: humanTransformSql ?? null,
+      outcome: accepted ? 'accepted' : 'overridden',
+      time_on_task_ms: labelQuality?.timeOnTaskMs ?? null,
+      was_edited: labelQuality?.wasEdited ?? false,
+      approval_method: labelQuality?.approvalMethod ?? null,
+    })
+}
+
 // ─── Internal helpers ───────────────────────────────────────────────
 
 async function persistTemplate(
