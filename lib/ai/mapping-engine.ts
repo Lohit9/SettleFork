@@ -52,7 +52,7 @@ import { inferFkCandidates } from '@/lib/utils/fk-inference'
 import { runSingleAgentMappingLoop } from '@/lib/ai/single-agent-mapping'
 import { findTemplate } from '@/lib/actions/migration-templates'
 import type { MigrationTemplate } from '@/lib/validation/migration-template'
-import { interpretFieldDomains } from '@/lib/ai/field-interpreter'
+import { interpretCrossSystemSynonyms, interpretFieldDomains } from '@/lib/ai/field-interpreter'
 import { validateMappingBatch, type MappingProposal } from '@/lib/validation/mapping-validator'
 import { validateTransformSQL } from '@/lib/validation/transform-validator'
 import { runSelfCorrectionLoop } from '@/lib/validation/self-correction'
@@ -2229,6 +2229,9 @@ export async function runMappingGeneration(
 
     interpretFieldDomains(projectId, sourceTableIds, userId).catch((err) =>
       console.error('[mapping] interpretFieldDomains failed:', err),
+    )
+    interpretCrossSystemSynonyms(projectId, sourceTableIds, userId).catch((err) =>
+      console.error('[mapping] interpretCrossSystemSynonyms failed:', err),
     )
 
     // S2.3 — fetch template for this system pair (fire once, reuse per batch)
