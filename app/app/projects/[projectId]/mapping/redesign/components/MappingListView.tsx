@@ -21,6 +21,7 @@ import {
   type MappingFilterState,
 } from '@/lib/utils/mapping-filters'
 import { summarizeRationale } from '@/lib/utils/rationale-summary'
+import { formatEmptySlotRationale } from '@/lib/utils/empty-slot-rationale'
 import { Check, Edit3, X } from 'lucide-react'
 import { ActionIconButton } from './FlatRowActions'
 import { InlineSourcePicker } from './InlineSourcePicker'
@@ -1252,9 +1253,13 @@ function FlatRowView({
       </td>
       {/* Rationale — one-line summary of the row's AI reasoning or
           (for source-side acks) the ack reason. Full text on hover via
-          `title`. Em-dash when nothing to surface (includes unmapped-
-          target rows, which today don't carry coverage acknowledgment
-          reason on the wire — additive wire change is a separate PR). */}
+          `title`. PR Ω.3.7.5: unmapped-target rows (empty slots — no
+          TFM yet) fall back to a 2-tier schema label (loader-populated
+          `fields.description` → `data_type, Required|Optional`) with a
+          "· Not mapped in <partition>" suffix, styled italic + muted to
+          distinguish it from real AI rationale. Em-dash remains the
+          last-resort placeholder for any other row kind with nothing to
+          surface. */}
       <td
         data-testid="flat-cell-rationale"
         className="px-3 py-2.5 align-top text-sm text-slate-700"
@@ -1262,14 +1267,31 @@ function FlatRowView({
         {(() => {
           const raw = deriveRationaleSource(row)
           const summary = summarizeRationale(raw)
-          if (summary === null) {
-            return <span className="text-gray-300">—</span>
+          if (summary !== null) {
+            return (
+              <span title={raw ?? undefined} className="block truncate">
+                {summary}
+              </span>
+            )
           }
-          return (
-            <span title={raw ?? undefined} className="block truncate">
-              {summary}
-            </span>
-          )
+          if (row.kind === 'unmapped-target') {
+            const fallback = formatEmptySlotRationale({
+              description: row.targetField.description,
+              dataType: row.targetField.dataType,
+              isNullable: row.targetField.isNullable,
+              partitionLabel: row.parentRow.partitionLabel,
+            })
+            return (
+              <span
+                data-testid="flat-cell-rationale-empty-slot"
+                title={fallback}
+                className="block truncate italic text-slate-500"
+              >
+                {fallback}
+              </span>
+            )
+          }
+          return <span className="text-gray-300">—</span>
         })()}
       </td>
       <td
