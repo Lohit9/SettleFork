@@ -3828,7 +3828,8 @@ export async function checkFieldMappingHasTransform(
 // NOTE ON GUARDING: same pattern as `resetFieldTransform` — called exclusively
 // from guarded write paths in `mappings.ts`; no re-assertion.
 
-async function snapshotTemplate(projectId: string, orgId: string): Promise<void> {
+// SET-42: exported so markProjectComplete can call it on project completion.
+export async function snapshotTemplate(projectId: string, orgId: string): Promise<void> {
   const data = await getTransformData(projectId)
   const srcSystem = data.datasets[0]?.datasetName ?? 'unknown'
 
