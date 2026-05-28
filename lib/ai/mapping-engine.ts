@@ -2671,15 +2671,30 @@ ${otherSourcesList}
       // The LLM emits unmapped_fields with "Constant: X" / "Leave NULL" /
       // "Requires manual input" assignments. We create acknowledged TFM rows
       // so they appear in the UI for review.
+      // Guard: skip fields that already have a mapped TFM (from this batch or
+      // a prior batch) to avoid overwriting real mappings with VA rows.
       if (tm.unmapped_fields && tm.unmapped_fields.length > 0) {
         const tgtFMap = targetFieldsByTable.get(tgtTable.id) ?? new Map()
+        const mappedTargetKeys = new Set(
+          (tm.field_mappings ?? []).map(fm => bareTableName(fm.target_field)),
+        )
         for (const uf of tm.unmapped_fields) {
-          const tgtField = tgtFMap.get(bareTableName(uf.target_field))
+          const tgtKey = bareTableName(uf.target_field)
+          if (mappedTargetKeys.has(tgtKey)) continue
+          const tgtField = tgtFMap.get(tgtKey)
           if (!tgtField) continue
+          // Only INSERT if no TFM exists yet — don't overwrite a prior batch's mapping
+          const { data: existing } = await supabase
+            .from('target_field_mappings')
+            .select('id')
+            .eq('project_id', projectId)
+            .eq('target_field_id', tgtField.id)
+            .limit(1)
+          if (existing && existing.length > 0) continue
           try {
             await supabase
               .from('target_field_mappings')
-              .upsert({
+              .insert({
                 project_id: projectId,
                 target_field_id: tgtField.id,
                 table_mapping_id: insertedTM.id,
@@ -2690,7 +2705,7 @@ ${otherSourcesList}
                 combination_type: null,
                 combination_sql: null,
                 confidence: null,
-              }, { onConflict: 'project_id,target_field_id' })
+              })
           } catch (err) {
             console.warn(`[mappings] VA persist failed for ${uf.target_field}:`, err)
           }
