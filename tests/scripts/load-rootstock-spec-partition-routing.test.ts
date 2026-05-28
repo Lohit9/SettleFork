@@ -24,6 +24,7 @@ import {
   EIM_PARTITIONS,
   EIM_TARGET_TABLE,
   ICC_TARGET_TABLE,
+  NULL_PARTITION_KEY,
   routePartition,
   type RoutableEntry,
 } from '@/scripts/rootstock-partitions'
@@ -231,10 +232,14 @@ describe('[routePartition] PR6 — source acknowledgments (target=Unmapped)', ()
   })
 })
 
-// ─── PR7 — Unit of Measure → ICC target → [] (joint-keying fix) ─────────
+// ─── PR7 — ICC target → [NULL_PARTITION_KEY] (non-partitioned) ──────────
+//
+// PR Ω.3.9 reversed the Option-A skip. ICC entries now route to a
+// single non-partitioned TM. The router returns `[NULL_PARTITION_KEY]`
+// as the in-memory key for that TM (its DB `partition_label` is NULL).
 
-describe('[routePartition] PR7 — ICC target entries skipped (Option A)', () => {
-  it('returns [] for Unit of Measure → ICC target (skipped per Q4 Option A)', () => {
+describe('[routePartition] PR7 — ICC target → non-partitioned TM', () => {
+  it('routes Unit of Measure → ICC target → [NULL_PARTITION_KEY]', () => {
     const out = routePartition(
       entry({
         source_table: 'Engineering BOM Masters',
@@ -243,19 +248,19 @@ describe('[routePartition] PR7 — ICC target entries skipped (Option A)', () =>
         target_field: 'rstk__iccomcod_dfltinvuom__r external id',
       }),
     )
-    expect(out).toEqual([])
+    expect(out).toEqual([NULL_PARTITION_KEY])
   })
 
-  it('returns [] for VAs targeting ICC too (defensive — no such entries in current JSON)', () => {
+  it('routes VAs targeting ICC → [NULL_PARTITION_KEY] (per-code transformations)', () => {
     const out = routePartition(
       entry({
         source_table: 'Unmapped',
         source_field: 'Unmapped',
         target_table: ICC_TARGET_TABLE,
-        target_field: 'Some ICC Field',
+        target_field: 'COMMODITY CODE',
       }),
     )
-    expect(out).toEqual([])
+    expect(out).toEqual([NULL_PARTITION_KEY])
   })
 })
 
@@ -289,7 +294,7 @@ describe('[routePartition] PR8 — joint (source_field, target_table) keying', (
     )
     expect(eimOut).toEqual(['Engineering Components'])
 
-    // ICC target → skipped.
+    // ICC target → non-partitioned TM (PR Ω.3.9 reversal of Option A).
     const iccOut = routePartition(
       entry({
         source_table: sourceTable,
@@ -298,7 +303,7 @@ describe('[routePartition] PR8 — joint (source_field, target_table) keying', (
         target_field: 'rstk__iccomcod_dfltenguom__r external id',
       }),
     )
-    expect(iccOut).toEqual([])
+    expect(iccOut).toEqual([NULL_PARTITION_KEY])
   })
 })
 

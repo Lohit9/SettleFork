@@ -83,10 +83,14 @@ describe('[loader source-shape] LSS4 — identity_field_id wiring', () => {
     )
   })
 
-  it('Phase 6.5 emits identity_field_id onto every TM row', () => {
+  it('Phase 6.5 wires the EIM identity onto TM rows via identityFieldId', () => {
+    // PR Ω.3.9: identity_field_id is now computed per-partition
+    // (EIM uses eimIdentityResolved.fieldId; ICC uses null). Both halves
+    // of the wiring must be present.
     expect(LOADER_SRC).toMatch(
-      /identity_field_id:\s*eimIdentityResolved\.fieldId/,
+      /p\.targetTableName\s*===\s*EIM_TARGET_TABLE\s*\?\s*eimIdentityResolved\.fieldId\s*:\s*null/,
     )
+    expect(LOADER_SRC).toMatch(/identity_field_id:\s*identityFieldId/)
   })
 })
 
@@ -129,9 +133,21 @@ describe('[loader source-shape] router wiring', () => {
     expect(matches.length).toBeGreaterThanOrEqual(2)
   })
 
-  it('Phase 5 explicitly counts ICC-skipped entries for the summary printout', () => {
-    expect(LOADER_SRC).toMatch(/skippedIccCount/)
-    expect(LOADER_SRC).toMatch(/skippedIccVaCount/)
+  it('Phase 5 no longer skips ICC entries (PR Ω.3.9 reversed Option A)', () => {
+    // The skip counters and their branches were removed when ICC was
+    // promoted to a non-partitioned target table loaded alongside EIM.
+    // Anti-grep — these strings must not reappear.
+    expect(LOADER_SRC).not.toMatch(/skippedIccCount/)
+    expect(LOADER_SRC).not.toMatch(/skippedIccVaCount/)
+    expect(LOADER_SRC).not.toMatch(/ICC entries skipped/)
+  })
+
+  it('Phase 6.5 writes the ICC non-partitioned TM alongside EIM partitions', () => {
+    // ICC is a single non-partitioned TM; the writer iterates
+    // [...EIM_PARTITIONS, ICC_PARTITION] and the ai_reasoning branch
+    // distinguishes partitioned from non-partitioned text.
+    expect(LOADER_SRC).toMatch(/\[\.\.\.EIM_PARTITIONS,\s*ICC_PARTITION\]/)
+    expect(LOADER_SRC).toMatch(/\(non-partitioned\)/)
   })
 
   it('summary printout reports per-partition TFM counts (not pre-Ω.3.6 per-target)', () => {

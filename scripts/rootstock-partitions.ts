@@ -23,6 +23,26 @@ export const EIM_TARGET_TABLE = 'Engineering Item Master'
 export const ICC_TARGET_TABLE = 'Inventory Commodity Code'
 export const UNMAPPED_SENTINEL = 'Unmapped'
 
+// ─── In-memory key for partitions whose DB `partition_label` is NULL ─────
+//
+// PR Ω.3.9 — ICC's table_mapping row carries `partition_label = NULL`
+// (ICC is not partitioned). The loader's grouping keys are string
+// templates and its TM lookup map is keyed by `partition_label`, so a
+// raw `null` would interpolate as the literal "null" string and create
+// collision risk with hypothetical real labels.
+//
+// Use this stable sentinel as the IN-MEMORY key for any partition
+// whose DB column is NULL. The Phase 6.5 TM writer still writes NULL
+// to the DB; only the loader's internal Maps / group keys translate
+// NULL → this sentinel so lookups work cleanly. The sentinel is
+// deliberately unlikely to collide with any real `partition_label`.
+//
+// Single-loader assumption (Rootstock): at most one null-label TM per
+// project. If a future POC introduces two non-partitioned target
+// tables, the in-memory map would need to be re-keyed by
+// (target_table_id, partition_label) instead of just partition_label.
+export const NULL_PARTITION_KEY = '__null_partition__'
+
 // ─── Partition definitions (hardcoded; NOT derived from JSON) ────────────
 //
 // Per PR Ω.3.6 locked spec (Kaan):
@@ -45,18 +65,28 @@ export const UNMAPPED_SENTINEL = 'Unmapped'
 export const EIM_IDENTITY_TARGET_FIELD_NAME = 'Item Number'
 
 export interface RootstockPartitionDef {
-  /** partition_label — unique per (project, target_table) */
-  label: string
+  /**
+   * partition_label — unique per (project, target_table). NULL for
+   * non-partitioned target tables (PR Ω.3.9: ICC), in which case the
+   * loader uses {@link NULL_PARTITION_KEY} as its internal key.
+   */
+  label: string | null
   /** Source-table NAME (resolved to UUID at runtime). */
   sourceTableName: string
-  /** target_table_id NAME (resolved to UUID at runtime). All 3 are EIM. */
+  /** target_table_id NAME (resolved to UUID at runtime). */
   targetTableName: string
-  /** partition_ordinal — stable across re-runs. */
-  ordinal: number
+  /**
+   * partition_ordinal — stable across re-runs. NULL for
+   * non-partitioned target tables (only one TM, no ordering).
+   */
+  ordinal: number | null
   /** filter_sql — loose; dedup deferred. NULL = no filter. */
   filterSql: string | null
-  /** dedup_priority — lower wins on identity collision. */
-  dedupPriority: number
+  /**
+   * dedup_priority — lower wins on identity collision. NULL for
+   * non-partitioned target tables (no siblings to collide with).
+   */
+  dedupPriority: number | null
 }
 
 export const EIM_PARTITIONS: readonly RootstockPartitionDef[] = [
@@ -95,6 +125,31 @@ export const EIM_PARTITIONS: readonly RootstockPartitionDef[] = [
     dedupPriority: 2,
   },
 ]
+
+// ─── ICC (non-partitioned) ──────────────────────────────────────────────
+//
+// PR Ω.3.9 — Inventory Commodity Code is loaded as a single,
+// non-partitioned target table. One TM with `partition_label = NULL`
+// alongside the 3 EIM partition TMs.
+//
+// `sourceTableName` = 'Engineering BOM Masters' is a PLACEHOLDER. The
+// 3 mapped ICC entries source from `EBM.Unit of Measure`, so EBM is
+// the closest semantic match for the TM's source side today. When the
+// ICC apply RPC is wired (separate workstream), replace this with the
+// proper commodity-code source dataset (likely a dedicated ICC source
+// table — not EBM, which is a BOM file).
+//
+// `label`, `ordinal`, `dedupPriority`, identity field — all null. ICC
+// has no partition siblings, no ordering, no dedup collision, and no
+// identity contract (Ω.3.1's sibling-consistency rule does not apply).
+export const ICC_PARTITION: RootstockPartitionDef = {
+  label: null,
+  sourceTableName: 'Engineering BOM Masters',
+  targetTableName: ICC_TARGET_TABLE,
+  ordinal: null,
+  filterSql: null,
+  dedupPriority: null,
+}
 
 // Convenience lookups.
 export function getPartitionByLabel(label: string): RootstockPartitionDef {
@@ -163,14 +218,18 @@ export interface RoutableEntry {
  *
  * Return value semantics:
  *   - `[]` — entry is not partition-bound (source_ack rows where
- *     target_table='Unmapped'; OR ICC-target rows which are skipped
- *     per Q4-Option-A). The caller MUST handle these via the
- *     existing acks / skip flow; routing does not concern itself
- *     with persistence.
- *   - `[label]` — single-partition routing (mapped entry with a
- *     real source_table OR VA targeting a non-EIM table).
+ *     target_table='Unmapped' OR VAs targeting a non-EIM/ICC table).
+ *     The caller surfaces source_ack rows via the existing ack flow
+ *     and fail-louds on the latter (no JSON entry hits it today).
+ *   - `[label]` — single-partition routing (mapped entry with a real
+ *     source_table OR ICC-target entry, where label =
+ *     `NULL_PARTITION_KEY` because ICC's `partition_label` is NULL in
+ *     the DB).
  *   - `[label, label, ...]` — multi-partition replication (VA
  *     targeting EIM; shared EBM field).
+ *
+ * PR Ω.3.9: ICC entries are no longer skipped. They route to the
+ * single ICC partition (one TM with `partition_label = NULL`).
  *
  * Throws on unknown EBM source_field per Q2 (fail-loudly).
  */
@@ -181,9 +240,11 @@ export function routePartition(entry: RoutableEntry): readonly string[] {
     return []
   }
 
-  // ICC target — skipped per Q4 Option A. ICC is loaded outside Settle.
+  // ICC target — single non-partitioned TM. The DB `partition_label`
+  // is NULL; the loader keys internal maps by NULL_PARTITION_KEY so
+  // lookups stay string-typed.
   if (entry.target_table === ICC_TARGET_TABLE) {
-    return []
+    return [NULL_PARTITION_KEY]
   }
 
   // Value assignment targeting EIM: replicate across all 3 partitions.
@@ -191,7 +252,10 @@ export function routePartition(entry: RoutableEntry): readonly string[] {
   // if any are wrong for Components.)
   if (entry.source_table === UNMAPPED_SENTINEL) {
     if (entry.target_table === EIM_TARGET_TABLE) {
-      return EIM_PARTITIONS.map((p) => p.label)
+      // EIM partition labels are non-null by construction (see
+      // EIM_PARTITIONS); the `as string` narrows the widened
+      // RootstockPartitionDef.label type back to the EIM guarantee.
+      return EIM_PARTITIONS.map((p) => p.label as string)
     }
     // VA targeting a non-EIM target_table — not partitioned; surfaces
     // as a single-TM mapping using the loader's heritage path. Today
