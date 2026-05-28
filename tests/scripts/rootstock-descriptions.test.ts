@@ -43,15 +43,37 @@ describe('extractTargetFieldDescription', () => {
     expect(extractTargetFieldDescription([])).toBeNull()
   })
 
-  it('extracts the Field type prefix from a single mapped entry', () => {
+  it('extracts the prefix + body from a single mapped entry', () => {
     expect(extractTargetFieldDescription([mapped()])).toBe(
-      'Field type: Text(50), Required.',
+      'Field type: Text(50), Required. Product SKU description.',
     )
   })
 
-  it('appends the VA first paragraph after the prefix when a VA exists', () => {
+  it('mapped-only group includes the mapped body (Status field shape)', () => {
+    // Mirrors the Rootstock `Status` field: a single mapped entry with
+    // no VA sibling. Pin: the body paragraph IS included, even with no
+    // VA in the group. Pre-Ω.3.7.6 this returned the prefix sentence
+    // only, producing prefix-only descriptions on Status-like fields
+    // while VA fields rendered prefix + body — visible inconsistency
+    // on empty-slot rows.
+    const status = mapped({
+      source_table: 'Engineering BOM Masters',
+      source_field: 'Item Status Code',
+      explanation:
+        'Field type: Picklist {Active, Inactive}, Required.\n\nDrives Active/Inactive lifecycle on the Engineering Item Master.',
+      confidence: 93,
+    })
+    expect(extractTargetFieldDescription([status])).toBe(
+      'Field type: Picklist {Active, Inactive}, Required. Drives Active/Inactive lifecycle on the Engineering Item Master.',
+    )
+  })
+
+  it("uses the highest-confidence entry's body even when a lower-confidence VA exists", () => {
+    // Cross-kind: mapped (conf 90) outranks VA (conf 85), so the
+    // body tracks the mapped entry — not the VA. (Pre-Ω.3.7.6 the
+    // body was VA-locked whenever a VA existed in the group.)
     expect(extractTargetFieldDescription([mapped(), va()])).toBe(
-      'Field type: Text(50), Required. Assigns the Engineering Item Master to a division.',
+      'Field type: Text(50), Required. Product SKU description.',
     )
   })
 
@@ -66,7 +88,7 @@ describe('extractTargetFieldDescription', () => {
     expect(extractTargetFieldDescription([noPrefix])).toBeNull()
   })
 
-  it('selects the highest-confidence entry for the prefix', () => {
+  it('selects the highest-confidence entry for the prefix AND the body', () => {
     const low = mapped({
       source_field: 'A',
       explanation: 'Field type: Text(10), Required.\n\nold',
@@ -78,7 +100,7 @@ describe('extractTargetFieldDescription', () => {
       confidence: 95,
     })
     expect(extractTargetFieldDescription([low, high])).toBe(
-      'Field type: Text(80), Required.',
+      'Field type: Text(80), Required. new',
     )
   })
 
@@ -121,7 +143,7 @@ describe('extractTargetFieldDescription', () => {
         'Field type: Lookup(Inventory Commodity Code), External ID, Required.\n\nbody',
     })
     expect(extractTargetFieldDescription([entry])).toBe(
-      'Field type: Lookup(Inventory Commodity Code), External ID, Required.',
+      'Field type: Lookup(Inventory Commodity Code), External ID, Required. body',
     )
   })
 
@@ -142,9 +164,9 @@ describe('extractTargetFieldDescription', () => {
     )
   })
 
-  it('omits the VA paragraph when the VA explanation has no blank-line section', () => {
+  it('omits the body when the explanation has no blank-line section', () => {
     expect(
-      extractTargetFieldDescription([va({ explanation: 'Field type: Lookup(X), Required.' })]),
+      extractTargetFieldDescription([mapped({ explanation: 'Field type: Lookup(X), Required.' })]),
     ).toBe('Field type: Lookup(X), Required.')
   })
 
