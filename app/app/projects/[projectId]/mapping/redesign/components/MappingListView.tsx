@@ -1092,24 +1092,14 @@ function FlatRowView({
               ) : (
                 <FieldNameChip name={sourceFieldName} />
               )
-            ) : row.kind === 'unmapped-target' ? (
-              <button
-                ref={sourceCellRef}
-                type="button"
-                data-testid="flat-cell-source-field-button"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onSourceCellClick(row, e.currentTarget)
-                }}
-                className={cn(
-                  'inline-flex items-center justify-start rounded px-1 py-0.5 text-sm',
-                  'italic text-slate-400 hover:bg-blue-100/60 hover:text-slate-600',
-                  'focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500',
-                )}
-              >
-                Pick a source…
-              </button>
-            ) : row.kind === 'value-assignment' ? (
+            ) : row.kind === 'unmapped-target' || row.kind === 'value-assignment' ? (
+              // Rows with no source field on the wire share a single
+              // "Pick a source…" affordance. Both kinds open the same
+              // InlineSourcePicker on click; the server flow behind it
+              // (createMappingFromUnmapped) accepts either. The VA's
+              // "constant value" nature is conveyed by the rationale
+              // column + drawer Transform tab — no need to distinguish
+              // it with a different source-cell glyph.
               <button
                 ref={sourceCellRef}
                 type="button"
@@ -1122,11 +1112,11 @@ function FlatRowView({
                 }}
                 className={cn(
                   'inline-flex cursor-pointer items-center justify-start rounded px-1 py-0.5 text-sm',
-                  'text-gray-300 hover:bg-blue-100/60 hover:text-slate-600',
+                  'italic text-slate-400 hover:bg-blue-100/60 hover:text-slate-600',
                   'focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500',
                 )}
               >
-                —
+                Pick a source…
               </button>
             ) : (
               // Final fallback reached when `sourceFieldName` is falsy
