@@ -523,17 +523,17 @@ describe('MappingListView — action buttons per row kind', () => {
   })
 })
 
-// ─── Clickable "—" in the Source Field column ──────────────────────────────
+// ─── "Pick a source…" affordance on rows with no source ───────────────────
 //
-// feat/mapping-list-toggle-and-columns refinement pass: value-assignment
-// rows render "—" in the Source Field cell (no source is mapped — the
-// target gets a constant SQL value instead). The "—" is now CLICKABLE:
-// the same InlineSourcePicker that opens for a mapped source pill or
-// the unmapped-target "Pick a source…" affordance opens for the dash.
-// Cursor-pointer on hover signals clickability. The Source TABLE cell
-// stays non-interactive ("—" is purely informational there).
+// value-assignment + unmapped-target rows share a single "Pick a source…"
+// affordance in the merged Source cell. Both open the same
+// InlineSourcePicker on click; styling (italic text-slate-400 +
+// cursor-pointer) is uniform. The VA's "constant value" nature is
+// conveyed by the rationale column + drawer Transform tab, not by
+// distinguishing the source-cell glyph. The Source TABLE cell stays
+// non-interactive on these rows.
 
-describe('MappingListView — clickable "—" on value-assignment source field', () => {
+describe('MappingListView — value-assignment shares the "Pick a source…" affordance', () => {
   it('value-assignment renders the Source Field cell as a clickable button (not a plain span)', () => {
     const result = makeResult([makeValueAssignment()])
     render(
@@ -551,7 +551,7 @@ describe('MappingListView — clickable "—" on value-assignment source field',
     )
     expect(button).toBeInTheDocument()
     expect(button.tagName).toBe('BUTTON')
-    expect(button.textContent).toContain('—')
+    expect(button.textContent).toContain('Pick a source')
     // Cursor-pointer + hover signal clickability.
     expect(button.className).toContain('cursor-pointer')
   })
@@ -559,12 +559,12 @@ describe('MappingListView — clickable "—" on value-assignment source field',
   it('renders no separate Source TABLE label on value-assignment rows (merged Source cell only carries the field affordance)', () => {
     // feat/mapping-table-redesign — Source TABLE and Source FIELD
     // collapsed into one cell. On value-assignment rows there is no
-    // source field, so the cell holds only the clickable em-dash for
-    // picking a source. The source-table label span is conditional and
-    // does NOT render when the row has no source — the table identity
-    // is undefined until a source is picked. Preserves the prior intent
-    // (no interactive source-table affordance on VA rows) under the new
-    // merged structure.
+    // source field, so the cell holds only the clickable "Pick a
+    // source…" affordance. The source-table label span is conditional
+    // and does NOT render when the row has no source — the table
+    // identity is undefined until a source is picked. Preserves the
+    // prior intent (no interactive source-table affordance on VA rows)
+    // under the new merged structure.
     const result = makeResult([makeValueAssignment()])
     render(
       <MappingListView
@@ -576,16 +576,18 @@ describe('MappingListView — clickable "—" on value-assignment source field',
 
     const row = findRow('tfm-va-1')
     expect(within(row).queryByTestId('flat-cell-source-table')).toBeNull()
-    // The merged Source cell still surfaces the em-dash via the field
-    // affordance — verify it sits inside the source-field button, not
-    // a standalone source-table span.
+    // The merged Source cell surfaces the "Pick a source…" affordance
+    // via the field button — verify it sits inside the source-field
+    // button, not a standalone source-table span.
     const sourceCell = within(row).getByTestId('flat-cell-source')
-    expect(sourceCell.textContent).toContain('—')
+    expect(sourceCell.textContent).toContain('Pick a source')
   })
 
-  it('clicking the value-assignment "—" opens the InlineSourcePicker', async () => {
-    // Pin the affordance: same picker that opens for a populated source
-    // pill or the unmapped-target "Pick a source…" button opens here.
+  it('clicking the value-assignment "Pick a source…" button opens the InlineSourcePicker', async () => {
+    // Pin the affordance: the same InlineSourcePicker opens whether
+    // the user clicks a populated source pill, an unmapped-target
+    // empty slot, or a value-assignment row — all three render the
+    // same "Pick a source…" button on rows with no source field.
     const sourceField: SourceFieldWithState = {
       id: 'sf-new',
       name: 'NEW_SOURCE',

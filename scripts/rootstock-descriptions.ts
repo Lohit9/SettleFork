@@ -4,18 +4,24 @@
  * Rootstock loader calls this once per target field before writing to the
  * `fields` table.
  *
- * Heuristic (PR Ω.3.7.5 §3): take the prefix sentence (`Field type: X,
+ * Heuristic: take the prefix sentence (`Field type: X,
  * <Required|Optional|Conditionally Required>`) from the highest-confidence
- * entry, and — if any value-assignment entry exists in the group — append
- * its first paragraph after the blank line (VAs are target-field-focused).
- * Return null if no entry carries the prefix; the UI falls back to
- * `data_type` + required-ness rendering at that tier.
+ * entry, then append that same entry's first body paragraph (the prose
+ * after the blank line, if present). Return null if no entry carries the
+ * prefix; the UI falls back to `data_type` + required-ness rendering at
+ * that tier.
  *
- * Assumes each (target_table, target_field) group is homogeneous: either
- * all-mapped or VA-only, never both. Mixed groups do not occur in the
- * Rootstock JSON. If they ever did, combining one entry's prefix with
- * another entry's body could mismatch on field type (the prefix is taken
- * from the highest-confidence entry, the body only from a VA entry).
+ * Multi-source caveat: for a target field with multiple mapped entries
+ * (different source tables → same target), the chosen body may be
+ * source-flavored. Acceptable because every multi-source target field in
+ * the Rootstock spec (Item Number, Item Description, iccomcod external
+ * id) is mapped in every partition → never rendered as empty slots →
+ * source-flavored body is never surfaced in the fallback path.
+ *
+ * Assumes each (target_table, target_field) group is homogeneous —
+ * either all-mapped or VA-only, never both. Mixed groups do not occur
+ * in Rootstock JSON; if they ever did, prefix and body now come from
+ * the same entry, so the result is internally consistent.
  */
 
 export interface DescriptionEntry {
@@ -57,13 +63,9 @@ export function extractTargetFieldDescription(
   if (!prefixMatch) return null
   const prefix = `${prefixMatch[0]}.`
 
-  const va = entries.find((e) => e.source_table === UNMAPPED)
-  let vaText = ''
-  if (va) {
-    const parts = va.explanation.split(/\n\n+/)
-    if (parts[1]) vaText = parts[1].trim()
-  }
+  const parts = highest.explanation.split(/\n\n+/)
+  const body = parts[1] ? parts[1].trim() : ''
 
-  const result = vaText ? `${prefix} ${vaText}` : prefix
+  const result = body ? `${prefix} ${body}` : prefix
   return result.length > 0 ? result : null
 }
