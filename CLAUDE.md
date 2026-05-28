@@ -270,7 +270,7 @@ The repo uses **real merge commits, not squash**. Preserve commit history on mer
 2. From a worktree on `main`, merge the feature branch (real merge commit) and push.
 3. Propagate `main` → `dev` from a worktree on `dev`.
 
-Do not skip step 3. `dev` lagging `main` corrupts preview environments and confuses debugging.
+Do not skip step 3. `dev` lagging `main` corrupts the Vercel preview environment (which serves all branches off git state) and confuses debugging. Step 3 is a **git-only operation** — there is no separate dev Supabase project (see §8.3); the `main → dev` propagation moves no database state.
 
 ### 7.5 Pull requests
 
@@ -312,13 +312,15 @@ On merge to `main`:
 
 ### 8.3 Environments
 
-| Env        | Branch | URL          | Supabase project           |
-| ---------- | ------ | ------------ | -------------------------- |
-| Production | `main` | usesettle.ai | settle-prod                |
-| Dev        | `dev`  | dev preview  | settle-dev                 |
-| Local      | any    | localhost    | local Supabase or scratch  |
+| Env        | Branch | URL          | Supabase project              |
+| ---------- | ------ | ------------ | ----------------------------- |
+| Production | `main` | usesettle.ai | prod (`uzfbwmiskqxwixxtlmye`) |
+| Dev        | `dev`  | dev preview  | prod (same project)           |
+| Local      | any    | localhost    | local Supabase or scratch     |
 
-For RBAC behavioral verification and other risky changes, prefer a **temporary scratch Supabase project** over `dev`.
+Settle runs a **single Supabase project**. The `dev` git branch is a Vercel preview environment served against the same prod database — there is no separate `settle-dev` project, and step 3 of the three-step deploy (§7.4) moves no database state.
+
+For RBAC behavioral verification and other risky changes, prefer a **temporary scratch Supabase project** — never use prod for trial mutation runs.
 
 ---
 
