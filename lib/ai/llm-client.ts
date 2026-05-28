@@ -63,6 +63,7 @@ export type LLMFeature =
   | 'ddl_conversion'
   | 'quality_fix_options'
   | 'field_interpretation'
+  | 'field_cross_system_synonyms'
   // Phase 1 — eval harness (PR 10+).
   // Production AI entry points may receive a feature override at the
   // edge so that calls originating from the eval runner write to

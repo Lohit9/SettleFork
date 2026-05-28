@@ -40,6 +40,7 @@ import {
   ICC_TARGET_TABLE,
   routePartition,
 } from './rootstock-partitions'
+import { extractTargetFieldDescription } from './rootstock-descriptions'
 
 config({ path: resolve(process.cwd(), '.env.local') })
 
@@ -778,6 +779,90 @@ async function main(): Promise<void> {
       }
     }
     console.log(`  wipe complete (poc_template preserved if set).`)
+  }
+
+  // ── Phase 6.25: write fields.description for target fields ─────────────
+  //
+  // PR Ω.3.7.5 — populate fields.description from the JSON explanations so
+  // the Mapping UI can render a meaningful label on empty-slot rows
+  // (target_field × partition with no TFM) instead of "—". The pure
+  // extractor lives in scripts/rootstock-descriptions.ts; see that file
+  // for the heuristic and its homogeneous-group assumption.
+  //
+  // Decision D1 (gate on description IS NULL): the .is('description', null)
+  // filter guards each UPDATE at the SQL level so any future user-authored
+  // description is never overwritten — even on re-runs. Today all 694
+  // Rootstock target fields have description = NULL, so every extracted
+  // description lands on the first run.
+  //
+  // Decision D2 (positioning): runs AFTER Phase 6's --force wipe (which
+  // touches TFMs / TMs / source_acks / poc_answer_key, never the `fields`
+  // table) and BEFORE Phase 6.5 (partition TMs). Both dependencies — the
+  // parsed `entries` array and the Phase 3 name resolvers — are in scope.
+  //
+  // Decision D6 (ICC fields): descriptions populate per-field regardless
+  // of whether the field participates in a partition. ICC target fields
+  // are silently skipped only if not present in the project's target
+  // schema (resolveTarget returns null).
+  //
+  // Source-ack entries (target_table === 'Unmapped') carry no target field
+  // and are dropped before grouping.
+  const entriesByTargetField = new Map<string, EntryT[]>()
+  for (const e of entries) {
+    if (e.target_table === 'Unmapped') continue
+    const key = `${e.target_table}|${e.target_field}`
+    const arr = entriesByTargetField.get(key) ?? []
+    arr.push(e)
+    entriesByTargetField.set(key, arr)
+  }
+
+  const descriptionUpdates: Array<{ id: string; description: string }> = []
+  for (const [groupKey, group] of entriesByTargetField) {
+    const description = extractTargetFieldDescription(group)
+    if (description === null) continue
+    const [targetTable, targetField] = groupKey.split('|') as [string, string]
+    const resolved = resolveTarget(targetTable, targetField)
+    if (!resolved) continue
+    descriptionUpdates.push({ id: resolved.fieldId, description })
+  }
+
+  if (descriptionUpdates.length > 0) {
+    console.log(
+      `[load-rootstock-spec] Phase 6.25: updating up to ${descriptionUpdates.length} ` +
+        `field descriptions (skips any already non-null)...`,
+    )
+    // Per-row UPDATE with the IS NULL guard at SQL level. Chunked into
+    // small concurrent batches so 694 round-trips don't serialise.
+    const CHUNK_SIZE = 25
+    let written = 0
+    let skipped = 0
+    for (let i = 0; i < descriptionUpdates.length; i += CHUNK_SIZE) {
+      const chunk = descriptionUpdates.slice(i, i + CHUNK_SIZE)
+      const results = await Promise.all(
+        chunk.map((u) =>
+          supabase
+            .from('fields')
+            .update({ description: u.description })
+            .eq('id', u.id)
+            .is('description', null)
+            .select('id'),
+        ),
+      )
+      for (let j = 0; j < results.length; j++) {
+        const r = results[j]!
+        if (r.error) {
+          console.error(
+            `  Phase 6.25 update failed for id=${chunk[j]!.id}: ${r.error.message}`,
+          )
+          process.exit(1)
+        }
+        if (r.data && r.data.length > 0) written++
+        else skipped++
+      }
+    }
+    console.log(
+      `  wrote ${written}, skipped ${skipped} (existing description preserved)`,
+    )
   }
 
   // ── Phase 6.5: bulk UPSERT table_mappings (hardcoded EIM partitions) ───

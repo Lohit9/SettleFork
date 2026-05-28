@@ -46,3 +46,6 @@ next-env.d.ts
 
 # Prototype/whiteboard HTML artifacts — use Obsidian or Notion for docs
 *.html
+
+# Lattice task tracker (local dev state)
+.lattice/

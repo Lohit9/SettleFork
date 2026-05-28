@@ -21,6 +21,7 @@ import {
   type MappingFilterState,
 } from '@/lib/utils/mapping-filters'
 import { summarizeRationale } from '@/lib/utils/rationale-summary'
+import { formatEmptySlotRationale } from '@/lib/utils/empty-slot-rationale'
 import { Check, Edit3, X } from 'lucide-react'
 import { ActionIconButton } from './FlatRowActions'
 import { InlineSourcePicker } from './InlineSourcePicker'
@@ -340,15 +341,19 @@ interface GroupSortKeys {
 function buildSortKeys(row: FlatRow): GroupSortKeys {
   switch (row.kind) {
     case 'mapped':
-      // Multi-source rows sort by their PRIMARY source (sources[0],
-      // ordinal=0 by flatten contract) — same source the renderer
-      // shows inline on the main row and the user scans first.
+      // PR Ω.3.8 — bucket 0 (mapped) now sorts TARGET-anchored (primary)
+      // with the primary source as the tiebreaker. The data-layer collapse
+      // produces M separate mapped rows when a target field has M distinct
+      // dominant sources (e.g. `Item Number` from Assy.Item / ProductSKU /
+      // Part #). Anchoring the primary key on target ensures those M rows
+      // land consecutively under their shared target field; the source
+      // tiebreaker keeps the within-target ordering deterministic.
       return {
         bucket: 0,
         sourceTable: row.sources[0].sourceTable.name,
         sourceField: row.sources[0].sourceField.name,
-        targetTable: '',
-        targetField: '',
+        targetTable: row.targetField.targetTable.name,
+        targetField: row.targetField.name,
       }
     case 'unmapped-source':
       return {
@@ -376,12 +381,21 @@ function compareStringsAsc(a: string, b: string): number {
 
 function compareSortKeys(a: GroupSortKeys, b: GroupSortKeys): number {
   if (a.bucket !== b.bucket) return a.bucket - b.bucket
-  if (a.bucket === 2) {
-    const tt = compareStringsAsc(a.targetTable, b.targetTable)
-    if (tt !== 0) return tt
-    return compareStringsAsc(a.targetField, b.targetField)
+  if (a.bucket === 1) {
+    // Unmapped-source — source-anchored (these rows have no target).
+    const st = compareStringsAsc(a.sourceTable, b.sourceTable)
+    if (st !== 0) return st
+    return compareStringsAsc(a.sourceField, b.sourceField)
   }
-  // Buckets 0 and 1 — source-anchored.
+  // Buckets 0 (mapped) and 2 (VA + unmapped-target) — target-anchored.
+  // PR Ω.3.8 flipped bucket 0 from source-anchored to target-anchored;
+  // bucket 2 was target-anchored pre-Ω.3.8. Source is carried as a
+  // tiebreaker for bucket 0 (multi-source target fields); bucket 2
+  // rows carry empty source keys so the tiebreaker is a no-op there.
+  const tt = compareStringsAsc(a.targetTable, b.targetTable)
+  if (tt !== 0) return tt
+  const tf = compareStringsAsc(a.targetField, b.targetField)
+  if (tf !== 0) return tf
   const st = compareStringsAsc(a.sourceTable, b.sourceTable)
   if (st !== 0) return st
   return compareStringsAsc(a.sourceField, b.sourceField)
@@ -1091,24 +1105,14 @@ function FlatRowView({
               ) : (
                 <FieldNameChip name={sourceFieldName} />
               )
-            ) : row.kind === 'unmapped-target' ? (
-              <button
-                ref={sourceCellRef}
-                type="button"
-                data-testid="flat-cell-source-field-button"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onSourceCellClick(row, e.currentTarget)
-                }}
-                className={cn(
-                  'inline-flex items-center justify-start rounded px-1 py-0.5 text-sm',
-                  'italic text-slate-400 hover:bg-blue-100/60 hover:text-slate-600',
-                  'focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500',
-                )}
-              >
-                Pick a source…
-              </button>
-            ) : row.kind === 'value-assignment' ? (
+            ) : row.kind === 'unmapped-target' || row.kind === 'value-assignment' ? (
+              // Rows with no source field on the wire share a single
+              // "Pick a source…" affordance. Both kinds open the same
+              // InlineSourcePicker on click; the server flow behind it
+              // (createMappingFromUnmapped) accepts either. The VA's
+              // "constant value" nature is conveyed by the rationale
+              // column + drawer Transform tab — no need to distinguish
+              // it with a different source-cell glyph.
               <button
                 ref={sourceCellRef}
                 type="button"
@@ -1121,11 +1125,11 @@ function FlatRowView({
                 }}
                 className={cn(
                   'inline-flex cursor-pointer items-center justify-start rounded px-1 py-0.5 text-sm',
-                  'text-gray-300 hover:bg-blue-100/60 hover:text-slate-600',
+                  'italic text-slate-400 hover:bg-blue-100/60 hover:text-slate-600',
                   'focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500',
                 )}
               >
-                —
+                Pick a source…
               </button>
             ) : (
               // Final fallback reached when `sourceFieldName` is falsy
@@ -1252,9 +1256,13 @@ function FlatRowView({
       </td>
       {/* Rationale — one-line summary of the row's AI reasoning or
           (for source-side acks) the ack reason. Full text on hover via
-          `title`. Em-dash when nothing to surface (includes unmapped-
-          target rows, which today don't carry coverage acknowledgment
-          reason on the wire — additive wire change is a separate PR). */}
+          `title`. PR Ω.3.7.5: unmapped-target rows (empty slots — no
+          TFM yet) fall back to a 2-tier schema label (loader-populated
+          `fields.description` → `data_type, Required|Optional`) with a
+          "· Not mapped in <partition>" suffix, styled italic + muted to
+          distinguish it from real AI rationale. Em-dash remains the
+          last-resort placeholder for any other row kind with nothing to
+          surface. */}
       <td
         data-testid="flat-cell-rationale"
         className="px-3 py-2.5 align-top text-sm text-slate-700"
@@ -1262,14 +1270,30 @@ function FlatRowView({
         {(() => {
           const raw = deriveRationaleSource(row)
           const summary = summarizeRationale(raw)
-          if (summary === null) {
-            return <span className="text-gray-300">—</span>
+          if (summary !== null) {
+            return (
+              <span title={raw ?? undefined} className="block truncate">
+                {summary}
+              </span>
+            )
           }
-          return (
-            <span title={raw ?? undefined} className="block truncate">
-              {summary}
-            </span>
-          )
+          if (row.kind === 'unmapped-target') {
+            const fallback = formatEmptySlotRationale({
+              description: row.targetField.description,
+              dataType: row.targetField.dataType,
+              isNullable: row.targetField.isNullable,
+            })
+            return (
+              <span
+                data-testid="flat-cell-rationale-empty-slot"
+                title={fallback}
+                className="block truncate italic text-slate-500"
+              >
+                {fallback}
+              </span>
+            )
+          }
+          return <span className="text-gray-300">—</span>
         })()}
       </td>
       <td

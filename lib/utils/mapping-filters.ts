@@ -346,9 +346,15 @@ export function flatRowMatchesPartition(
   selected: ReadonlySet<string>,
 ): boolean {
   if (row.kind === 'unmapped-source') return true
-  const parentTmId = row.parentRow.tableMappingId ?? null
-  if (parentTmId === null) return true
-  return selected.has(parentTmId)
+  // PR Ω.3.8 — a row may span N partitions (`tableMappingIds[]`).
+  // The row matches when ANY of its partitions is in the selected set.
+  // Pre-Ω.3.8 fixtures may omit `tableMappingIds`; fall back to the
+  // single canonical `tableMappingId` so existing tests still pass.
+  const ids =
+    row.parentRow.tableMappingIds ??
+    (row.parentRow.tableMappingId != null ? [row.parentRow.tableMappingId] : [])
+  if (ids.length === 0) return true
+  return ids.some((id) => selected.has(id))
 }
 
 /**
