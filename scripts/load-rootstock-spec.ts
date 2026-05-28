@@ -37,7 +37,8 @@ import {
   EIM_IDENTITY_TARGET_FIELD_NAME,
   EIM_PARTITIONS,
   EIM_TARGET_TABLE,
-  ICC_TARGET_TABLE,
+  ICC_PARTITION,
+  NULL_PARTITION_KEY,
   routePartition,
 } from './rootstock-partitions'
 import { extractTargetFieldDescription } from './rootstock-descriptions'
@@ -479,35 +480,30 @@ async function main(): Promise<void> {
   // ── Phase 5: build write payloads (in-memory, no DB writes yet) ────────
   //
   // PR Ω.3.6 — PARTITION-AWARE GROUPING.
+  // PR Ω.3.9 — ICC is now loaded as a single non-partitioned target table;
+  //            the router returns [NULL_PARTITION_KEY] for ICC entries.
   //
-  // Cardinality change vs heritage:
-  //   Old: grouped by (target_table, target_field) → 1 TFM per pair,
-  //        multi-source via mapping_sources.
-  //   New: grouped by (target_table, target_field, partition_label) →
-  //        1 TFM per (pair, partition). VAs targeting EIM REPLICATE to
-  //        all 3 partitions (Q5 locked: verbatim replication; Joanna
-  //        edits per-partition post-load).
-  //
-  // ICC-target entries are SKIPPED entirely per Q4 Option A (ICC is
-  // loaded in Rootstock outside Settle). The router returns [] for them.
+  // Cardinality:
+  //   Grouped by (target_table, target_field, partition_label) →
+  //   1 TFM per (pair, partition). VAs targeting EIM REPLICATE to all
+  //   3 EIM partitions (Q5 locked). ICC entries route to a single
+  //   non-partitioned TM (partition_label NULL in DB, NULL_PARTITION_KEY
+  //   as the in-memory sentinel).
 
   // Group MAPPED entries by (target_table, target_field, partition_label).
   // Each entry routes to 1+ partition labels via routePartition().
   const mappedByTargetAndPartition = new Map<string, EntryT[]>()
-  let skippedIccCount = 0
   for (const c of classified) {
     if (c.kind !== 'mapped') continue
     const partitions = routePartition(c.entry)
     if (partitions.length === 0) {
-      // ICC entries are intentionally skipped (Option A).
-      if (c.entry.target_table === ICC_TARGET_TABLE) {
-        skippedIccCount++
-        continue
-      }
-      // Otherwise this is a bug — routePartition would have thrown.
+      // routePartition only returns [] for source-acks (handled
+      // separately) and the fail-loud non-EIM/non-ICC VA case (which
+      // doesn't reach the mapped loop). Any mapped entry landing here
+      // is a routing bug — surface loudly.
       throw new Error(
-        `[Phase 5] mapped entry returned empty partition list and ` +
-          `isn't ICC: ${JSON.stringify(c.entry)}`,
+        `[Phase 5] mapped entry returned empty partition list: ` +
+          JSON.stringify(c.entry),
       )
     }
     for (const partitionLabel of partitions) {
@@ -640,9 +636,9 @@ async function main(): Promise<void> {
 
   // Value assignments — replicate across the partitions returned by the
   // router. EIM-targeted VAs replicate to all 3 EIM partitions (Q5).
-  // Non-EIM target VAs are out of scope today; routePartition returns []
-  // and we surface a fail-loud for any unexpected case.
-  let skippedIccVaCount = 0
+  // PR Ω.3.9 — ICC VAs route to the single ICC partition. Non-EIM/non-ICC
+  // target VAs remain out of scope; routePartition returns [] and we
+  // surface a fail-loud for any unexpected case.
   for (const c of classified) {
     if (c.kind !== 'value_assignment') continue
     const e = c.entry
@@ -650,13 +646,8 @@ async function main(): Promise<void> {
     const literal = extractValueLiteral(e.transformations[0])
     const partitions = routePartition(e)
     if (partitions.length === 0) {
-      if (e.target_table === ICC_TARGET_TABLE) {
-        skippedIccVaCount++
-        continue
-      }
       throw new Error(
-        `[Phase 5] VA returned empty partition list and isn't ICC: ` +
-          JSON.stringify(e),
+        `[Phase 5] VA returned empty partition list: ` + JSON.stringify(e),
       )
     }
     for (const partitionLabel of partitions) {
@@ -712,8 +703,8 @@ async function main(): Promise<void> {
   console.log(`  TFMs (mapped, per partition): ${mappedTfmCount}`)
   console.log(`  TFMs (VA, per partition)    : ${vaTfmCount} (${literalVaCount} with combination_sql literal)`)
   console.log(`  mapping_sources rows         : ${totalMappingSources}`)
-  console.log(`  table_mappings rows (partitions): ${EIM_PARTITIONS.length} (EIM hardcoded)`)
-  console.log(`  ICC entries skipped          : ${skippedIccCount + skippedIccVaCount}`)
+  // PR Ω.3.9 — EIM_PARTITIONS.length + 1 (ICC single non-partitioned TM).
+  console.log(`  table_mappings rows         : ${EIM_PARTITIONS.length + 1} (${EIM_PARTITIONS.length} EIM partitions + 1 ICC)`)
   console.log(`  source_field_acks     : ${ackRows.length}`)
   console.log(`  schema_documents rows : 1 (poc_answer_key)`)
   console.log(`  projects.poc_template : '${POC_TEMPLATE_VALUE}'`)
@@ -865,26 +856,23 @@ async function main(): Promise<void> {
     )
   }
 
-  // ── Phase 6.5: bulk UPSERT table_mappings (hardcoded EIM partitions) ───
+  // ── Phase 6.5: bulk UPSERT table_mappings (EIM partitions + ICC) ───────
   //
-  // PR Ω.3.6 — TMs are no longer derived from observed (source, target)
-  // pairs; they're the hardcoded EIM_PARTITIONS array from
-  // scripts/rootstock-partitions.ts. Each partition carries
-  // partition_label, partition_ordinal, filter_sql, identity_field_id,
-  // and dedup_priority per the Ω.3.1 schema.
+  // PR Ω.3.6 — TMs are not derived from observed (source, target) pairs;
+  // they're hardcoded descriptors in scripts/rootstock-partitions.ts.
+  // PR Ω.3.9 — extended to include the single non-partitioned ICC TM
+  // (partition_label = NULL in the DB) alongside the 3 EIM partitions.
   //
-  // identity_field_id is resolved here (after Phase 3 name-resolution
-  // is available) for the EIM target field 'Item Number' shared by all
-  // 3 partitions (Ω.3.1 sibling-consistency contract).
+  // identity_field_id is resolved here for the EIM 'Item Number' field
+  // shared by all 3 EIM partitions (Ω.3.1 sibling-consistency contract).
+  // ICC has no identity contract → identity_field_id = NULL.
   //
-  // Idempotency: UPSERT with onConflict on the
-  // (project_id, target_table_id, partition_label) tuple — the same
-  // uniqueness Ω.3.1 enforces server-side.
-  //
-  // Note on Rootstock-only scope: this PR hardcodes EIM. If a future
-  // POC needs partitions for other target tables, extend
-  // EIM_PARTITIONS into a per-POC catalog. For Rootstock the spec
-  // exclusively targets EIM + ICC (the latter skipped per Q4 Option A).
+  // Idempotency: UPSERT with onConflict on
+  // (project_id, target_table_id, partition_label) — matches the
+  // uniqueness Ω.3.1 enforces server-side. ICC's NULL partition_label
+  // does NOT participate in conflict inference (NULL != NULL), but
+  // Phase 6 wipes table_mappings on --force and Phase 4's existing-data
+  // gate aborts non-force re-runs, so all 4 rows always INSERT fresh.
   const eimIdentityResolved = resolveTarget(
     EIM_TARGET_TABLE,
     EIM_IDENTITY_TARGET_FIELD_NAME,
@@ -896,38 +884,58 @@ async function main(): Promise<void> {
     )
     process.exit(1)
   }
-  const eimTargetTableResolved = resolveTargetTable(EIM_TARGET_TABLE)
-  if (!eimTargetTableResolved) {
-    console.error(
-      `[load-rootstock-spec] could not resolve target table "${EIM_TARGET_TABLE}".`,
-    )
-    process.exit(1)
-  }
 
-  const tmRowsToUpsert = EIM_PARTITIONS.map((p) => {
-    const sourceTableResolved = resolveSourceTable(p.sourceTableName)
-    if (!sourceTableResolved) {
+  // Resolve target_table_id for every distinct target table referenced
+  // by EIM_PARTITIONS + ICC_PARTITION. Aborts loudly if any are missing.
+  const allLoaderPartitions = [...EIM_PARTITIONS, ICC_PARTITION]
+  const targetTableIdByName = new Map<string, string>()
+  for (const p of allLoaderPartitions) {
+    if (targetTableIdByName.has(p.targetTableName)) continue
+    const resolved = resolveTargetTable(p.targetTableName)
+    if (!resolved) {
       console.error(
-        `[load-rootstock-spec] partition "${p.label}" references missing source table "${p.sourceTableName}"`,
+        `[load-rootstock-spec] could not resolve target table "${p.targetTableName}". ` +
+          `Make sure the target schema was uploaded.`,
       )
       process.exit(1)
     }
+    targetTableIdByName.set(p.targetTableName, resolved.tableId)
+  }
+
+  const tmRowsToUpsert = allLoaderPartitions.map((p) => {
+    const sourceTableResolved = resolveSourceTable(p.sourceTableName)
+    if (!sourceTableResolved) {
+      console.error(
+        `[load-rootstock-spec] partition "${p.label ?? p.targetTableName}" references missing source table "${p.sourceTableName}"`,
+      )
+      process.exit(1)
+    }
+    // identity_field_id is EIM-specific (the 'Item Number'
+    // sibling-consistency contract); ICC has no identity field.
+    const identityFieldId =
+      p.targetTableName === EIM_TARGET_TABLE ? eimIdentityResolved.fieldId : null
+    // ai_reasoning differs slightly between partitioned and
+    // non-partitioned TMs so the audit row reads correctly in either case.
+    const aiReasoning = p.label
+      ? `Seeded from Rootstock POC spec — ${p.label} partition`
+      : `Seeded from Rootstock POC spec — ${p.targetTableName} (non-partitioned)`
     return {
       project_id: projectId!,
       source_table_id: sourceTableResolved.tableId,
-      target_table_id: eimTargetTableResolved.tableId,
+      target_table_id: targetTableIdByName.get(p.targetTableName)!,
       confidence: null,
       status: 'approved' as const,
-      ai_reasoning: `Seeded from Rootstock POC spec — ${p.label} partition`,
+      ai_reasoning: aiReasoning,
       filter_sql: p.filterSql,
       partition_label: p.label,
       partition_ordinal: p.ordinal,
-      identity_field_id: eimIdentityResolved.fieldId,
+      identity_field_id: identityFieldId,
       dedup_priority: p.dedupPriority,
     }
   })
   console.log(
-    `[load-rootstock-spec] upserting ${tmRowsToUpsert.length} table_mappings (EIM partitions)...`,
+    `[load-rootstock-spec] upserting ${tmRowsToUpsert.length} table_mappings ` +
+      `(${EIM_PARTITIONS.length} EIM partitions + 1 ICC)...`,
   )
   const { error: tmUpsertErr } = await supabase
     .from('table_mappings')
@@ -948,14 +956,14 @@ async function main(): Promise<void> {
     console.error(`  table_mappings refetch failed: ${tmFetchErr.message}`)
     process.exit(1)
   }
+  // PR Ω.3.9 — ICC's TM has partition_label = NULL. Include it under
+  // NULL_PARTITION_KEY so Phase 6.75 / Phase 8 lookups (which use the
+  // sentinel as the in-memory key for ICC TFMs) find it.
+  // Single-loader assumption: at most one null-label TM per project.
   const tmIdByPartitionLabel = new Map<string, string>()
   for (const tm of allProjectTms ?? []) {
-    if (tm.partition_label) {
-      tmIdByPartitionLabel.set(
-        tm.partition_label as string,
-        tm.id as string,
-      )
-    }
+    const key = (tm.partition_label as string | null) ?? NULL_PARTITION_KEY
+    tmIdByPartitionLabel.set(key, tm.id as string)
   }
 
   // ── Phase 6.75: bind table_mapping_id onto each TfmRow ─────────────────
