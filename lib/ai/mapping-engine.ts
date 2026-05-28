@@ -313,6 +313,12 @@ export interface ClaudeTableMapping {
   confidence: number
   reasoning: string
   field_mappings: ClaudeFieldMapping[]
+  // SET-36: structured value assignments for unmapped target fields
+  unmapped_fields?: Array<{
+    target_field: string
+    assignment: string // "Constant: X" | "Leave NULL" | "Requires manual input"
+    reasoning: string
+  }>
 }
 
 export interface ClaudeResponse {
@@ -2660,6 +2666,36 @@ ${otherSourcesList}
         fieldMappings: tm.field_mappings ?? [],
         sourceTableId: srcTable.id,
       })
+
+      // SET-36: persist structured value assignments for unmapped target fields.
+      // The LLM emits unmapped_fields with "Constant: X" / "Leave NULL" /
+      // "Requires manual input" assignments. We create acknowledged TFM rows
+      // so they appear in the UI for review.
+      if (tm.unmapped_fields && tm.unmapped_fields.length > 0) {
+        const tgtFMap = targetFieldsByTable.get(tgtTable.id) ?? new Map()
+        for (const uf of tm.unmapped_fields) {
+          const tgtField = tgtFMap.get(bareTableName(uf.target_field))
+          if (!tgtField) continue
+          try {
+            await supabase
+              .from('target_field_mappings')
+              .upsert({
+                project_id: projectId,
+                target_field_id: tgtField.id,
+                table_mapping_id: insertedTM.id,
+                is_acknowledged: true,
+                acknowledgment_reason: uf.assignment,
+                ai_reasoning: uf.reasoning,
+                status: 'needs_review',
+                combination_type: null,
+                combination_sql: null,
+                confidence: null,
+              }, { onConflict: 'project_id,target_field_id' })
+          } catch (err) {
+            console.warn(`[mappings] VA persist failed for ${uf.target_field}:`, err)
+          }
+        }
+      }
 
       // Deterministic validation pass — runs on schema metadata only (no
       // profiling stats at this callsite). Issues are logged under the
