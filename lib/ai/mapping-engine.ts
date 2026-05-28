@@ -313,6 +313,12 @@ export interface ClaudeTableMapping {
   confidence: number
   reasoning: string
   field_mappings: ClaudeFieldMapping[]
+  // SET-36: structured value assignments for unmapped target fields
+  unmapped_fields?: Array<{
+    target_field: string
+    assignment: string // "Constant: X" | "Leave NULL" | "Requires manual input"
+    reasoning: string
+  }>
 }
 
 export interface ClaudeResponse {
@@ -442,7 +448,36 @@ When needs_transformation is TRUE, you MUST also emit transform_sql: a PostgreSQ
 - Numeric cast: (row_data->>'amount')::NUMERIC
 - Truncate: LEFT(row_data->>'description', 120)
 - Concat: row_data->>'first_name' || ' ' || row_data->>'last_name'
-Omit transform_sql when needs_transformation is FALSE.`
+Omit transform_sql when needs_transformation is FALSE.
+
+UNMAPPED TARGET FIELDS — VALUE ASSIGNMENTS:
+
+For target fields that have NO reasonable source field match, you MUST still include them in the output with structured value assignments. Add an "unmapped_fields" array at the table_mapping level:
+
+"unmapped_fields": [
+  {
+    "target_field": "created_at",
+    "assignment": "Constant: NOW()",
+    "reasoning": "Target requires creation timestamp; no source equivalent"
+  },
+  {
+    "target_field": "record_type",
+    "assignment": "Constant: 'MIGRATED'",
+    "reasoning": "Target enum field; migration records should be tagged"
+  },
+  {
+    "target_field": "legacy_notes",
+    "assignment": "Leave NULL",
+    "reasoning": "Optional field; no source data available"
+  }
+]
+
+Rules for unmapped_fields:
+- Use EXACTLY "Constant: <value>" for fields that should get a default (use SQL literal syntax for the value)
+- Use EXACTLY "Leave NULL" for nullable fields with no source and no sensible default
+- Use EXACTLY "Requires manual input" for NOT NULL fields with no source and no computable default
+- Do NOT use prose like "This field should be left empty" or "Not applicable" — use the exact formats above
+- Include ALL target fields that you did not map to a source field`
 
 // ─── PR 3.4a — Agent-mode system prompt ─────────────────────────────────────
 // `MAPPING_GENERATION_AGENT_SYSTEM_PROMPT` is the original prompt + the
@@ -1266,6 +1301,40 @@ ${lines}
 </template_mappings>`
 }
 
+/**
+ * SET-35 — Build FK relationship context block for cross-table disambiguation.
+ * Extracts FK references from source fields and presents them as a relationship
+ * graph so the LLM knows which source tables join via FKs.
+ */
+export function buildFKRelationshipBlock(
+  sourceFields: Array<{ name: string; table_id: string; is_foreign_key: boolean | null; fk_reference: string | null }>,
+  targetFields: Array<{ name: string; table_id: string; is_foreign_key: boolean | null; fk_reference: string | null }>,
+  sourceTableNames: Map<string, string>,
+  targetTableNames: Map<string, string>,
+): string {
+  const lines: string[] = []
+  for (const f of sourceFields) {
+    if (!f.is_foreign_key || !f.fk_reference) continue
+    const tableName = sourceTableNames.get(f.table_id)
+    if (tableName) lines.push(`  Source: ${tableName}.${f.name} → ${f.fk_reference}`)
+  }
+  for (const f of targetFields) {
+    if (!f.is_foreign_key || !f.fk_reference) continue
+    const tableName = targetTableNames.get(f.table_id)
+    if (tableName) lines.push(`  Target: ${tableName}.${f.name} → ${f.fk_reference}`)
+  }
+  if (lines.length === 0) return ''
+  return `<fk_relationships>
+Foreign key relationships detected:
+${lines.join('\n')}
+
+CROSS-TABLE DISAMBIGUATION:
+- If a source field is an FK referencing a target table, that source field is a REFERENCE KEY — it points to data in the target, it does not own the data. Prefer mapping target entity fields (like "Item Number", "Item Description") to the source table that holds the PRIMARY/business data for those fields, not the table that merely references them via FK.
+- When two source tables have similar field names, the table WITHOUT an FK to the target is more likely the entity-data owner. The table WITH an FK is a child/component table referencing the entity.
+- Example: If BOM Masters.Assy Item is FK→Engineering Item Master.Item Number, then BOM Masters is a child table. A target field "Item Number" should map from Products.ProductSKU (the entity data), not BOM Masters.Assy Item (the FK reference).
+</fk_relationships>`
+}
+
 export function buildMappingUserMessage(args: {
   sourceSection: string
   targetSection: string
@@ -1273,12 +1342,13 @@ export function buildMappingUserMessage(args: {
   intelligenceCtx: string | null
   otherSourcesBlock?: string | null
   templateBlock?: string | null
+  fkBlock?: string | null
 }): string {
-  const { sourceSection, targetSection, docBlock, intelligenceCtx, otherSourcesBlock, templateBlock } = args
+  const { sourceSection, targetSection, docBlock, intelligenceCtx, otherSourcesBlock, templateBlock, fkBlock } = args
   return `${sourceSection}
 ${targetSection}
 ${docBlock}
-${intelligenceCtx ? intelligenceCtx + '\n\n' : ''}${templateBlock ? templateBlock + '\n\n' : ''}${otherSourcesBlock ? otherSourcesBlock + '\n\n' : ''}Generate source-to-target mappings. Respond with this exact JSON structure.
+${intelligenceCtx ? intelligenceCtx + '\n\n' : ''}${templateBlock ? templateBlock + '\n\n' : ''}${fkBlock ? fkBlock + '\n\n' : ''}${otherSourcesBlock ? otherSourcesBlock + '\n\n' : ''}Generate source-to-target mappings. Respond with this exact JSON structure.
 
 CRITICAL RULES FOR THE JSON:
 - "source_table" must be ONLY the table name (e.g., "prices") — NOT the qualified name (NOT "trux.prices")
@@ -1314,12 +1384,24 @@ CRITICAL RULES FOR THE JSON:
             "contributing_source_fields": ["contact_last"],
             "combination_hint": "Concatenate first and last name with space separator"
           }
+        ],
+        "unmapped_fields": [
+          {
+            "target_field": "CREATED_AT",
+            "assignment": "Constant: NOW()",
+            "reasoning": "Target requires creation timestamp; no source equivalent"
+          },
+          {
+            "target_field": "LEGACY_ID",
+            "assignment": "Leave NULL",
+            "reasoning": "Optional field; no source data available"
+          }
         ]
     }
   ]
 }
 
-Map ALL source fields to their best target match. If a source field has no reasonable target match, omit it.`
+Map ALL source fields to their best target match. If a source field has no reasonable target match, omit it. For every target field you did NOT map, include it in the unmapped_fields array with a structured assignment.`
 }
 
 // ─── Pure assembly ───────────────────────────────────────────────────
@@ -2245,6 +2327,10 @@ export async function runMappingGeneration(
         ...(phase3Enabled && { maxSourceSampleValues: 50, maxTargetSampleValues: 30 }),
       },
       userId,
+      // Pass the caller's client so buildAIContext skips cookies()-based
+      // auth. Matches the eval-runner injection pattern (PR 10.4).
+      // reason: SupabaseClient generic params differ from createClient return
+      supabase as any, // eslint-disable-line @typescript-eslint/no-explicit-any
     )
 
     interpretFieldDomains(projectId, sourceTableIds, userId).catch((err) =>
@@ -2293,6 +2379,30 @@ export async function runMappingGeneration(
       (sourceTables ?? []).map((t) => [t.name.toLowerCase(), t]),
     )
 
+    // SET-35 — FK context block (computed once, reused per batch)
+    const sourceTableNameById = new Map(
+      (sourceTables ?? []).map((t) => [t.id, t.name]),
+    )
+    const targetTableNameById = new Map(
+      (targetTables ?? []).map((t) => [t.id, t.name]),
+    )
+    const fkBlock = buildFKRelationshipBlock(
+      (sourceFields ?? []).map(f => ({
+        name: f.name,
+        table_id: f.table_id,
+        is_foreign_key: f.is_foreign_key,
+        fk_reference: f.fk_reference,
+      })),
+      (targetFields ?? []).map(f => ({
+        name: f.name,
+        table_id: f.table_id,
+        is_foreign_key: f.is_foreign_key ?? false,
+        fk_reference: f.fk_reference ?? null,
+      })),
+      sourceTableNameById,
+      targetTableNameById,
+    ) || null
+
     // Streaming + 32k token budget per batch (May 2026 incident).
     // Pre-incident: 16000, set when mapping_generate ran non-streaming.
     // Bumped to 32000 because (a) streaming responses for projects with
@@ -2336,6 +2446,7 @@ ${otherSourcesList}
         intelligenceCtx: aiCtx.intelligence_context ?? null,
         otherSourcesBlock,
         templateBlock: template ? buildTemplateBlock(template, sourceCtx.table_name) : null,
+        fkBlock: fkBlock || null,
       })
 
       // PR 12 H1: when AI_PHASE_2_ENABLED=1 the engine forces a tool
@@ -2567,6 +2678,51 @@ ${otherSourcesList}
         fieldMappings: tm.field_mappings ?? [],
         sourceTableId: srcTable.id,
       })
+
+      // SET-36: persist structured value assignments for unmapped target fields.
+      // The LLM emits unmapped_fields with "Constant: X" / "Leave NULL" /
+      // "Requires manual input" assignments. We create acknowledged TFM rows
+      // so they appear in the UI for review.
+      // Guard: skip fields that already have a mapped TFM (from this batch or
+      // a prior batch) to avoid overwriting real mappings with VA rows.
+      if (tm.unmapped_fields && tm.unmapped_fields.length > 0) {
+        const tgtFMap = targetFieldsByTable.get(tgtTable.id) ?? new Map()
+        const mappedTargetKeys = new Set(
+          (tm.field_mappings ?? []).map(fm => bareTableName(fm.target_field)),
+        )
+        for (const uf of tm.unmapped_fields) {
+          const tgtKey = bareTableName(uf.target_field)
+          if (mappedTargetKeys.has(tgtKey)) continue
+          const tgtField = tgtFMap.get(tgtKey)
+          if (!tgtField) continue
+          // Only INSERT if no TFM exists yet — don't overwrite a prior batch's mapping
+          const { data: existing } = await supabase
+            .from('target_field_mappings')
+            .select('id')
+            .eq('project_id', projectId)
+            .eq('target_field_id', tgtField.id)
+            .limit(1)
+          if (existing && existing.length > 0) continue
+          try {
+            await supabase
+              .from('target_field_mappings')
+              .insert({
+                project_id: projectId,
+                target_field_id: tgtField.id,
+                table_mapping_id: insertedTM.id,
+                is_acknowledged: true,
+                acknowledgment_reason: uf.assignment,
+                ai_reasoning: uf.reasoning,
+                status: 'needs_review',
+                combination_type: null,
+                combination_sql: null,
+                confidence: null,
+              })
+          } catch (err) {
+            console.warn(`[mappings] VA persist failed for ${uf.target_field}:`, err)
+          }
+        }
+      }
 
       // Deterministic validation pass — runs on schema metadata only (no
       // profiling stats at this callsite). Issues are logged under the

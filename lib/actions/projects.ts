@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { createClient } from '@/lib/supabase/server'
 import { Project, Dataset, ProjectWithDatasets, ProjectWithStats } from '@/lib/types/database'
 import { extractMigrationIntelligence } from '@/lib/actions/migration-intelligence'
+import { snapshotTemplate } from '@/lib/actions/transformations'
 import { logActivity } from '@/lib/actions/activity-log'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getProjectsWithStatsInternal } from '@/lib/actions/_projects-core'
@@ -269,6 +270,23 @@ export async function markProjectComplete(projectId: string): Promise<{ success:
     })
   } catch (err) {
     console.error('Migration intelligence extraction failed (non-critical):', err)
+  }
+
+  // SET-42: snapshot approved mappings into the template flywheel so the
+  // next migration on the same system pair starts with these as priors.
+  try {
+    const { data: proj } = await supabase
+      .from('projects')
+      .select('org_id')
+      .eq('id', projectId)
+      .single()
+    if (proj?.org_id) {
+      snapshotTemplate(projectId, proj.org_id).catch((err) => {
+        console.error('[templates] snapshotTemplate on completion failed (non-critical):', err)
+      })
+    }
+  } catch (err) {
+    console.error('[templates] snapshotTemplate on completion failed (non-critical):', err)
   }
 
   return result
