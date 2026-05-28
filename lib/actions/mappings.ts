@@ -4,14 +4,10 @@
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
-import { runPathDMapping } from '@/lib/ai/path-d-mapping'
-import { checkPathDPreconditions } from '@/lib/ai/path-d-preconditions'
 import { requireProjectPermission } from '@/lib/actions/role-resolution'
 import { callLLM, callLLMStreaming, type LLMFeature } from '@/lib/ai/llm-client'
 import { withProvenanceGuidance } from '@/lib/ai/agent-provenance-guidance'
-// PR 3.4cd — single-agent + multi-agent pipeline helpers.
 import { runSingleAgentMappingLoop } from '@/lib/ai/single-agent-mapping'
-import { runMultiAgentMappingPipeline } from '@/lib/ai/multi-agent-orchestrator'
 import {
   EMIT_TABLE_MAPPINGS_TOOL,
   EMIT_FIELD_MAPPINGS_TOOL,
@@ -211,8 +207,6 @@ export async function runMappingGenerationForPair(args: {
     // heritage flag-OFF byte-identical behavior. Flag-ON: aiCtx uses
     // per-role sample bumps + the gate routes through runAgentLoop.
     const phase3Enabled = process.env.AI_PHASE_3_ENABLED === '1'
-    // PR 3.4cd — second-level gate (multi-agent pipeline).
-    const multiAgentEnabled = process.env.AI_PHASE_3_MULTI_AGENT_ENABLED === '1'
 
     const aiCtx = await buildAIContext(
       projectId,
@@ -326,43 +320,12 @@ export async function runMappingGenerationForPair(args: {
     const phase2Enabled = process.env.AI_PHASE_2_ENABLED === '1'
     let primaryResult: Awaited<ReturnType<typeof callLLM>>
     if (phase3Enabled) {
-      // PR 3.4cd — two-level gate. Multi-agent pipeline opt-in via
-      // AI_PHASE_3_MULTI_AGENT_ENABLED=1; otherwise PR 3.4b single-agent
-      // path (extracted to runSingleAgentMappingLoop helper, byte-equivalent).
       const baseMetadata = {
         source_table_id: sourceTableId,
         target_table_id: targetTableId,
         table_mapping_id: tableMappingId,
       }
-      if (multiAgentEnabled) {
-        // PR 3.4cd multi-agent pipeline (commit 2 SHELL — see
-        // multi-agent-orchestrator.ts; voting + telemetry in commit 3).
-        // Single-pair specifics: no other_source_tables block (it's a
-        // single pair); no cacheControl (LOCK #4 / PR 13.1 audit posture).
-        const unmappedTargetFieldNames = (targetFields ?? [])
-          .filter((f) => f.table_id === targetTableId)
-          .map((f) => f.name)
-        const r = await runMultiAgentMappingPipeline({
-          supabase,
-          projectId,
-          userId,
-          feature: featureOverride ?? 'mapping_generate_legacy_pair',
-          baseUserMessage: userMessage,
-          schemaOverviewBlock,
-          businessContext,
-          maxTokens: PER_BATCH_MAX_TOKENS,
-          baseMetadata: { ...baseMetadata, multi_agent: true },
-          cacheControl: false,
-          unmappedTargetFields: unmappedTargetFieldNames,
-        })
-        if (r.kind === 'pair_aborted') {
-          const msg = `Multi-agent pair aborted: ${r.reason} — ${r.message}`
-          console.error(`[Mapping] ${msg}`)
-          return { inserted: 0, error: msg }
-        }
-        primaryResult = r.result
-      } else {
-        // PR 3.4b single-agent path — extracted to helper, byte-equivalent.
+      {
         const r = await runSingleAgentMappingLoop({
           supabase,
           projectId,
@@ -613,53 +576,6 @@ export async function generateMappings(
         success: false,
         error: staticResult.error,
         errorCode: 'VALIDATION',
-      }
-    }
-
-    // ── Path D flag gate (Sub-PR 4b — orchestrator wired) ──────────────────
-    // When AI_MAPPING_PATH_D_ENABLED='1', Path D handles the BULK entry point
-    // via the monolithic Opus 4.7 streaming pipeline (`runPathDMapping`).
-    // Threshold check + ProjectTooLargeError stay in place from Sub-PR 4a.
-    // Flag-OFF (default) preserves Path B behavior unchanged — the Heritage
-    // Capture D test verifies this byte-identical guarantee.
-    //
-    // Sub-PR 5: the inline flag + threshold check has been extracted to
-    // `checkPathDPreconditions` so the new SSE route handler can share
-    // the exact same precondition contract. FLAG_OFF here falls through
-    // to the Path B branch below (preserving the historical behaviour
-    // where flag-unset means "use Path B"); only OVER_THRESHOLD is
-    // surfaced as a user-visible error.
-    const pathDPre = await checkPathDPreconditions({
-      targetTableIds,
-      admin: supabaseAdmin,
-    })
-    if (pathDPre.ok === false && pathDPre.code === 'OVER_THRESHOLD') {
-      return {
-        success: false,
-        error: pathDPre.error,
-        errorCode: 'VALIDATION',
-      }
-    }
-    if (pathDPre.ok === true) {
-      const pathDResult = await runPathDMapping({
-        projectId,
-        userId: user.id,
-        sourceTableIds,
-        targetTableIds,
-      })
-      if (!pathDResult.success) {
-        // COST_CEILING surfaces as VALIDATION so the UI shows the message
-        // verbatim rather than the generic 5xx-style INTERNAL banner.
-        return {
-          success: false,
-          error: pathDResult.error,
-          errorCode: pathDResult.errorCode === 'COST_CEILING' ? 'VALIDATION' : 'INTERNAL',
-        }
-      }
-      return {
-        success: true,
-        generated: pathDResult.tfmCount,
-        message: `Path D run complete (${pathDResult.runId})`,
       }
     }
 
