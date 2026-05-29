@@ -232,6 +232,12 @@ function makeMutations(): MappingListMutations & {
     isMergePending: false,
     confirmPendingMerge: vi.fn().mockResolvedValue(success),
     cancelPendingMerge: vi.fn(),
+    pendingDisambiguation: null,
+    isDisambiguationPending: false,
+    openPendingDisambiguation: vi.fn(),
+    confirmDisambiguatedCreate: vi.fn().mockResolvedValue(success),
+    confirmDisambiguatedReplace: vi.fn().mockResolvedValue(success),
+    cancelPendingDisambiguation: vi.fn(),
   }
 }
 

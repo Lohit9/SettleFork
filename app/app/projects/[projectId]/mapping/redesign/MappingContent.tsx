@@ -72,6 +72,7 @@ import { MappingSummaryStrip } from './components/MappingSummaryStrip'
 // source-field counts live on the summary chip now.
 import { RejectConfirmPopover } from './components/RejectConfirmPopover'
 import { MergeTargetDialog } from './components/MergeTargetDialog'
+import { SourceDisambiguationDialog } from './components/SourceDisambiguationDialog'
 import { ViewModeToggle } from './components/ViewModeToggle'
 import { MappingListView } from './components/MappingListView'
 import { useMappingListMutations } from './hooks/useMappingListMutations'
@@ -777,7 +778,32 @@ function MappingContentLoaded({
     [filters, drawerRowId, writeUrl],
   )
 
-  const mutations = useMappingListMutations({ projectId })
+  // PR Ω.3.x.1 — pre-build cross-table intercept lookups for the hook.
+  // The hook runs the intercept inside its `promoteUnmappedSource` and
+  // `editMappingSources` methods, so every entry point (flat-view target
+  // picker, drawer "Add source", drawer "Pick a target") is protected
+  // without the host having to wrap each call. Maps are memoised on
+  // `data.rows` / `data.sourceFields` identity — they re-build only on
+  // a fresh server-component refresh, never on local UI state changes.
+  const mutationLookups = useMemo(() => {
+    const rowsByTargetFieldId = new Map<string, (typeof data.rows)[number]>()
+    const mappedRowsByTfmId = new Map<string, (typeof data.rows)[number]>()
+    for (const row of data.rows) {
+      rowsByTargetFieldId.set(row.targetField.id, row)
+      if (row.kind === 'mapped') mappedRowsByTfmId.set(row.id, row)
+    }
+    const sourceFieldsById = new Map<
+      string,
+      (typeof data.sourceFields)[number]
+    >()
+    for (const sf of data.sourceFields) sourceFieldsById.set(sf.id, sf)
+    return { rowsByTargetFieldId, mappedRowsByTfmId, sourceFieldsById }
+  }, [data.rows, data.sourceFields])
+
+  const mutations = useMappingListMutations({
+    projectId,
+    lookups: mutationLookups,
+  })
 
   // Drawer redesign PR 1 — universe of target fields for the drawer
   // header's inline target-field picker. Mirrors `MappingListView`'s
@@ -1434,6 +1460,13 @@ function MappingContentLoaded({
   // the `pendingDrawerRowId` sentinel, no parallel path.
   const handlePromoteSource = useCallback(
     async (sourceFieldId: string, targetFieldId: string) => {
+      // PR Ω.3.x.1 — cross-table intercept now lives inside
+      // `mutations.promoteUnmappedSource` so the flat view's target
+      // picker (`MappingListView.handleTargetPickerCommit`) is covered
+      // alongside this drawer entry point. On intercept the hook parks
+      // the popup and returns `{ success: true }` with no `tfmId` —
+      // we skip the drawer re-point in that branch (the disambiguation
+      // dialog drives the next step).
       const result = await mutations.promoteUnmappedSource({
         sourceFieldId,
         targetFieldId,
@@ -1924,6 +1957,54 @@ function MappingContentLoaded({
       // but defense-in-depth: an empty selection cannot be persisted.
       if (finalIds.length === 0) return { success: false }
 
+      // ── PR Ω.3.x.1 — cross-table disambiguation intercept ───────────
+      // Same-source-table additions short-circuit to the silent-combine
+      // path below (`editMappingSources` with `concat_space`). Cross-
+      // source-table additions park the disambiguation popup; the picker
+      // closes (return success: true) so the dialog has a clean surface.
+      //
+      // Only mapped rows can reach the intercept — unmapped rows have no
+      // existing mapping to disambiguate against, so the server-side
+      // `allowCrossTable` guard handles cross-table commits at the
+      // wrapper layer instead. Same-source-table commits and removal-
+      // only edits flow unchanged.
+      if (row.kind === 'mapped') {
+        const existingSourceFieldIds = new Set(
+          row.sources.map((s) => s.sourceField.id),
+        )
+        const existingTableIds = new Set(
+          row.sources.map((s) => s.sourceTable.id),
+        )
+        const newSourceFieldIds = finalIds.filter(
+          (id) => !existingSourceFieldIds.has(id),
+        )
+        const newCrossTableSource = newSourceFieldIds
+          .map((id) => data.sourceFields.find((f) => f.id === id))
+          .find(
+            (sf) =>
+              sf !== undefined && !existingTableIds.has(sf.sourceTable.id),
+          )
+        if (newCrossTableSource !== undefined) {
+          mutations.openPendingDisambiguation({
+            rowId,
+            existingTfmId: row.id,
+            targetFieldId: row.targetField.id,
+            targetFieldName: row.targetField.name,
+            existingSources: row.sources.map((s) => ({
+              id: s.id,
+              sourceFieldName: s.sourceField.name,
+              sourceTableName: s.sourceTable.name,
+            })),
+            incomingSource: {
+              sourceFieldId: newCrossTableSource.id,
+              sourceFieldName: newCrossTableSource.name,
+              sourceTableName: newCrossTableSource.sourceTable.name,
+            },
+          })
+          return { success: true }
+        }
+      }
+
       setOptimistic(rowId, 'mapping')
 
       const isMulti = finalIds.length > 1
@@ -2017,7 +2098,16 @@ function MappingContentLoaded({
       setTimeout(() => clearOptimistic(rowId), 200)
       return { success: true }
     },
-    [data.rows, projectId, setOptimistic, clearOptimistic, pushToast, router],
+    [
+      data.rows,
+      data.sourceFields,
+      mutations,
+      projectId,
+      setOptimistic,
+      clearOptimistic,
+      pushToast,
+      router,
+    ],
   )
 
   const handleDrawerActionComplete = useCallback(
@@ -2575,6 +2665,23 @@ function MappingContentLoaded({
         isPending={mutations.isMergePending}
         onConfirm={mutations.confirmPendingMerge}
         onCancel={mutations.cancelPendingMerge}
+      />
+
+      {/*
+        PR Ω.3.x.1 — cross-source-table disambiguation. Single global
+        instance driven by `mutations.pendingDisambiguation`, parked by
+        the cross-table intercepts in `handleInlineSourceCommit` (inline
+        picker + drawer multi-source editor) and `handlePromoteSource`
+        (drawer "Pick a target"). Same-source-table additions never
+        reach this dialog — they short-circuit to silent combine via
+        `editMappingSources`.
+      */}
+      <SourceDisambiguationDialog
+        pending={mutations.pendingDisambiguation}
+        isPending={mutations.isDisambiguationPending}
+        onCreateSeparate={mutations.confirmDisambiguatedCreate}
+        onReplace={mutations.confirmDisambiguatedReplace}
+        onCancel={mutations.cancelPendingDisambiguation}
       />
 
       {/*
