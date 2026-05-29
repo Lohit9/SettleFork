@@ -81,7 +81,7 @@ import { requireProjectPermission } from '@/lib/actions/role-resolution'
 import { assertMappingWritesEnabled } from '@/lib/auth/mapping-writes'
 import { removeAcknowledgment } from '@/lib/actions/field-acknowledgments'
 import { resetFieldTransform } from '@/lib/actions/transformations'
-import { regenerateTfmMetadata } from '@/lib/actions/tfm-regenerate'
+import { regenerateTfmMetadata, type TfmRegenerateTrigger } from '@/lib/actions/tfm-regenerate'
 import { resolveSiblingTfms } from '@/lib/actions/tfm-sibling-resolution'
 import { runMappingSuggestion } from '@/lib/ai/mapping-engine'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
@@ -798,6 +798,37 @@ export async function createFieldMapping(input: {
    * value is ignored. May be re-instated in Cycle 2 under the new owning-TM rule.
    */
   joinAnnotations?: Record<string, string>
+  /**
+   * PR Ω.3.x.1 — manual multi-source disambiguation gate. Default false:
+   * if `sourceFieldIds` spans two or more source tables, the wrapper rejects
+   * with VALIDATION before any DB write. The disambiguation popup
+   * (`SourceDisambiguationDialog`) is the only caller authorised to pass
+   * `true`, and only after the user explicitly confirms "Create separate"
+   * (which produces a single-source TFM) or "Replace existing" (same). The
+   * "Combine" option remains greyed in the popup because cross-table JOIN
+   * inference is not wired (per Cycle 1).
+   */
+  allowCrossTable?: boolean
+  /**
+   * PR Ω.3.x.1 — when set, the new TFM is bound to this partition. Required
+   * for multi-partition projects where the (source_table, target_table) pair
+   * resolves to ≥ 2 `table_mappings` rows. When omitted (heritage path), the
+   * wrapper falls back to the deterministic canonical partition:
+   * `partition_ordinal ASC NULLS LAST, created_at ASC, id ASC`. Matches the
+   * assembler's canonical ordering in `lib/ai/mapping-engine.ts`.
+   */
+  tableMappingId?: string
+  /**
+   * PR Ω.3.x.1 — opt-in regenerate trigger. When set, fires
+   * `regenerateTfmMetadata` (pilot-gated) at the end of the action so the
+   * new TFM lands with fresh `ai_reasoning` / `transformation_intent` /
+   * `confidence`. The popup paths pass `'create_disambiguated'`. Callers
+   * that wrap this action (notably `createMappingFromUnmapped`) leave this
+   * undefined and fire their own regenerate after the delegate — avoids
+   * a duplicate per-gesture LLM call. AI Suggest commits also omit it: the
+   * AI just produced the suggestion, so a fresh regenerate is wasted work.
+   */
+  regenerateTrigger?: TfmRegenerateTrigger
 }): Promise<CreateFieldMappingResult> {
   // ── Step 1: validation (cheap, before any I/O) ────────────────────────────
   const {
@@ -809,6 +840,9 @@ export async function createFieldMapping(input: {
     confidence,
     aiReasoning = null,
     joinAnnotations = {},
+    allowCrossTable = false,
+    tableMappingId: explicitTableMappingId,
+    regenerateTrigger,
   } = input
 
   if (!projectId || !targetFieldId) {
@@ -1051,12 +1085,97 @@ export async function createFieldMapping(input: {
   const sourceTableId = anchorTableId
   const uniqueSourceTableIds = new Set(orderedSources.map((s) => s.table_id))
 
+  // ── Step 5c: cross-source-table hard guard (PR Ω.3.x.1) ──────────────────
+  // The disambiguation popup is the ONLY surface authorised to commit a
+  // cross-source-table mapping (and only via "Create separate" or
+  // "Replace existing", both of which collapse to a single source).
+  // Any other call site landing here with multi-table sources is either
+  // (a) a UI bug that forgot to route through the popup, or (b) a direct
+  // server-action call bypassing the gate. Reject before any DB write.
+  if (!allowCrossTable && uniqueSourceTableIds.size > 1) {
+    return {
+      success: false,
+      error:
+        'Sources span multiple source tables. Use the disambiguation flow to commit ' +
+        'a cross-table mapping.',
+      errorCode: 'VALIDATION',
+    }
+  }
+
+  // ── Step 5d: anchor table_mapping resolution (PR Ω.3.x.1) ────────────────
+  // Resolve the anchor `table_mapping_id` BEFORE the collision check so we
+  // can filter by it (post-migration-107 the unique constraint is on
+  // (project_id, target_field_id, table_mapping_id) — a per-target-field
+  // check would falsely block creates in multi-partition projects). Three
+  // cases:
+  //   1. Caller supplied `tableMappingId` (popup path with a partition
+  //      selector in v2; v1 leaves this unset) — validate it points at the
+  //      anchor source table + the target table.
+  //   2. Heritage / single-partition — `findOrCreateTableMapping` returns
+  //      the lone TM for the anchor pair.
+  //   3. Multi-partition — `findOrCreateTableMapping` picks the canonical
+  //      default partition (`partition_ordinal ASC NULLS LAST, created_at,
+  //      id`), matching `lib/ai/mapping-engine.ts`'s assembler ordering.
+  //      Documenting the fallback here since v1 ships without a partition
+  //      selector UI (deferred per spec).
+  let tableMappingId: string | null = null
+  if (explicitTableMappingId) {
+    const { data: explicit, error: explicitErr } = await supabaseAdmin
+      .from('table_mappings')
+      .select('id, source_table_id, target_table_id, project_id')
+      .eq('id', explicitTableMappingId)
+      .maybeSingle<{
+        id: string
+        source_table_id: string
+        target_table_id: string
+        project_id: string
+      }>()
+    if (explicitErr || !explicit) {
+      return {
+        success: false,
+        error: 'Specified partition not found',
+        errorCode: 'NOT_FOUND',
+      }
+    }
+    if (
+      explicit.project_id !== projectId ||
+      explicit.source_table_id !== anchorTableId ||
+      explicit.target_table_id !== targetField.table_id
+    ) {
+      return {
+        success: false,
+        error: 'Specified partition does not match the requested mapping',
+        errorCode: 'VALIDATION',
+      }
+    }
+    tableMappingId = explicit.id
+  } else {
+    const anchorTmResult = await findOrCreateTableMapping(
+      projectId,
+      anchorTableId,
+      targetField.table_id,
+    )
+    if (!anchorTmResult.success) {
+      return {
+        success: false,
+        error: anchorTmResult.error,
+        errorCode: 'INTERNAL',
+      }
+    }
+    tableMappingId = anchorTmResult.id
+  }
+
   // ── Step 6: existing-TFM collision check ─────────────────────────────────
+  // PR Ω.3.x.1 — scoped to the resolved partition. Post-migration-107 the
+  // unique constraint is `(project_id, target_field_id, table_mapping_id)`,
+  // so a partition-blind check would falsely block the second TFM on a
+  // multi-partition target.
   const { data: existingTfm } = await supabaseAdmin
     .from('target_field_mappings')
     .select('id, status, is_acknowledged, combination_type')
     .eq('project_id', projectId)
     .eq('target_field_id', targetFieldId)
+    .eq('table_mapping_id', tableMappingId)
     .maybeSingle()
 
   if (existingTfm) {
@@ -1099,15 +1218,17 @@ export async function createFieldMapping(input: {
     // unique constraint if so — surface as INTERNAL.
   }
 
-  // ── Step 7: find-or-create table mapping(s) ──────────────────────────────
-  // Block 4 — fan out across every distinct source-table id in the new
-  // sources. The anchor TM (first source's table → target table) is
-  // returned to the caller as `tableMappingId` for backward-compat with
-  // existing call sites that expect a single id. Non-anchor TMs are
-  // created best-effort; a failure on any one short-circuits with
-  // INTERNAL, matching the single-TM path's failure mode.
-  let tableMappingId: string | null = null
+  // ── Step 7: find-or-create non-anchor table mapping(s) ───────────────────
+  // Block 4 — fan out across the NON-anchor source tables (the anchor TM
+  // is already resolved in Step 5d). Non-anchor TMs are created best-effort;
+  // a failure on any one short-circuits with INTERNAL, matching the
+  // single-TM path's failure mode. The cross-table guard in Step 5c already
+  // proves this loop runs at most once when reached via the popup's
+  // confirmed cross-table path (and v1 popup paths always produce a single
+  // source, so `uniqueSourceTableIds.size === 1` in practice — the loop is
+  // a no-op).
   for (const sourceTableIdInLoop of uniqueSourceTableIds) {
+    if (sourceTableIdInLoop === sourceTableId) continue
     const tmLoopResult = await findOrCreateTableMapping(
       projectId,
       sourceTableIdInLoop,
@@ -1119,20 +1240,6 @@ export async function createFieldMapping(input: {
         error: tmLoopResult.error,
         errorCode: 'INTERNAL',
       }
-    }
-    if (sourceTableIdInLoop === sourceTableId) {
-      tableMappingId = tmLoopResult.id
-    }
-  }
-  if (tableMappingId === null) {
-    // Defensive — `uniqueSourceTableIds` includes `sourceTableId` by
-    // construction (it's `orderedSources[0].table_id`), but TS can't
-    // prove that statically. If this fires, it indicates schema drift
-    // or a bad source field.
-    return {
-      success: false,
-      error: 'Failed to resolve anchor table_mapping id',
-      errorCode: 'INTERNAL',
     }
   }
 
@@ -1198,7 +1305,10 @@ export async function createFieldMapping(input: {
   //
   // Block 4 — fan out the recompute across every distinct source table
   // so each TM's counter rollup picks up the new TFM. Anchor + non-
-  // anchor TMs are recomputed identically.
+  // anchor TMs are recomputed identically. PR Ω.3.x.1 — the non-anchor
+  // lookup orders by canonical partition (matches `findOrCreateTableMapping`)
+  // so multi-partition projects pick the same default TM as the create
+  // step above.
   for (const sourceTableIdInLoop of uniqueSourceTableIds) {
     const tmIdForRecompute =
       sourceTableIdInLoop === sourceTableId
@@ -1210,6 +1320,10 @@ export async function createFieldMapping(input: {
               .eq('project_id', projectId)
               .eq('source_table_id', sourceTableIdInLoop)
               .eq('target_table_id', targetField.table_id)
+              .order('partition_ordinal', { ascending: true, nullsFirst: false })
+              .order('created_at', { ascending: true })
+              .order('id', { ascending: true })
+              .limit(1)
               .maybeSingle()
           ).data?.id
     if (typeof tmIdForRecompute === 'string') {
@@ -1244,7 +1358,36 @@ export async function createFieldMapping(input: {
     combination_type: combinationType,
     ai_suggested: aiSuggested,
     cross_table: uniqueSourceTableIds.size > 1,
+    allow_cross_table: allowCrossTable,
   })
+
+  // ── Step 12: regenerate AI metadata (PR Ω.3.x.1, opt-in) ─────────────────
+  // Only fires when the caller explicitly opted in via `regenerateTrigger`.
+  // The popup paths pass `'create_disambiguated'`. `createMappingFromUnmapped`
+  // omits it and fires its own regenerate (with trigger
+  // `'create_from_unmapped'`) after the delegate so that we don't pay for
+  // two LLM round-trips per gesture. AI Suggest commits also omit it (the
+  // AI just produced the suggestion).
+  //
+  // Pilot-gated on `projects.poc_template` inside `regenerateTfmMetadata`
+  // itself — no-op for non-pilot projects. Fire-and-forget try/catch mirrors
+  // the four sibling callsites (`editMappingSources`,
+  // `updateMappingSourceField`, `updateMappingTargetField`,
+  // `createMappingFromUnmapped`).
+  if (regenerateTrigger) {
+    try {
+      await regenerateTfmMetadata(newTfmId, {
+        triggerSource: regenerateTrigger,
+        userId: user.id,
+      })
+    } catch (regenErr) {
+      console.error(
+        `[createFieldMapping] regenerateTfmMetadata threw — TFM created, ` +
+          `metadata stale. tfmId=${newTfmId}`,
+        regenErr,
+      )
+    }
+  }
 
   return {
     success: true,
@@ -1263,6 +1406,23 @@ export async function createFieldMapping(input: {
 // Uses the admin client because the wrapper has already verified
 // project membership; an RLS-narrowed read could miss an existing TM
 // row that the user lacks SELECT on, leading to a doomed INSERT.
+//
+// PR Ω.3.x.1 — multi-partition fallback. Post-migration-107 a project
+// can carry multiple TMs for the same (source_table, target_table) pair
+// (one per partition). A plain `.maybeSingle()` would error on those
+// projects with "expected at most one row, got N." We instead ORDER by
+// the assembler's canonical partition ordering
+// (`partition_ordinal ASC NULLS LAST, created_at ASC, id ASC` — see
+// `lib/ai/mapping-engine.ts` row-collapse) and `.limit(1).maybeSingle()`
+// so the lookup deterministically picks the canonical partition. This
+// matches what `resolveDefaultTableMappingForTargetField` does in
+// `lib/utils/partition-binding.ts` for ack-style writers.
+//
+// V1 popup paths never trigger this fallback (they commit a single source,
+// so `uniqueSourceTableIds.size === 1` and the loop reaches this helper
+// once for the anchor). The fallback is in place ahead of v2's partition
+// selector UI and to keep heritage behaviour safe when Rootstock-style
+// projects flip `partitions_enabled=true`.
 
 async function findOrCreateTableMapping(
   projectId: string,
@@ -1275,6 +1435,10 @@ async function findOrCreateTableMapping(
     .eq('project_id', projectId)
     .eq('source_table_id', sourceTableId)
     .eq('target_table_id', targetTableId)
+    .order('partition_ordinal', { ascending: true, nullsFirst: false })
+    .order('created_at', { ascending: true })
+    .order('id', { ascending: true })
+    .limit(1)
     .maybeSingle()
 
   if (lookupErr) {
@@ -1600,12 +1764,25 @@ export async function editMappingSources(input: {
    * value is ignored. May be re-instated in Cycle 2 under the new owning-TM rule.
    */
   joinAnnotations?: Record<string, string>
+  /**
+   * PR Ω.3.x.1 — manual multi-source disambiguation gate. Default false:
+   * if `sourceFieldIds` spans two or more source tables, the wrapper rejects
+   * with VALIDATION before any DB write. Forces the inline source picker
+   * (target-led view) and the drawer multi-source editor through the
+   * disambiguation popup whenever a cross-source-table edit is attempted.
+   * The popup commits a single-source TFM via `createFieldMapping` (the
+   * "Create separate" or "Replace existing" branches), so it never needs
+   * to set `allowCrossTable: true` on this entry point in v1. Reserved
+   * for v2 cross-table JOIN support.
+   */
+  allowCrossTable?: boolean
 }): Promise<EditMappingResult> {
   const {
     tfmId,
     sourceFieldIds,
     combinationType,
     joinAnnotations = {},
+    allowCrossTable = false,
   } = input
 
   // ── Step 1: validation ───────────────────────────────────────────────────
@@ -1874,6 +2051,29 @@ export async function editMappingSources(input: {
   // Transform-tab apply time as `CROSS_TABLE_FK_INFERENCE_FAILED`.
   const anchorTableId = orderedSources[0].table_id
   const sourceTableId = anchorTableId
+
+  // ── Step 8b: cross-source-table hard guard (PR Ω.3.x.1) ─────────────────
+  // The inline source picker (target-led view) and the drawer multi-source
+  // editor are the two UI surfaces that reach this server action. Both
+  // must route a cross-source-table addition through the disambiguation
+  // popup; this guard catches any path that forgot to and rejects before
+  // the source replacement RPC commits. The popup itself never sets
+  // `allowCrossTable: true` here in v1 — its confirmed paths land via
+  // `createFieldMapping` with `combination_type: 'single'`.
+  if (!allowCrossTable) {
+    const uniqueSourceTableIds = new Set(
+      orderedSources.map((s) => s.table_id),
+    )
+    if (uniqueSourceTableIds.size > 1) {
+      return {
+        success: false,
+        error:
+          'Sources span multiple source tables. Use the disambiguation flow to commit ' +
+          'a cross-table mapping.',
+        errorCode: 'VALIDATION',
+      }
+    }
+  }
 
   // ── Step 10: per-source provenance markers (§1f, 4a-4b parity) ──────────
   // RULE: any source row whose source_field_id is in
@@ -5862,8 +6062,21 @@ export async function promoteUnmappedSource(input: {
   projectId: string
   sourceFieldId: string
   targetFieldId: string
+  /**
+   * PR Ω.3.x.1 — manual multi-source disambiguation gate. Default false:
+   * if the picked source's table differs from the existing TFM's anchor
+   * source table (Step 5b append branch), the wrapper rejects with
+   * VALIDATION. Forces the drawer "Pick a target" flow through the
+   * disambiguation popup whenever the target is already mapped and the
+   * source comes from a different table. The popup itself never reaches
+   * this function — it commits via `createFieldMapping` — so no caller
+   * legitimately sets this true today; the opt is present for parity
+   * with `createFieldMapping` / `editMappingSources` and as a defense-
+   * in-depth surface should a v2 caller need to bypass.
+   */
+  allowCrossTable?: boolean
 }): Promise<PromoteUnmappedSourceResult> {
-  const { projectId, sourceFieldId, targetFieldId } = input
+  const { projectId, sourceFieldId, targetFieldId, allowCrossTable = false } = input
 
   // ── Step 1: input validation ────────────────────────────────────────────
   if (!projectId || !sourceFieldId || !targetFieldId) {
@@ -5943,11 +6156,15 @@ export async function promoteUnmappedSource(input: {
   // ── Step 5b: target already mapped — append the picked source ───────────
   const { data: existingSources, error: esErr } = await supabaseAdmin
     .from('mapping_sources')
-    .select('source_field_id, ordinal')
+    .select('source_field_id, source_table_id, ordinal')
     .eq('target_field_mapping_id', existingTfm.id)
     .order('ordinal', { ascending: true })
     .returns<
-      Array<{ source_field_id: string | null; ordinal: number | null }>
+      Array<{
+        source_field_id: string | null
+        source_table_id: string | null
+        ordinal: number | null
+      }>
     >()
   if (esErr || !existingSources) {
     return {
@@ -5965,6 +6182,41 @@ export async function promoteUnmappedSource(input: {
       success: false,
       error: "This source field is already part of the target's mapping.",
       errorCode: 'VALIDATION',
+    }
+  }
+
+  // ── Step 5b': cross-source-table hard guard (PR Ω.3.x.1) ────────────────
+  // Append is only safe when the picked source shares a table with the
+  // existing TFM's sources. Otherwise the drawer "Pick a target" gesture
+  // must route through the disambiguation popup (which lands via
+  // `createFieldMapping`, not back through this entry point). Defensive
+  // — the popup never sets `allowCrossTable: true` on this surface in v1.
+  if (!allowCrossTable) {
+    const { data: pickedField, error: pickedErr } = await supabaseAdmin
+      .from('fields')
+      .select('table_id')
+      .eq('id', sourceFieldId)
+      .maybeSingle<{ table_id: string }>()
+    if (pickedErr || !pickedField) {
+      return {
+        success: false,
+        error: 'Picked source field not found',
+        errorCode: 'NOT_FOUND',
+      }
+    }
+    const existingTableIds = new Set(
+      existingSources
+        .map((s) => s.source_table_id)
+        .filter((id): id is string => id !== null),
+    )
+    if (existingTableIds.size > 0 && !existingTableIds.has(pickedField.table_id)) {
+      return {
+        success: false,
+        error:
+          'The picked source comes from a different table than the existing mapping. ' +
+          'Use the disambiguation flow to create a separate mapping or replace.',
+        errorCode: 'VALIDATION',
+      }
     }
   }
 

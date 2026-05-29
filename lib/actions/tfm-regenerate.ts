@@ -70,6 +70,7 @@ export type TfmRegenerateTrigger =
   | 'target_swap'
   | 'source_set_edit'
   | 'create_from_unmapped'
+  | 'create_disambiguated'
 
 export type TfmRegenerateResult =
   | {
