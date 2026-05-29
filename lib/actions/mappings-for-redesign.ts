@@ -82,6 +82,7 @@ import { assertMappingWritesEnabled } from '@/lib/auth/mapping-writes'
 import { removeAcknowledgment } from '@/lib/actions/field-acknowledgments'
 import { resetFieldTransform } from '@/lib/actions/transformations'
 import { regenerateTfmMetadata } from '@/lib/actions/tfm-regenerate'
+import { resolveSiblingTfms } from '@/lib/actions/tfm-sibling-resolution'
 import { runMappingSuggestion } from '@/lib/ai/mapping-engine'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { decodeShimmedRowId } from '@/lib/compat/mapping-shim'
@@ -4290,10 +4291,23 @@ export async function updateMappingSourceField(input: {
   // (the user's click is an affirmation) but skip writes that would
   // pointlessly fire the recompute trigger and transform reset.
   if (currentSourceFieldId === newSourceFieldId) {
+    // PR Ω.3.8.1 — fan the status flip across every sibling TFM that
+    // shares this canonical's (target_field_id, source_signature)
+    // collapse key, so the Migration Center per-TFM counter
+    // (`stat-formulas.ts mappingApproved`) reconciles with the
+    // mapping-page row counter. Heritage rows return a length-1
+    // sibling set → `.in('id', [canonical])` is byte-identical to
+    // the pre-Ω.3.8.1 single-update path.
+    const siblings = await resolveSiblingTfms(supabaseAdmin, {
+      canonicalTfmId: tfm.id,
+      projectId,
+      targetFieldId: tfm.target_field_id,
+    })
+    const siblingIds = siblings.length > 0 ? siblings.map((s) => s.id) : [tfm.id]
     const { error: noopErr } = await supabaseAdmin
       .from('target_field_mappings')
       .update({ status: 'approved', updated_at: new Date().toISOString() })
-      .eq('id', tfm.id)
+      .in('id', siblingIds)
     if (noopErr) {
       return {
         success: false,
@@ -4790,10 +4804,19 @@ export async function updateMappingTargetField(input: {
   // No-op short circuit: target unchanged. Flip status to approved and
   // exit (the user's click is an affirmation).
   if (tfm.target_field_id === newTargetFieldId) {
+    // PR Ω.3.8.1 — same fan-out pattern as updateMappingSourceField's
+    // no-op affirmation: flip status on every sibling TFM sharing the
+    // canonical's collapse key so counters reconcile.
+    const siblings = await resolveSiblingTfms(supabaseAdmin, {
+      canonicalTfmId: tfm.id,
+      projectId,
+      targetFieldId: tfm.target_field_id,
+    })
+    const siblingIds = siblings.length > 0 ? siblings.map((s) => s.id) : [tfm.id]
     const { error: noopErr } = await supabaseAdmin
       .from('target_field_mappings')
       .update({ status: 'approved', updated_at: new Date().toISOString() })
-      .eq('id', tfm.id)
+      .in('id', siblingIds)
     if (noopErr) {
       return {
         success: false,
@@ -5426,13 +5449,28 @@ export async function createMappingFromUnmapped(input: {
   }
 
   // ── Step 6: flip TFM status to approved (flat-view affirmation) ────────
+  // PR Ω.3.8.1 — apply the same sibling-fan-out pattern as Sites #3-#4
+  // for consistency. In practice the new TFM has no partition siblings
+  // sharing its collapse key at create time (the user picked a single
+  // source landing in a single partition; any pre-existing sibling with
+  // the SAME (target, source) tuple would have prevented the create
+  // path from firing in the redesign UI). The resolver therefore returns
+  // length 1 here — the explicit fan-out is a no-op but keeps the
+  // contract uniform across every mutation site.
+  const siblings = await resolveSiblingTfms(supabaseAdmin, {
+    canonicalTfmId: createResult.tfmId,
+    projectId,
+    targetFieldId,
+  })
+  const siblingIds =
+    siblings.length > 0 ? siblings.map((s) => s.id) : [createResult.tfmId]
   const { error: statusErr } = await supabaseAdmin
     .from('target_field_mappings')
     .update({
       status: 'approved',
       updated_at: new Date().toISOString(),
     })
-    .eq('id', createResult.tfmId)
+    .in('id', siblingIds)
   if (statusErr) {
     return {
       success: false,
