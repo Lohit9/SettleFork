@@ -24,6 +24,7 @@ import { logAIEdit } from '@/lib/actions/ai-edit-history'
 import { assertMappingWritesEnabled } from '@/lib/auth/mapping-writes'
 import { computeOrphanedTfmsForTmDelete } from '@/lib/mappings/tm-ownership'
 import { applyTemplateToProject, updateTemplateFromApproval } from '@/lib/actions/migration-templates'
+import { resolveSiblingTfms } from '@/lib/actions/tfm-sibling-resolution'
 import { APPROVE_ALL_REASON } from '@/lib/constants/approve-all-reason'
 import { validatePackageConsistency, type PackageValidationResult } from '@/lib/validation/package-validator'
 import {
@@ -1065,36 +1066,71 @@ export async function updateFieldMappingStatus(
 
   return guardWrites(tfmLookup.project_id, async () => {
     if (decoded.kind === 'tfm-primary') {
-      const previousStatus = tfmLookup.status
+      // PR Ω.3.8.1 — fan the status mutation across every sibling TFM
+      // that shares this canonical's (target_field_id, source_signature)
+      // collapse key. Pre-Ω.3.8.1 the update touched only the canonical,
+      // which produced a counter divergence between the mapping page
+      // (row-level) and the Migration Center (per-TFM via
+      // `stat-formulas.ts mappingApproved`). With the fan-out, all N
+      // partition siblings flip together → counters reconcile.
+      //
+      // Heritage byte-identity: when the row has no partition siblings,
+      // `resolveSiblingTfms` returns a length-1 array containing only
+      // the canonical, and `.in('id', [canonical])` is semantically
+      // identical to the pre-Ω.3.8.1 `.eq('id', canonical)` path.
+      const siblings = await resolveSiblingTfms(supabaseAdmin, {
+        canonicalTfmId: decoded.tfmId,
+        projectId: tfmLookup.project_id,
+        targetFieldId: tfmLookup.target_field_id,
+      })
+      if (siblings.length === 0) {
+        // Defensive: canonical disappeared between the .single() above
+        // and the sibling resolver (race). Treat as not-found.
+        return { success: false, error: 'Mapping not found', errorCode: 'NOT_FOUND' }
+      }
+      const siblingIds = siblings.map((s) => s.id)
+
       const { error } = await supabaseAdmin
         .from('target_field_mappings')
         .update({ status })
-        .eq('id', decoded.tfmId)
+        .in('id', siblingIds)
       if (error) return { success: false, error: error.message, errorCode: 'INTERNAL' }
 
       // Provenance: status flip on the TFM. Each new status maps to a
       // distinct edit_kind so the calibration loop can distinguish
-      // approve / reject / send-back-to-review.
+      // approve / reject / send-back-to-review. Fan-out emits ONE
+      // `ai_edit_history` row per sibling TFM so each TFM has its own
+      // per-row audit trail (matches the existing per-TFM provenance
+      // pattern), each row carrying that sibling's own previous status.
       const editKind =
         status === 'approved'
           ? 'human_accepted'
           : status === 'rejected'
             ? 'human_rejected'
             : 'human_modified'
-      void logAIEdit({
-        projectId: tfmLookup.project_id,
-        actorId: user.id,
-        entityType: 'target_field_mapping',
-        entityId: decoded.tfmId,
-        fieldPath: 'status',
-        oldValue: previousStatus,
-        newValue: status,
-        editKind,
-      })
+      for (const sib of siblings) {
+        void logAIEdit({
+          projectId: tfmLookup.project_id,
+          actorId: user.id,
+          entityType: 'target_field_mapping',
+          entityId: sib.id,
+          fieldPath: 'status',
+          oldValue: sib.status,
+          newValue: status,
+          editKind,
+        })
+      }
 
       if (status === 'approved') {
         // fire-and-forget: update template counters + write override_log if a
-        // template suggestion existed for this field
+        // template suggestion existed for this field.
+        //
+        // PR Ω.3.8.1 — fired ONCE per user gesture, keyed by canonical.
+        // Migration 115 frames `override_logs` as "raw event log of human
+        // accept/override decisions" — the unit is one decision. Firing
+        // N times for a collapsed multi-partition row would 3x-weight
+        // the training signal and produce duplicate rows with identical
+        // `target_sig`. Canonical-only is the correct semantic.
         void updateTemplateFromApproval(tfmLookup.project_id, decoded.tfmId, labelQuality)
       }
     } else {

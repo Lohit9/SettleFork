@@ -567,8 +567,17 @@ describe('[flat-view] createMappingFromUnmapped — case detection + delegation'
   })
 
   it('flips the created TFM status to approved (flat-view affirmation cascade)', () => {
+    // PR Ω.3.8.1 — the SQL is now a bulk `.in('id', siblingIds)`
+    // update keyed by the resolver's sibling set (in practice
+    // length 1 for createMappingFromUnmapped's just-created TFM,
+    // since no partition siblings exist for a fresh (target, source)
+    // tuple). The intent — "post-create, flip status to approved" —
+    // is preserved; the wire shape just changed from `.eq` to `.in`.
     expect(CREATE_BODY).toMatch(
-      /from\(['"]target_field_mappings['"]\)[\s\S]{0,300}\.update\(\{[\s\S]{0,300}status:\s*['"]approved['"][\s\S]{0,300}\.eq\(\s*['"]id['"],\s*createResult\.tfmId/,
+      /resolveSiblingTfms\(\s*supabaseAdmin,\s*\{[\s\S]{0,200}canonicalTfmId:\s*createResult\.tfmId/,
+    )
+    expect(CREATE_BODY).toMatch(
+      /from\(['"]target_field_mappings['"]\)[\s\S]{0,300}\.update\(\{[\s\S]{0,300}status:\s*['"]approved['"][\s\S]{0,300}\.in\(\s*['"]id['"],\s*siblingIds/,
     )
   })
 
