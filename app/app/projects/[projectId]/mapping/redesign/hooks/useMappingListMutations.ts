@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useToast } from '@/lib/contexts/ToastContext'
 import {
   approveFieldMapping,
+  createFieldMapping,
   createMappingFromUnmapped,
   editMappingSources,
   promoteUnmappedSource,
@@ -15,6 +16,11 @@ import {
   type CreateFieldMappingCombinationType,
   type TargetMergePreview,
 } from '@/lib/actions/mappings-for-redesign'
+import type { PendingSourceDisambiguation } from '../components/SourceDisambiguationDialog'
+import type {
+  MappingRow,
+  SourceFieldWithState,
+} from '@/lib/types/mappings-for-redesign'
 import { acknowledgeField } from '@/lib/actions/field-acknowledgments'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -42,8 +48,38 @@ import { acknowledgeField } from '@/lib/actions/field-acknowledgments'
 // basis still drives button-disabled treatment so users can't double-
 // click while a mutation is in flight.
 
+/**
+ * PR Ω.3.x.1 — lookups the hook consults to detect the cross-table case
+ * before reaching the server. Optional: hosts that don't supply lookups
+ * skip the intercept (the server-side `allowCrossTable` guard still
+ * catches cross-table writes, but the UX is a generic error toast
+ * rather than the disambiguation popup).
+ *
+ * The host pre-builds Maps via `useMemo` against `data.rows` /
+ * `data.sourceFields` — see `MappingContentLoaded`. Keying the row map
+ * by `targetField.id` covers the `promoteUnmappedSource` flow (the
+ * picked target's row is looked up by target field id). Keying by TFM id
+ * covers the `editMappingSources` flow (the row being edited is
+ * addressed by its TFM uuid, which equals `MappedRow.id`).
+ */
+export interface MappingMutationsLookups {
+  rowsByTargetFieldId: ReadonlyMap<string, MappingRow>
+  mappedRowsByTfmId: ReadonlyMap<string, MappingRow>
+  sourceFieldsById: ReadonlyMap<string, SourceFieldWithState>
+}
+
 interface UseMappingListMutationsArgs {
   projectId: string
+  /**
+   * Pre-built lookups for the cross-table disambiguation intercept. When
+   * omitted, `promoteUnmappedSource` and `editMappingSources` call the
+   * server actions unchanged — the disambiguation popup never opens
+   * from the hook, and the server-side `allowCrossTable` guard is the
+   * only protection. Production callers (the redesign Mapping page)
+   * always pass lookups; legacy tests that don't can leave this off
+   * without compile-time breakage.
+   */
+  lookups?: MappingMutationsLookups
 }
 
 // `tfmId` is populated for mutations that resolve to a known target
@@ -218,12 +254,59 @@ export interface MappingListMutations {
 
   /** Dismiss the parked merge without executing it. */
   cancelPendingMerge: () => void
+
+  // ── PR Ω.3.x.1 — manual multi-source disambiguation ──────────────────
+  //
+  // The host (`MappingContent.tsx`) intercepts the inline picker / drawer
+  // add-source / `promoteUnmappedSource` gestures: same-source-table
+  // additions short-circuit to silent combine; cross-source-table
+  // additions park the disambiguation popup via `openPendingDisambiguation`.
+  // The dialog reads `pendingDisambiguation`, dispatches one of the two
+  // confirm methods on Save, and clears via `cancelPendingDisambiguation`
+  // on dismiss.
+
+  /**
+   * Cross-table disambiguation parked awaiting user choice, or `null`.
+   * When non-null, the host renders `SourceDisambiguationDialog`.
+   */
+  pendingDisambiguation: PendingSourceDisambiguation | null
+
+  /** True while either confirm method is in flight. */
+  isDisambiguationPending: boolean
+
+  /**
+   * Park a disambiguation popup. Called from the host's cross-table
+   * intercept. Replaces any previously parked disambiguation.
+   */
+  openPendingDisambiguation: (next: PendingSourceDisambiguation) => void
+
+  /**
+   * Commit "Create separate" — invokes `createFieldMapping` with
+   * `allowCrossTable: true`, `combinationType: 'single'`, and
+   * `regenerateTrigger: 'create_disambiguated'`. Existing TFM untouched.
+   * Clears `pendingDisambiguation` on success.
+   */
+  confirmDisambiguatedCreate: () => Promise<MutationResult>
+
+  /**
+   * Commit "Replace existing" — first `rejectFieldMapping(existingTfmId)`
+   * (hard delete, matches `rejectFieldMapping` semantics), then
+   * `createFieldMapping` with the same parameters as
+   * `confirmDisambiguatedCreate`. Clears `pendingDisambiguation` on
+   * success. If the create step fails after the reject succeeded, the
+   * existing TFM is gone and the user gets the create error — same
+   * risk surface as any reject-then-create flow on this codebase.
+   */
+  confirmDisambiguatedReplace: () => Promise<MutationResult>
+
+  /** Dismiss the parked disambiguation without writing. */
+  cancelPendingDisambiguation: () => void
 }
 
 export function useMappingListMutations(
   args: UseMappingListMutationsArgs,
 ): MappingListMutations {
-  const { projectId } = args
+  const { projectId, lookups } = args
   const router = useRouter()
   const { pushToast } = useToast()
   const [pendingKeys, setPendingKeys] = useState<Set<string>>(new Set())
@@ -231,6 +314,12 @@ export function useMappingListMutations(
     null,
   )
   const [isMergePending, setIsMergePending] = useState(false)
+  // PR Ω.3.x.1 — disambiguation popup parked state.
+  const [
+    pendingDisambiguation,
+    setPendingDisambiguation,
+  ] = useState<PendingSourceDisambiguation | null>(null)
+  const [isDisambiguationPending, setIsDisambiguationPending] = useState(false)
 
   const markPending = useCallback((key: string) => {
     setPendingKeys((prev) => {
@@ -466,13 +555,64 @@ export function useMappingListMutations(
     [projectId, run],
   )
 
+  // ── PR Ω.3.x.1 — cross-table intercept (canonical site) ────────────
+  //
+  // Lives in the hook so EVERY entry point that routes through it is
+  // protected: the flat view's target picker
+  // (`MappingListView.handleTargetPickerCommit` →
+  // `mutations.promoteUnmappedSource`), the drawer's "Add source"
+  // affordance (`mutations.editMappingSources`), and the drawer's "Pick
+  // a target" stub (`MappingContent.handlePromoteSource` →
+  // `mutations.promoteUnmappedSource`). The target-led view's inline
+  // picker is the one exception — it calls the bare server action
+  // (`editMappingSources` from `@/lib/actions/mappings-for-redesign`),
+  // bypassing the hook; that path keeps its host-level intercept in
+  // `MappingContent.handleInlineSourceCommit`.
+  //
+  // When `lookups` is undefined (legacy callers, test fixtures), the
+  // intercept short-circuits and the server-side `allowCrossTable`
+  // guard becomes the only protection — surfaces a generic error toast
+  // instead of the popup.
+
   const promoteUnmappedSourceMut = useCallback(
     (input: {
       sourceFieldId: string
       targetFieldId: string
       pendingKey: string
-    }) =>
-      run(
+    }) => {
+      if (lookups) {
+        const targetRow = lookups.rowsByTargetFieldId.get(input.targetFieldId)
+        if (targetRow && targetRow.kind === 'mapped') {
+          const existingTableIds = new Set(
+            targetRow.sources.map((s) => s.sourceTable.id),
+          )
+          const pickedSource = lookups.sourceFieldsById.get(input.sourceFieldId)
+          if (
+            pickedSource !== undefined &&
+            existingTableIds.size > 0 &&
+            !existingTableIds.has(pickedSource.sourceTable.id)
+          ) {
+            setPendingDisambiguation({
+              rowId: targetRow.id,
+              existingTfmId: targetRow.id,
+              targetFieldId: targetRow.targetField.id,
+              targetFieldName: targetRow.targetField.name,
+              existingSources: targetRow.sources.map((s) => ({
+                id: s.id,
+                sourceFieldName: s.sourceField.name,
+                sourceTableName: s.sourceTable.name,
+              })),
+              incomingSource: {
+                sourceFieldId: pickedSource.id,
+                sourceFieldName: pickedSource.name,
+                sourceTableName: pickedSource.sourceTable.name,
+              },
+            })
+            return Promise.resolve<MutationResult>({ success: true })
+          }
+        }
+      }
+      return run(
         input.pendingKey,
         () =>
           promoteUnmappedSource({
@@ -481,8 +621,9 @@ export function useMappingListMutations(
             targetFieldId: input.targetFieldId,
           }),
         'Mapping created',
-      ),
-    [projectId, run],
+      )
+    },
+    [projectId, run, lookups],
   )
 
   const editMappingSourcesMut = useCallback(
@@ -490,8 +631,47 @@ export function useMappingListMutations(
       tfmId: string
       sourceFieldIds: string[]
       combinationType: CreateFieldMappingCombinationType
-    }) =>
-      run(
+    }) => {
+      if (lookups) {
+        const row = lookups.mappedRowsByTfmId.get(input.tfmId)
+        if (row && row.kind === 'mapped') {
+          const existingSourceFieldIds = new Set(
+            row.sources.map((s) => s.sourceField.id),
+          )
+          const existingTableIds = new Set(
+            row.sources.map((s) => s.sourceTable.id),
+          )
+          // Find the first newly-added source whose table is not already
+          // contributing — mirrors `MappingContent.handleInlineSourceCommit`.
+          const newCrossTableSourceFieldId = input.sourceFieldIds.find((id) => {
+            if (existingSourceFieldIds.has(id)) return false
+            const sf = lookups.sourceFieldsById.get(id)
+            return sf !== undefined && !existingTableIds.has(sf.sourceTable.id)
+          })
+          if (newCrossTableSourceFieldId !== undefined) {
+            const pickedSource =
+              lookups.sourceFieldsById.get(newCrossTableSourceFieldId)!
+            setPendingDisambiguation({
+              rowId: row.id,
+              existingTfmId: row.id,
+              targetFieldId: row.targetField.id,
+              targetFieldName: row.targetField.name,
+              existingSources: row.sources.map((s) => ({
+                id: s.id,
+                sourceFieldName: s.sourceField.name,
+                sourceTableName: s.sourceTable.name,
+              })),
+              incomingSource: {
+                sourceFieldId: pickedSource.id,
+                sourceFieldName: pickedSource.name,
+                sourceTableName: pickedSource.sourceTable.name,
+              },
+            })
+            return Promise.resolve<MutationResult>({ success: true })
+          }
+        }
+      }
+      return run(
         input.tfmId,
         () =>
           editMappingSources({
@@ -500,9 +680,141 @@ export function useMappingListMutations(
             combinationType: input.combinationType,
           }),
         'Mapping updated',
-      ),
-    [run],
+      )
+    },
+    [run, lookups],
   )
+
+  // ── PR Ω.3.x.1 — disambiguation orchestration ──────────────────────
+  //
+  // Both confirm methods route through the bare `createFieldMapping`
+  // wrapper (NOT `createMappingFromUnmapped`) so that:
+  //   • `allowCrossTable: true` is forwarded — the server guard's only
+  //     authorised bypass.
+  //   • `regenerateTrigger: 'create_disambiguated'` distinguishes
+  //     popup-confirmed creates from heritage `create_from_unmapped`
+  //     entries in the `ai_edit_history` audit trail.
+  //   • The auto-approve side effect attached to
+  //     `createMappingFromUnmapped` (status flip + coverage clear) is
+  //     skipped — the new TFM lands `needs_review` so the user
+  //     explicitly approves it before the override_logs writer fires
+  //     (per §8 of the investigation).
+  //
+  // The host always parks `pendingDisambiguation` before the user
+  // clicks Create/Replace, so both methods can assume non-null here.
+
+  const openPendingDisambiguation = useCallback(
+    (next: PendingSourceDisambiguation) => {
+      setPendingDisambiguation(next)
+    },
+    [],
+  )
+
+  const cancelPendingDisambiguation = useCallback(() => {
+    setPendingDisambiguation(null)
+  }, [])
+
+  const confirmDisambiguatedCreate = useCallback(async (): Promise<MutationResult> => {
+    if (!pendingDisambiguation) return { success: false }
+    const { rowId, targetFieldId, incomingSource } = pendingDisambiguation
+    setIsDisambiguationPending(true)
+    markPending(rowId)
+    try {
+      const result = await createFieldMapping({
+        projectId,
+        targetFieldId,
+        sourceFieldIds: [incomingSource.sourceFieldId],
+        combinationType: 'single',
+        allowCrossTable: true,
+        regenerateTrigger: 'create_disambiguated',
+      })
+      if (!result.success) {
+        pushToast({
+          variant: 'error',
+          message: result.error ?? 'Could not create mapping. Please retry.',
+        })
+        return { success: false }
+      }
+      pushToast({ variant: 'success', message: 'Mapping created' })
+      setPendingDisambiguation(null)
+      router.refresh()
+      return { success: true, tfmId: result.tfmId }
+    } catch (err) {
+      pushToast({
+        variant: 'error',
+        message:
+          err instanceof Error
+            ? err.message
+            : 'Unexpected error. Please retry.',
+      })
+      return { success: false }
+    } finally {
+      setIsDisambiguationPending(false)
+      clearPending(rowId)
+    }
+  }, [pendingDisambiguation, projectId, markPending, clearPending, pushToast, router])
+
+  const confirmDisambiguatedReplace = useCallback(async (): Promise<MutationResult> => {
+    if (!pendingDisambiguation) return { success: false }
+    const { rowId, existingTfmId, targetFieldId, incomingSource } =
+      pendingDisambiguation
+    setIsDisambiguationPending(true)
+    markPending(rowId)
+    try {
+      // Step 1: hard-delete the existing TFM. `rejectFieldMapping` is
+      // the canonical reject = delete entry point; matches the
+      // "Replace existing" semantic locked in the spec.
+      const rejectResult = await rejectFieldMapping(existingTfmId)
+      if (!rejectResult.success) {
+        pushToast({
+          variant: 'error',
+          message:
+            rejectResult.error ?? 'Could not replace mapping. Please retry.',
+        })
+        return { success: false }
+      }
+      // Step 2: create the new single-source TFM on the picked source.
+      // The existing TFM is gone — server-side collision check is now
+      // a no-op for this target field. The new TFM lands with
+      // `combinationType: 'single'` and the disambiguated regenerate
+      // trigger so the audit trail tags the gesture distinctly.
+      const createResult = await createFieldMapping({
+        projectId,
+        targetFieldId,
+        sourceFieldIds: [incomingSource.sourceFieldId],
+        combinationType: 'single',
+        allowCrossTable: true,
+        regenerateTrigger: 'create_disambiguated',
+      })
+      if (!createResult.success) {
+        // The reject already committed. Surface the create error;
+        // the row visually becomes unmapped on next refresh.
+        pushToast({
+          variant: 'error',
+          message:
+            createResult.error ??
+            'Existing mapping was removed but the replacement could not be created.',
+        })
+        return { success: false }
+      }
+      pushToast({ variant: 'success', message: 'Mapping replaced' })
+      setPendingDisambiguation(null)
+      router.refresh()
+      return { success: true, tfmId: createResult.tfmId }
+    } catch (err) {
+      pushToast({
+        variant: 'error',
+        message:
+          err instanceof Error
+            ? err.message
+            : 'Unexpected error. Please retry.',
+      })
+      return { success: false }
+    } finally {
+      setIsDisambiguationPending(false)
+      clearPending(rowId)
+    }
+  }, [pendingDisambiguation, projectId, markPending, clearPending, pushToast, router])
 
   return {
     isRowBusy,
@@ -519,5 +831,11 @@ export function useMappingListMutations(
     isMergePending,
     confirmPendingMerge,
     cancelPendingMerge,
+    pendingDisambiguation,
+    isDisambiguationPending,
+    openPendingDisambiguation,
+    confirmDisambiguatedCreate,
+    confirmDisambiguatedReplace,
+    cancelPendingDisambiguation,
   }
 }
