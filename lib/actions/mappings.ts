@@ -2149,7 +2149,7 @@ export async function regenerateFieldMappings(
     if (targetFieldIds.length > 0) {
       const { data: allTfms } = await supabaseAdmin
         .from('target_field_mappings')
-        .select('id, combination_type, is_acknowledged')
+        .select('id, combination_type, is_acknowledged, status')
         .eq('project_id', tm.project_id)
         .in('target_field_id', targetFieldIds)
 
@@ -2160,7 +2160,10 @@ export async function regenerateFieldMappings(
           continue
         }
       }
-      const mappedIds = nonAck.filter((t) => t.combination_type !== 'custom_sql').map((t) => t.id)
+      // Preserve human-approved mappings: regenerate re-drafts unapproved work
+      // only. Approved TFMs survive (UNIQUE (project_id, target_field_id) makes
+      // the re-proposal's insert a no-op conflict, so no duplicate is created).
+      const mappedIds = nonAck.filter((t) => t.combination_type !== 'custom_sql' && t.status !== 'approved').map((t) => t.id)
       if (mappedIds.length > 0) {
         const { data: ms } = await supabaseAdmin
           .from('mapping_sources')
