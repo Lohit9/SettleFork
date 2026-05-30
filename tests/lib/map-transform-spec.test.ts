@@ -4,7 +4,18 @@
 // Pure — exercises buildSpecRows directly with in-memory inputs, no DB.
 
 import { describe, it, expect } from 'vitest'
-import { buildSpecRows, type SpecTfm, type SpecSource } from '@/lib/actions/map-transform-spec'
+import { buildSpecRows, confidenceBand, type SpecTfm, type SpecSource } from '@/lib/actions/map-transform-spec'
+
+describe('confidenceBand — Kaan thresholds (≥90 green / 40–89 amber / <40 red)', () => {
+  it('classifies by threshold; null confidence → null band', () => {
+    expect(confidenceBand(100)).toBe('green')
+    expect(confidenceBand(90)).toBe('green')
+    expect(confidenceBand(89)).toBe('amber')
+    expect(confidenceBand(40)).toBe('amber')
+    expect(confidenceBand(39)).toBe('red')
+    expect(confidenceBand(null)).toBeNull()
+  })
+})
 
 const tableNameById = new Map<string, string>([
   ['tt', 'Engineering Item Master'],

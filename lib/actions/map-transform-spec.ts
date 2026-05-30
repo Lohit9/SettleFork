@@ -27,9 +27,20 @@ export interface MapTransformSpecRow {
   transformation: string
   explanation: string
   confidence: number | null
+  /** Confidence band per the product spec — the UI renders this, not raw thresholds. */
+  band: ConfidenceBand
   kind: SpecRowKind
   /** Raw SQL behind `transformation`, for the UI's "show SQL" affordance. */
   transformSql: string | null
+}
+
+/** Confidence-band classification. Thresholds live here, ONCE — not in the UI. */
+export type ConfidenceBand = 'green' | 'amber' | 'red' | null
+export function confidenceBand(confidence: number | null): ConfidenceBand {
+  if (confidence == null) return null
+  if (confidence >= 90) return 'green'   // confident — auto
+  if (confidence >= 40) return 'amber'   // needs review
+  return 'red'                           // needs review (low)
 }
 
 // ─── Pure shaping core (no I/O — unit-tested directly) ─────────────────────────
@@ -105,7 +116,7 @@ export function buildSpecRows(input: SpecInput): MapTransformSpecRow[] {
       rows.push({
         sourceTable: null, sourceField: null, targetTable, targetField: tf.name,
         transformation: '—', explanation: 'No source mapped to this target field.',
-        confidence: null, kind: 'unmapped', transformSql: null,
+        confidence: null, band: null, kind: 'unmapped', transformSql: null,
       })
       continue
     }
@@ -141,6 +152,7 @@ export function buildSpecRows(input: SpecInput): MapTransformSpecRow[] {
       transformation,
       explanation,
       confidence: tfm.confidence,
+      band: confidenceBand(tfm.confidence),
       kind,
       transformSql: tfm.combination_sql,
     })

@@ -10,7 +10,7 @@ import type { MapTransformSpecRow } from '@/lib/actions/map-transform-spec'
 function row(over: Partial<MapTransformSpecRow> & { targetField: string }): MapTransformSpecRow {
   return {
     sourceTable: null, sourceField: null, targetTable: 'T', transformation: 'Direct copy',
-    explanation: '', confidence: null, kind: 'mapped', transformSql: null, ...over,
+    explanation: '', confidence: null, band: null, kind: 'mapped', transformSql: null, ...over,
   }
 }
 
