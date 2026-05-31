@@ -26,24 +26,28 @@ export interface MapTransformSpecRow {
   targetField: string
   transformation: string
   explanation: string
+  /** Confidence as a percent (0–100), normalized from the 0–1 (Path D) or 0–100 (legacy) store. Null when unmapped. */
   confidence: number | null
-  /** Confidence band per the product spec — the UI renders this, not raw thresholds. */
-  band: ConfidenceBand
+  /** Per SET-115: true when confidence < 25% (raw 0.25). UI shows confidence as a raw % with no buckets; this is the only threshold. */
+  needsReview: boolean
   kind: SpecRowKind
   /** Raw SQL behind `transformation`, for the UI's "show SQL" affordance. */
   transformSql: string | null
 }
 
-/** Confidence-band classification. Thresholds live here, ONCE — not in the UI. */
-export type ConfidenceBand = 'green' | 'amber' | 'red' | null
-export function confidenceBand(confidence: number | null): ConfidenceBand {
+/**
+ * Normalize a stored confidence to a percent (0–100). Path D persists 0.0–1.0;
+ * legacy mappings.ts persists 0–100. The UI renders this raw % with no buckets.
+ */
+export function confidencePct(confidence: number | null): number | null {
   if (confidence == null) return null
-  // Path D persists confidence as 0.0–1.0; legacy mappings.ts persists 0–100.
-  // Normalize to 0–100 before banding (matches lib/utils/confidence-format).
-  const v = confidence > 1 ? confidence : confidence * 100
-  if (v >= 90) return 'green'   // confident — auto
-  if (v >= 40) return 'amber'   // needs review
-  return 'red'                  // needs review (low)
+  return Math.round(confidence > 1 ? confidence : confidence * 100)
+}
+
+/** Per SET-115: a mapping is flagged for human review when confidence < 0.25 (25%). */
+export function needsReview(confidence: number | null): boolean {
+  const pct = confidencePct(confidence)
+  return pct != null && pct < 25
 }
 
 // ─── Pure shaping core (no I/O — unit-tested directly) ─────────────────────────
@@ -119,7 +123,7 @@ export function buildSpecRows(input: SpecInput): MapTransformSpecRow[] {
       rows.push({
         sourceTable: null, sourceField: null, targetTable, targetField: tf.name,
         transformation: '—', explanation: 'No source mapped to this target field.',
-        confidence: null, band: null, kind: 'unmapped', transformSql: null,
+        confidence: null, needsReview: false, kind: 'unmapped', transformSql: null,
       })
       continue
     }
@@ -154,8 +158,8 @@ export function buildSpecRows(input: SpecInput): MapTransformSpecRow[] {
       targetField: tf.name,
       transformation,
       explanation,
-      confidence: tfm.confidence,
-      band: confidenceBand(tfm.confidence),
+      confidence: confidencePct(tfm.confidence),
+      needsReview: needsReview(tfm.confidence),
       kind,
       transformSql: tfm.combination_sql,
     })
