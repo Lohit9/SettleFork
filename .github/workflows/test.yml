@@ -36,3 +36,21 @@ jobs:
 
       - name: Run tests
         run: pnpm test
+
+      # Build gate — catches deploy-breaking errors that tsc + unit tests miss.
+      # Placeholder env: build-time module init (Supabase/Resend/Upstash/SSO/
+      # Turnstile) requires these to be PRESENT, not real — no network occurs.
+      # Verified locally: build is green with exactly this set (2026-05-31).
+      - name: Build
+        run: pnpm build
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder
+          SUPABASE_SERVICE_ROLE_KEY: placeholder
+          ANTHROPIC_API_KEY: placeholder
+          SSO_ATTEMPT_COOKIE_SECRET: "0000000000000000000000000000000000000000000000000000000000000000"
+          UPSTASH_REDIS_REST_URL: https://placeholder.upstash.io
+          UPSTASH_REDIS_REST_TOKEN: placeholder
+          RESEND_API_KEY: re_placeholder
+          NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
+          TURNSTILE_SECRET_KEY: 1x0000000000000000000000000000000AA
