@@ -38,9 +38,12 @@ export interface MapTransformSpecRow {
 export type ConfidenceBand = 'green' | 'amber' | 'red' | null
 export function confidenceBand(confidence: number | null): ConfidenceBand {
   if (confidence == null) return null
-  if (confidence >= 90) return 'green'   // confident — auto
-  if (confidence >= 40) return 'amber'   // needs review
-  return 'red'                           // needs review (low)
+  // Path D persists confidence as 0.0–1.0; legacy mappings.ts persists 0–100.
+  // Normalize to 0–100 before banding (matches lib/utils/confidence-format).
+  const v = confidence > 1 ? confidence : confidence * 100
+  if (v >= 90) return 'green'   // confident — auto
+  if (v >= 40) return 'amber'   // needs review
+  return 'red'                  // needs review (low)
 }
 
 // ─── Pure shaping core (no I/O — unit-tested directly) ─────────────────────────
@@ -132,8 +135,8 @@ export function buildSpecRows(input: SpecInput): MapTransformSpecRow[] {
 
     const kind: SpecRowKind =
       srcs.length > 0 ? 'mapped'
-      : tfm.combination_type === 'custom_sql' ? 'value_assignment'
       : tfm.is_acknowledged ? 'acknowledged'
+      : tfm.combination_type === 'custom_sql' ? 'value_assignment'
       : 'unmapped'
 
     const primary = srcs[0]

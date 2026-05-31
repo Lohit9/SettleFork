@@ -7,13 +7,23 @@ import { describe, it, expect } from 'vitest'
 import { buildSpecRows, confidenceBand, type SpecTfm, type SpecSource } from '@/lib/actions/map-transform-spec'
 
 describe('confidenceBand — Kaan thresholds (≥90 green / 40–89 amber / <40 red)', () => {
-  it('classifies by threshold; null confidence → null band', () => {
+  it('classifies 0–100 (legacy) scale; null confidence → null band', () => {
     expect(confidenceBand(100)).toBe('green')
     expect(confidenceBand(90)).toBe('green')
     expect(confidenceBand(89)).toBe('amber')
     expect(confidenceBand(40)).toBe('amber')
     expect(confidenceBand(39)).toBe('red')
     expect(confidenceBand(null)).toBeNull()
+  })
+
+  it('normalizes 0.0–1.0 (Path D) scale — a 0.88 mapping is amber, NOT red', () => {
+    expect(confidenceBand(0.95)).toBe('green')
+    expect(confidenceBand(0.9)).toBe('green')
+    expect(confidenceBand(0.88)).toBe('amber') // regression guard: was 'red' pre-fix
+    expect(confidenceBand(0.4)).toBe('amber')
+    expect(confidenceBand(0.39)).toBe('red')
+    expect(confidenceBand(1)).toBe('green')     // 1.0 = 100%
+    expect(confidenceBand(0)).toBe('red')
   })
 })
 
@@ -97,6 +107,15 @@ describe('Map & Transform spec — buildSpecRows', () => {
     const rows = run([t], [])
     const r = rows.find((x) => x.targetField === 'Unmapped FK')!
     expect(r.kind).toBe('acknowledged')
+    expect(r.transformation).toMatch(/Acknowledged/)
+  })
+
+  it('acknowledged + custom_sql → acknowledged kind (is_acknowledged wins over custom_sql)', () => {
+    const t = tfm({ id: 'm5', target_field_id: 'tf3', is_acknowledged: true,
+      combination_type: 'custom_sql', acknowledgment_reason: 'supplied later' })
+    const rows = run([t], [])
+    const r = rows.find((x) => x.targetField === 'Unmapped FK')!
+    expect(r.kind).toBe('acknowledged') // regression guard: was 'value_assignment' pre-fix
     expect(r.transformation).toMatch(/Acknowledged/)
   })
 
