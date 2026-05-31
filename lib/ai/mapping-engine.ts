@@ -27,6 +27,7 @@ import {
 import {
   buildAIContext,
   formatDocumentsForPrompt,
+  formatPocAnswerKeyBlock,
   formatSchemaForPrompt,
   formatSchemaOverviewBlock,
 } from '@/lib/ai/context-builder'
@@ -1343,12 +1344,13 @@ export function buildMappingUserMessage(args: {
   otherSourcesBlock?: string | null
   templateBlock?: string | null
   fkBlock?: string | null
+  pocBlock?: string | null
 }): string {
-  const { sourceSection, targetSection, docBlock, intelligenceCtx, otherSourcesBlock, templateBlock, fkBlock } = args
+  const { sourceSection, targetSection, docBlock, intelligenceCtx, otherSourcesBlock, templateBlock, fkBlock, pocBlock } = args
   return `${sourceSection}
 ${targetSection}
 ${docBlock}
-${intelligenceCtx ? intelligenceCtx + '\n\n' : ''}${templateBlock ? templateBlock + '\n\n' : ''}${fkBlock ? fkBlock + '\n\n' : ''}${otherSourcesBlock ? otherSourcesBlock + '\n\n' : ''}Generate source-to-target mappings. Respond with this exact JSON structure.
+${intelligenceCtx ? intelligenceCtx + '\n\n' : ''}${templateBlock ? templateBlock + '\n\n' : ''}${fkBlock ? fkBlock + '\n\n' : ''}${otherSourcesBlock ? otherSourcesBlock + '\n\n' : ''}${pocBlock ? pocBlock + '\n\n' : ''}Generate source-to-target mappings. Respond with this exact JSON structure.
 
 CRITICAL RULES FOR THE JSON:
 - "source_table" must be ONLY the table name (e.g., "prices") — NOT the qualified name (NOT "trux.prices")
@@ -2368,6 +2370,10 @@ export async function runMappingGeneration(
 
     const targetSection = formatSchemaForPrompt(aiCtx.target_tables, 'target')
     const docBlock = formatDocumentsForPrompt(aiCtx.documents)
+    // POC answer key (authoritative) — already proven on the transform path;
+    // the mapping path was loading it into aiCtx but never injecting it.
+    // Empty string when no answer key is present (non-POC projects).
+    const pocBlock = formatPocAnswerKeyBlock(aiCtx.documents.poc_answer_key)
 
     const sourceFieldNamesByTableId = new Map<string, string[]>()
     for (const f of sourceFields ?? []) {
@@ -2447,6 +2453,7 @@ ${otherSourcesList}
         otherSourcesBlock,
         templateBlock: template ? buildTemplateBlock(template, sourceCtx.table_name) : null,
         fkBlock: fkBlock || null,
+        pocBlock: pocBlock || null,
       })
 
       // PR 12 H1: when AI_PHASE_2_ENABLED=1 the engine forces a tool
