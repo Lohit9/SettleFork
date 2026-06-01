@@ -43,9 +43,9 @@ describe('resolveDefaultModel — feature flag respect', () => {
     expect(resolveDefaultModel()).toBe('claude-sonnet-4-6')
   })
 
-  it('returns claude-opus-4-7 when flag is exactly "1"', () => {
+  it('returns claude-opus-4-8 when flag is exactly "1"', () => {
     process.env.AI_PHASE_2_ENABLED = '1'
-    expect(resolveDefaultModel()).toBe('claude-opus-4-7')
+    expect(resolveDefaultModel()).toBe('claude-opus-4-8')
   })
 })
 

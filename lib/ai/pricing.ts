@@ -60,6 +60,18 @@ export const PRICING: Record<string, ModelPricing> = {
     batchInput: 1.25,
   },
 
+  // Phase 2 default as of 2026-06-01 (Kaan: max accuracy while not scaling).
+  // resolveDefaultModel() returns this when AI_PHASE_2_ENABLED=1.
+  // NOTE: pricing mirrors Opus 4.7 as a placeholder — verify Opus 4.8 list
+  // pricing and update before cost reporting is relied on.
+  'claude-opus-4-8': {
+    input: 5.0,
+    output: 25.0,
+    cacheRead: 0.5,
+    cacheCreation: 6.25,
+    batchInput: 1.25,
+  },
+
   // Reserved for Tier 4 utility calls if a feature ever uses Haiku
   'claude-haiku-4-5-20251001': {
     input: 1.0,
