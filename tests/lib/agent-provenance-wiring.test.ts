@@ -70,36 +70,10 @@ const CALLSITES: CallsiteSpec[] = [
   // Pin removed; the negative-pin file audit below catches any future
   // re-introduction of the legacy fallback.
   //
-  // 6. mapping_generate (Phase 3 multi-agent — refinement T3)
-  {
-    agent: 'mapping_generate (multi-agent refinement)',
-    file: 'lib/ai/multi-agent-orchestrator.ts',
-    wrappedRegex: /systemPrompt:\s*withProvenanceGuidance\(MAPPING_GENERATION_AGENT_SYSTEM_PROMPT\)/,
-  },
-  // 7. multi-agent Generator (voted ×3)
-  {
-    agent: 'multi-agent Generator',
-    file: 'lib/ai/multi-agent-orchestrator.ts',
-    wrappedRegex: /systemPrompt:\s*withProvenanceGuidance\(GENERATOR_SYSTEM_PROMPT\)/,
-  },
-  // 8. multi-agent Cross-Table specialist
-  {
-    agent: 'multi-agent Cross-Table specialist',
-    file: 'lib/ai/multi-agent-orchestrator.ts',
-    wrappedRegex: /systemPrompt:\s*withProvenanceGuidance\(CROSS_TABLE_SPECIALIST_SYSTEM_PROMPT\)/,
-  },
-  // 9. multi-agent Cardinality specialist
-  {
-    agent: 'multi-agent Cardinality specialist',
-    file: 'lib/ai/multi-agent-orchestrator.ts',
-    wrappedRegex: /systemPrompt:\s*withProvenanceGuidance\(CARDINALITY_SPECIALIST_SYSTEM_PROMPT\)/,
-  },
-  // 10. multi-agent Critic (voted ×3)
-  {
-    agent: 'multi-agent Critic',
-    file: 'lib/ai/multi-agent-orchestrator.ts',
-    wrappedRegex: /systemPrompt:\s*withProvenanceGuidance\(CRITIC_SYSTEM_PROMPT\)/,
-  },
+  // 6–10. multi-agent orchestrator callsites [REMOVED — SET-201]
+  // lib/ai/multi-agent-orchestrator.ts was deleted (SET-40 multi-agent
+  // teardown); the path is inert. Provenance pins removed with the file.
+  //
   // 11. transform_generate (SQL generation)
   {
     agent: 'transform_generate',
@@ -159,7 +133,6 @@ describe('PR-A wiring — no unwrapped systemPrompt callsites remain', () => {
   const FILES_TO_AUDIT = [
     'lib/ai/mapping-engine.ts',
     'lib/ai/single-agent-mapping.ts',
-    'lib/ai/multi-agent-orchestrator.ts',
     'lib/actions/transformations.ts',
     'lib/actions/validation-rules.ts',
     'lib/actions/ai-quality-detection.ts',

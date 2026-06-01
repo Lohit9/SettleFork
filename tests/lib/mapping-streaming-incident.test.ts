@@ -121,16 +121,7 @@ describe('[May 2026 incident] mapping_generate uses callLLMStreaming + 32k token
     expect(mappingsSrc).toMatch(importRe)
   })
 
-  it('multi-agent path (multi-agent-orchestrator.ts) is NOT switched to streaming (gated OFF, out of incident scope)', () => {
-    // Defensive: the user's prompt explicitly said "Do not switch
-    // other callLLM sites to streaming — only mapping_generate" and
-    // "Do not touch multi-agent-prompts.ts or multi-agent-orchestrator.ts".
-    // Pin that the multi-agent orchestrator stays on its existing
-    // wrapper choice (it uses runAgentLoop internally; the wrapper
-    // is callLLM there). If a future PR converts multi-agent to
-    // streaming, that's a separate decision and this pin should be
-    // updated deliberately.
-    const orchestratorSrc = read('lib/ai/multi-agent-orchestrator.ts')
-    expect(orchestratorSrc).not.toMatch(/await callLLMStreaming\(/)
-  })
+  // [REMOVED — SET-201] The multi-agent orchestrator (lib/ai/
+  // multi-agent-orchestrator.ts) was deleted in the SET-40 teardown, so the
+  // "orchestrator stays non-streaming" pin no longer has a file to read.
 })

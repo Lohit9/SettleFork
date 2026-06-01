@@ -36,10 +36,13 @@ describe('mappings — runMappingGenerationForPair agent gate (source pins)', ()
     expect(MAPPINGS_SRC).toMatch(/const schemaOverviewBlock\s*=\s*phase3Enabled\s*\?\s*formatSchemaOverviewBlock\(/)
   })
 
-  it('PR 3.4cd: declares multiAgentEnabled + dispatches to single-agent helper or multi-agent orchestrator', () => {
-    expect(MAPPINGS_SRC).toMatch(/const multiAgentEnabled = process\.env\.AI_PHASE_3_MULTI_AGENT_ENABLED === '1'/)
+  it('dispatches to the single-agent helper; multi-agent path removed (SET-201)', () => {
     expect(MAPPINGS_SRC).toMatch(/runSingleAgentMappingLoop\(/)
-    expect(MAPPINGS_SRC).toMatch(/runMultiAgentMappingPipeline\(/)
+    // SET-40 teardown removed the multi-agent dispatch: no multiAgentEnabled
+    // gate, no runMultiAgentMappingPipeline call. Pin their absence so the
+    // dead path can't silently return.
+    expect(MAPPINGS_SRC).not.toMatch(/runMultiAgentMappingPipeline\(/)
+    expect(MAPPINGS_SRC).not.toMatch(/AI_PHASE_3_MULTI_AGENT_ENABLED/)
   })
 
   it('single-pair gate passes cacheControl: false (PR 13.1 audit posture preserved per LOCK #4)', () => {

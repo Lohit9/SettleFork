@@ -200,42 +200,19 @@ const ALLOWED_FUNCTIONS_WITHOUT_LOG_AI_EDIT = new Set<string>([
   'runFullScan',
   'triggerStagedValidation',
 
-  // ── Path D foundation (Sub-PR 4a) ────────────────────────────────────────
-  // path-d-persistence.ts:persistMappings is the bulk-upsert leg of the
-  // Path D monolithic Opus 4.7 mapping pipeline. Per-row provenance for a
-  // bulk AI generation needs careful per-row state-capture design (the
-  // existing Phase 0c follow-up pattern); wiring it at the orchestrator
-  // boundary instead of the persistence helper is also under consideration.
-  // Flag-gated OFF by default (AI_MAPPING_PATH_D_ENABLED), and Sub-PR 4a
-  // ships only the foundation — the orchestrator that calls this is
-  // stubbed (returns notImplementedError) until Sub-PR 4b. Provenance
-  // wiring lands with the orchestrator in 4b.
-  'persistMappings',
-
-  // ── Path D INF-45 — mapping_sources persistence ──────────────────────────
-  // path-d-persistence.ts:persistMappingSources is the Pass 2.5 sibling
-  // of persistMappings (added in INF-45 to fix the production bug where
-  // Path D wrote TFM shells without source associations). Same allow-list
-  // rationale as persistMappings above: provenance for the bulk Path D
-  // run fires at the orchestrator boundary via emitPathDProvenance, not
-  // per-table-write inside the persistence helpers. Wiring logAIEdit
-  // here would double-emit per source row (already covered by the per-
-  // TFM provenance row that emitPathDProvenance writes after the parent
-  // TFM upsert).
-  'persistMappingSources',
-
-  // ── Path D orchestrator (Sub-PR 4b) ──────────────────────────────────────
-  // path-d-mapping.ts:emitPathDProvenance is itself the provenance emitter
-  // for the Path D bulk run — it READS target_field_mappings (just inserted
-  // by persistMappings) and INSERTS into ai_edit_history. The audit regex
-  // greedily matches `.from('target_field_mappings')` (the read) followed
-  // within 2000 chars by `.insert(` (on ai_edit_history) and reports a
-  // false-positive write to `target_field_mappings`. The function does
-  // NOT write `target_field_mappings`; allow-listing it documents the
-  // false positive and keeps the audit's other invariants (the orchestrator
-  // boundary IS where Path D's provenance fires; this function is the
-  // boundary).
-  'emitPathDProvenance',
+  // ── Initial AI proposal + approval fan-out — provenance lives elsewhere ──
+  // (Replaced the dead Path-D persistence entries — persistMappings /
+  // persistMappingSources / emitPathDProvenance no longer exist; the Path-D
+  // monolith was removed, only path-d-outputs.ts survives.)
+  // runMappingGeneration (mapping-engine.ts) writes the FIRST AI proposal to
+  // target_field_mappings — it's the origin, not an "edit". Provenance is the
+  // llm_calls row (full request) + the TFM's original_ai_reasoning column.
+  'runMappingGeneration',
+  // updateTemplateFromApproval (migration-templates.ts) writes
+  // target_field_mappings.confidence as a flywheel fan-out triggered BY a
+  // human approval — the approval is the audited event (override_logs + the
+  // approving action), so no separate ai_edit_history row.
+  'updateTemplateFromApproval',
 ])
 
 // ─────────────────────────────────────────────────────────────────────────────
