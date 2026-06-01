@@ -1,0 +1,7 @@
+{
+  "name": "rootstock-baseline",
+  "description": "Rootstock POC ground-truth (RCB Industries, Prosys→Rootstock). Field-pair gold from the v12 answer key; project eba53ac1. Value-assignments and non-migrated fields are recorded per-example but are not field-pair gold.",
+  "version": "v12",
+  "author": "alex",
+  "updatedAt": "2026-06-01"
+}

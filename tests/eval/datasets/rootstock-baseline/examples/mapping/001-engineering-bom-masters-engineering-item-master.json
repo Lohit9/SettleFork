@@ -1,0 +1,52 @@
+{
+  "id": "rootstock-baseline/mapping/001-engineering-bom-masters-engineering-item-master",
+  "task": "mapping",
+  "input": {
+    "source_table": "Engineering BOM Masters",
+    "target_table": "Engineering Item Master"
+  },
+  "gold": {
+    "mappings": [
+      {
+        "source_field": "Item Type",
+        "target_field": "rstk__peitem_iccomcod__r external id",
+        "combination_type": "single"
+      },
+      {
+        "source_field": "Assy Item",
+        "target_field": "Item Number",
+        "combination_type": "custom_sql"
+      },
+      {
+        "source_field": "Assy Desc",
+        "target_field": "Item Description",
+        "combination_type": "custom_sql"
+      },
+      {
+        "source_field": "Part #",
+        "target_field": "Item Number",
+        "combination_type": "custom_sql"
+      },
+      {
+        "source_field": "Item",
+        "target_field": "Item Description",
+        "combination_type": "concat_space"
+      },
+      {
+        "source_field": "Unit of Measure",
+        "target_field": "rstk__peitem_enguom__r external id",
+        "combination_type": "single"
+      },
+      {
+        "source_field": "Sub-Assembly Flag",
+        "target_field": "Eng Type",
+        "combination_type": "single"
+      }
+    ]
+  },
+  "metadata": {
+    "author": "alex",
+    "difficulty": "hard",
+    "notes": "Field-pair gold = 7 real source→target mappings for Engineering BOM Masters → Engineering Item Master. The answer key also records 10 value-assignments (no source) on Engineering Item Master and 5 non-migrated Engineering BOM Masters fields — not field-pair gold (the field-pair scorer only scores source→target links)."
+  }
+}
