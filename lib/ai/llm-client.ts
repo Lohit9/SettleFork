@@ -88,7 +88,7 @@ export interface CallLLMOptions {
   projectId: string
   userId: string
   /**
-   * Defaults to `claude-sonnet-4-6` (or `claude-opus-4-7` when
+   * Defaults to `claude-sonnet-4-6` (or `claude-opus-4-8` when
    * `AI_PHASE_2_ENABLED=1`). Override per-call to use a different
    * model for cost-sensitive features.
    *
@@ -237,7 +237,7 @@ const ERROR_MESSAGE_MAX_CHARS = 1000
  * Resolves the default model to use for a callLLM/callLLMStreaming call,
  * honoring the AI_PHASE_2_ENABLED feature flag.
  *
- *   AI_PHASE_2_ENABLED=1 → 'claude-opus-4-7'  (Phase 2 quality upgrade)
+ *   AI_PHASE_2_ENABLED=1 → 'claude-opus-4-8'  (Phase 2 quality upgrade)
  *   else                 → 'claude-sonnet-4-6' (current Sonnet, off the
  *                          'claude-sonnet-4-20250514' deprecation track
  *                          that retires 2026-06-15)
@@ -249,7 +249,7 @@ const ERROR_MESSAGE_MAX_CHARS = 1000
  */
 export function resolveDefaultModel(): string {
   const phase2Enabled = process.env.AI_PHASE_2_ENABLED === '1'
-  return phase2Enabled ? 'claude-opus-4-7' : 'claude-sonnet-4-6'
+  return phase2Enabled ? 'claude-opus-4-8' : 'claude-sonnet-4-6'
 }
 
 /**

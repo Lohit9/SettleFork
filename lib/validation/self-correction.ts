@@ -338,7 +338,7 @@ export async function runSelfCorrectionLoop(
         maxTokens,
         projectId,
         userId,
-        model: 'claude-opus-4-7',
+        model: 'claude-opus-4-8',
         promptVersion: 'mapping-v2-agent-self-correction',
         abuseUserId: userId,
         thinking: { type: 'disabled' },

@@ -162,7 +162,7 @@ describe('mapping-engine — runMappingGeneration agent gate (source pins)', () 
     // Positive pin: the streaming wrapper is the entry point now.
     expect(HELPER_SRC).toMatch(/await callLLMStreaming\(/)
     expect(HELPER_SRC).toMatch(/tool:\s*EMIT_TABLE_MAPPINGS_TOOL/)
-    expect(HELPER_SRC).toMatch(/model:\s*'claude-opus-4-7'/)
+    expect(HELPER_SRC).toMatch(/model:\s*'claude-opus-4-8'/)
     // promptVersion bumped to v2-agent-streaming so llm_calls
     // analytics can distinguish the streaming-era runs.
     expect(HELPER_SRC).toMatch(/promptVersion:\s*'mapping-v2-agent-streaming'/)

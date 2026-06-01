@@ -149,7 +149,7 @@ export async function runSingleAgentMappingLoop(
       maxTokens,
       projectId,
       userId,
-      model: 'claude-opus-4-7',
+      model: 'claude-opus-4-8',
       promptVersion: 'mapping-v2-agent-streaming',
       abuseUserId: userId,
       // HOT-FIX 6 (May 2026): thinking MUST stay 'disabled' on this
