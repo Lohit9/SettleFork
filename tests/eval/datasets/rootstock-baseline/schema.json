@@ -1,0 +1,607 @@
+{
+  "source": {
+    "tables": [
+      {
+        "name": "Engineering BOM Masters",
+        "fields": [
+          {
+            "name": "FG Commodity Code",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": true
+          },
+          {
+            "name": "Item Type",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": false
+          },
+          {
+            "name": "Assy Item",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": false
+          },
+          {
+            "name": "Info",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": false
+          },
+          {
+            "name": "Assy Desc",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": false
+          },
+          {
+            "name": "Part #",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": false
+          },
+          {
+            "name": "Item",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": false
+          },
+          {
+            "name": "BOM Quantity",
+            "data_type": "DECIMAL(10,6)",
+            "is_nullable": false
+          },
+          {
+            "name": "Unit of Measure",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": false
+          },
+          {
+            "name": "Qty",
+            "data_type": "DECIMAL(10,6)",
+            "is_nullable": false
+          },
+          {
+            "name": "Component Cost",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": true
+          },
+          {
+            "name": "Sub-Assembly Flag",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": true
+          }
+        ]
+      },
+      {
+        "name": "Products",
+        "fields": [
+          {
+            "name": "ProductId",
+            "data_type": "INT",
+            "is_nullable": false,
+            "is_primary_key": true
+          },
+          {
+            "name": "ProductWooId",
+            "data_type": "INT",
+            "is_nullable": false
+          },
+          {
+            "name": "ProductSKU",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": false
+          },
+          {
+            "name": "ProductName",
+            "data_type": "VARCHAR(80)",
+            "is_nullable": false
+          },
+          {
+            "name": "ProductGroupName",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": false
+          },
+          {
+            "name": "ProductVendorName",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": false
+          },
+          {
+            "name": "ProductUpdated",
+            "data_type": "DATETIME",
+            "is_nullable": true
+          },
+          {
+            "name": "InvMasterSKU",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": false
+          },
+          {
+            "name": "ProductCaseQty",
+            "data_type": "INT",
+            "is_nullable": false
+          },
+          {
+            "name": "ProductUnitsName",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": false
+          },
+          {
+            "name": "ProductSheets",
+            "data_type": "INT",
+            "is_nullable": false
+          },
+          {
+            "name": "ProductSheets2",
+            "data_type": "INT",
+            "is_nullable": false
+          },
+          {
+            "name": "ProductGroupId",
+            "data_type": "INT",
+            "is_nullable": false
+          },
+          {
+            "name": "ProductNotes",
+            "data_type": "VARCHAR(255)",
+            "is_nullable": true
+          },
+          {
+            "name": "ProductActive",
+            "data_type": "BOOLEAN",
+            "is_nullable": false
+          }
+        ]
+      }
+    ]
+  },
+  "target": {
+    "tables": [
+      {
+        "name": "Inventory Commodity Code",
+        "fields": [
+          {
+            "name": "rstk__iccomcod_div__r external id",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": false
+          },
+          {
+            "name": "COMMODITY CODE",
+            "data_type": "VARCHAR(20)",
+            "is_nullable": false
+          },
+          {
+            "name": "DESCRIPTION",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": false
+          },
+          {
+            "name": "rstk__iccomcod_respinv__r external id",
+            "data_type": "INT",
+            "is_nullable": false
+          },
+          {
+            "name": "rstk__iccomcod_buydiv__r external id",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": false
+          },
+          {
+            "name": "rstk__iccomcod_dfltinvuom__r external id",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": false
+          },
+          {
+            "name": "ABC Class",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": false
+          },
+          {
+            "name": "Eng Status",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": false
+          },
+          {
+            "name": "ENG TYPE",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": false
+          },
+          {
+            "name": "INVENTORY SOURCE",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": false
+          },
+          {
+            "name": "rstk__iccomcod_respeng__r external id",
+            "data_type": "INT",
+            "is_nullable": false
+          },
+          {
+            "name": "rstk__iccomcod_dfltenguom__r external id",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": false
+          },
+          {
+            "name": "SERIAL TRACKING",
+            "data_type": "BOOLEAN",
+            "is_nullable": false
+          },
+          {
+            "name": "LOT TRACKING",
+            "data_type": "BOOLEAN",
+            "is_nullable": false
+          },
+          {
+            "name": "PLANNING POLICY",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": false
+          },
+          {
+            "name": "Policy Qty",
+            "data_type": "BOOLEAN",
+            "is_nullable": false
+          },
+          {
+            "name": "Minimum Qty",
+            "data_type": "BOOLEAN",
+            "is_nullable": false
+          },
+          {
+            "name": "Maximum Qty",
+            "data_type": "BOOLEAN",
+            "is_nullable": false
+          },
+          {
+            "name": "Supply Multiplier",
+            "data_type": "INT",
+            "is_nullable": false
+          },
+          {
+            "name": "Safety Stock Qty",
+            "data_type": "INT",
+            "is_nullable": false
+          },
+          {
+            "name": "Home Project Indicator",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": false
+          },
+          {
+            "name": "Lead Time, WO Firm",
+            "data_type": "BOOLEAN",
+            "is_nullable": true
+          },
+          {
+            "name": "Lead Time, WO Release",
+            "data_type": "BOOLEAN",
+            "is_nullable": true
+          },
+          {
+            "name": "Lead Time, WO Pick",
+            "data_type": "BOOLEAN",
+            "is_nullable": true
+          },
+          {
+            "name": "Lead Time, Manufacturing",
+            "data_type": "INT",
+            "is_nullable": true
+          },
+          {
+            "name": "Lead Time, Component Ship",
+            "data_type": "BOOLEAN",
+            "is_nullable": true
+          },
+          {
+            "name": "Lead Time, Lot Issue Expiration",
+            "data_type": "INT",
+            "is_nullable": true
+          },
+          {
+            "name": "Lead Time, Vendor Ship",
+            "data_type": "INT",
+            "is_nullable": true
+          },
+          {
+            "name": "Lead Time, Receiving Inspection",
+            "data_type": "INT",
+            "is_nullable": true
+          },
+          {
+            "name": "Lead Time, PO Req Firm",
+            "data_type": "INT",
+            "is_nullable": true
+          },
+          {
+            "name": "Material Ohd Rate (as decimal)",
+            "data_type": "INT",
+            "is_nullable": true
+          },
+          {
+            "name": "FIFO Costing Method Indicator",
+            "data_type": "BOOLEAN",
+            "is_nullable": true
+          },
+          {
+            "name": "rstk__iccomcod_dimval__r external id",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": false
+          },
+          {
+            "name": "Item Type",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": false
+          },
+          {
+            "name": "Service Type",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": true
+          },
+          {
+            "name": "rstk__iccomcod_respbuyer_po__r external id",
+            "data_type": "INT",
+            "is_nullable": false
+          },
+          {
+            "name": "rstk__iccomcod_dfltpuruom_po__r external id",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": false
+          },
+          {
+            "name": "PO Price Option",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": true
+          },
+          {
+            "name": "Historical Costs Weight Factor",
+            "data_type": "BOOLEAN",
+            "is_nullable": true
+          },
+          {
+            "name": "Over Receipt Indicator",
+            "data_type": "BOOLEAN",
+            "is_nullable": true
+          },
+          {
+            "name": "PO Qty Decimals",
+            "data_type": "BOOLEAN",
+            "is_nullable": true
+          },
+          {
+            "name": "Lead Time, Req Convert",
+            "data_type": "INT",
+            "is_nullable": true
+          },
+          {
+            "name": "Lead Time, Vendor",
+            "data_type": "INT",
+            "is_nullable": true
+          },
+          {
+            "name": "Current Costs Weight Factor",
+            "data_type": "BOOLEAN",
+            "is_nullable": false
+          },
+          {
+            "name": "rstk__iccomcod_dimval_po__r external id",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": false
+          },
+          {
+            "name": "rstk__iccomcod_vatclass_po__r external id",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": true
+          },
+          {
+            "name": "Std Cost Update Indicator",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": true
+          },
+          {
+            "name": "Std Markup/Down",
+            "data_type": "BOOLEAN",
+            "is_nullable": false
+          },
+          {
+            "name": "Disassembly Indicator",
+            "data_type": "BOOLEAN",
+            "is_nullable": true
+          },
+          {
+            "name": "rstk__iccomcod_disgoodlocid__r external id",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": true
+          },
+          {
+            "name": "Disassembly Receipt Location No",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": true
+          },
+          {
+            "name": "rstk__iccomcod_rcptlocid__r external id",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": true
+          },
+          {
+            "name": "Default Receiving Location No",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": true
+          },
+          {
+            "name": "rstk__iccomcod_wmslocid__r external id",
+            "data_type": "VARCHAR(255)",
+            "is_nullable": true
+          },
+          {
+            "name": "WMS Location Number",
+            "data_type": "VARCHAR(255)",
+            "is_nullable": true
+          },
+          {
+            "name": "rstk__iccomcod_refroutitem__r external id",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": true
+          },
+          {
+            "name": "Backflush Policy",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": true
+          },
+          {
+            "name": "Inv Qty Decimals",
+            "data_type": "BOOLEAN",
+            "is_nullable": true
+          },
+          {
+            "name": "ABC Reclassify",
+            "data_type": "BOOLEAN",
+            "is_nullable": true
+          },
+          {
+            "name": "Allow Lot to be Entered at WO Receipt",
+            "data_type": "BOOLEAN",
+            "is_nullable": true
+          },
+          {
+            "name": "Unique Device Identifier Structure",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": true
+          },
+          {
+            "name": "Expiration Date is Required",
+            "data_type": "BOOLEAN",
+            "is_nullable": true
+          },
+          {
+            "name": "rstk__iccomcod_orgid__r external id",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": false
+          },
+          {
+            "name": "Allocation Policy",
+            "data_type": "BOOLEAN",
+            "is_nullable": true
+          },
+          {
+            "name": "Shelf Life",
+            "data_type": "INT",
+            "is_nullable": true
+          },
+          {
+            "name": "Assign Serial Number at SO Shipment",
+            "data_type": "BOOLEAN",
+            "is_nullable": true
+          },
+          {
+            "name": "All WO Lots Must be Predefined",
+            "data_type": "BOOLEAN",
+            "is_nullable": true
+          },
+          {
+            "name": "rstk__iccomcod_labeltemplate__r external id",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": true
+          },
+          {
+            "name": "Print Individual Serials on WO Pick List",
+            "data_type": "BOOLEAN",
+            "is_nullable": true
+          }
+        ]
+      },
+      {
+        "name": "Engineering Item Master",
+        "fields": [
+          {
+            "name": "rstk__peitem_div__r external id",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": false,
+            "is_foreign_key": true
+          },
+          {
+            "name": "Item Number",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": false,
+            "is_primary_key": true
+          },
+          {
+            "name": "Item Description",
+            "data_type": "VARCHAR(100)",
+            "is_nullable": false
+          },
+          {
+            "name": "rstk__peitem_invdiv__r external id",
+            "data_type": "VARCHAR(50)",
+            "is_nullable": false,
+            "is_foreign_key": true
+          },
+          {
+            "name": "rstk__peitem_iccomcod__r external id",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": false,
+            "is_foreign_key": true
+          },
+          {
+            "name": "rstk__peitem_enguom__r external id",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": false,
+            "is_foreign_key": true
+          },
+          {
+            "name": "Inventory Source",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": true
+          },
+          {
+            "name": "Status",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": false
+          },
+          {
+            "name": "Inactive Status",
+            "data_type": "BOOLEAN",
+            "is_nullable": true
+          },
+          {
+            "name": "Eng Type",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": true
+          },
+          {
+            "name": "Item Type",
+            "data_type": "VARCHAR(40)",
+            "is_nullable": true
+          },
+          {
+            "name": "rstk__peitem_respeng__r external id",
+            "data_type": "VARCHAR(50)",
+            "is_nullable": false,
+            "is_foreign_key": true
+          },
+          {
+            "name": "Lot Tracking",
+            "data_type": "VARCHAR(10)",
+            "is_nullable": true
+          },
+          {
+            "name": "Serial Tracking",
+            "data_type": "VARCHAR(10)",
+            "is_nullable": true
+          },
+          {
+            "name": "FIFO Costing Method Indicator",
+            "data_type": "BOOLEAN",
+            "is_nullable": true
+          },
+          {
+            "name": "Disassembly Item",
+            "data_type": "BOOLEAN",
+            "is_nullable": true
+          },
+          {
+            "name": "Inventory Revision Master Item",
+            "data_type": "BOOLEAN",
+            "is_nullable": true
+          },
+          {
+            "name": "Create Multi-Revision Product",
+            "data_type": "BOOLEAN",
+            "is_nullable": true
+          }
+        ]
+      }
+    ]
+  }
+}

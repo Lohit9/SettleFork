@@ -1,0 +1,32 @@
+{
+  "id": "rootstock-baseline/mapping/002-engineering-bom-masters-inventory-commodity-code",
+  "task": "mapping",
+  "input": {
+    "source_table": "Engineering BOM Masters",
+    "target_table": "Inventory Commodity Code"
+  },
+  "gold": {
+    "mappings": [
+      {
+        "source_field": "Unit of Measure",
+        "target_field": "rstk__iccomcod_dfltenguom__r external id",
+        "combination_type": "single"
+      },
+      {
+        "source_field": "Unit of Measure",
+        "target_field": "rstk__iccomcod_dfltinvuom__r external id",
+        "combination_type": "single"
+      },
+      {
+        "source_field": "Unit of Measure",
+        "target_field": "rstk__iccomcod_dfltpuruom_po__r external id",
+        "combination_type": "single"
+      }
+    ]
+  },
+  "metadata": {
+    "author": "alex",
+    "difficulty": "hard",
+    "notes": "Field-pair gold = 3 real source→target mappings for Engineering BOM Masters → Inventory Commodity Code. The answer key also records 66 value-assignments (no source) on Inventory Commodity Code and 5 non-migrated Engineering BOM Masters fields — not field-pair gold (the field-pair scorer only scores source→target links)."
+  }
+}
