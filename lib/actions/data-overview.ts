@@ -2,6 +2,7 @@
 
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
+import { requireProjectPermission } from '@/lib/actions/role-resolution'
 import type { FieldSchemaSource } from '@/lib/types/database'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -400,9 +401,8 @@ export async function getStagedParentValues(
   parentTableName: string,
   parentFieldName: string,
 ): Promise<string[]> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return []
+  const perm = await requireProjectPermission(projectId, 'viewer')
+  if (!perm.allowed) return []
 
   // Find all non-rejected table mappings for this project
   const { data: tms } = await supabaseAdmin

@@ -17,6 +17,7 @@
  */
 
 import { supabaseAdmin } from '@/lib/supabase/admin'
+import { requireProjectPermission } from '@/lib/actions/role-resolution'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -64,6 +65,9 @@ export async function flagStagedRowIssues(
   tableMappingId: string
 ): Promise<{ flaggedRows: number; error?: string }> {
   try {
+    const perm = await requireProjectPermission(projectId, 'editor')
+    if (!perm.allowed) return { flaggedRows: 0, error: perm.error ?? 'Insufficient permissions' }
+
     // ── Step 1: Get the table mapping ────────────────────────────────────────
     const { data: tm, error: tmErr } = await supabaseAdmin
       .from('table_mappings')
