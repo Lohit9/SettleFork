@@ -1,7 +1,7 @@
 'use server'
 
-import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
+import { requireOrgRole } from '@/lib/auth/require-org-role'
 import type {
   FieldSignature,
   MigrationTemplate,
@@ -46,15 +46,6 @@ interface EntryRow {
   override_count: number
 }
 
-// ─── Auth helper ────────────────────────────────────────────────────
-
-async function requireAuth(): Promise<{ userId: string } | { error: string }> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { error: 'Not authenticated' }
-  return { userId: user.id }
-}
-
 // ─── DB → domain converters ─────────────────────────────────────────
 
 function rowsToTemplate(template: TemplateRow, entries: EntryRow[]): MigrationTemplate {
@@ -89,8 +80,8 @@ export async function findTemplate(
   sourceSystem: string,
   targetSystem: string,
 ): Promise<TemplateActionResult<MigrationTemplate | null>> {
-  const auth = await requireAuth()
-  if ('error' in auth) return { success: false, error: auth.error }
+  const gate = await requireOrgRole(orgId, ['owner', 'member'])
+  if (!gate.ok) return { success: false, error: gate.error }
 
   const { data: template, error: tErr } = await supabaseAdmin
     .from('migration_templates')
@@ -157,8 +148,8 @@ export async function saveTemplate(
   completedMappings: CompletedMapping[],
   loadOrder: Array<{ tableName: string; sequence: number; dependsOn: string[] }>,
 ): Promise<TemplateActionResult<{ templateId: string; entryCount: number; isNew: boolean }>> {
-  const auth = await requireAuth()
-  if ('error' in auth) return { success: false, error: auth.error }
+  const gate = await requireOrgRole(orgId, ['owner', 'member'])
+  if (!gate.ok) return { success: false, error: gate.error }
 
   if (completedMappings.length === 0) {
     return { success: false, error: 'No completed mappings to save' }
@@ -201,8 +192,10 @@ export async function recordTemplateOutcome(
     confidence: number
   },
 ): Promise<TemplateActionResult> {
-  const auth = await requireAuth()
-  if ('error' in auth) return { success: false, error: auth.error }
+  const { data: tmplOrg } = await supabaseAdmin.from('migration_templates').select('org_id').eq('id', templateId).maybeSingle()
+  if (!tmplOrg) return { success: false, error: 'Template not found' }
+  const gate = await requireOrgRole(tmplOrg.org_id, ['owner', 'member'])
+  if (!gate.ok) return { success: false, error: gate.error }
 
   // Fetch all entries for this template and find the matching target sig.
   // Template entry counts are bounded (hundreds, not thousands) so this is fine.
@@ -279,8 +272,8 @@ export async function getTemplateStats(
   avgConfidence: number
   healthScore: number
 } | null>> {
-  const auth = await requireAuth()
-  if ('error' in auth) return { success: false, error: auth.error }
+  const gate = await requireOrgRole(orgId, ['owner', 'member'])
+  if (!gate.ok) return { success: false, error: gate.error }
 
   const { data: template, error: tErr } = await supabaseAdmin
     .from('migration_templates')

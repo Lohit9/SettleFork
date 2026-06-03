@@ -53,6 +53,16 @@ vi.mock('@/lib/supabase/server', () => ({
     auth: {
       getUser: async () => ({ data: { user: { id: 'user-1' } } }),
     },
+    // requireOrgRole self-reads org_memberships via the SSR (RLS-bound)
+    // client. user-1 is a member of org-1 in every test fixture.
+    from: () => {
+      const chain = {
+        select: () => chain,
+        eq: () => chain,
+        maybeSingle: async () => ({ data: { role: 'owner' }, error: null }),
+      }
+      return chain
+    },
   }),
 }))
 

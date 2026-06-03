@@ -6,6 +6,7 @@ import { callLLM } from '@/lib/ai/llm-client'
 import { EMIT_SCHEMA_CORRECTIONS_TOOL } from '@/lib/ai/tool-schemas'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { canOverride } from '@/lib/utils/schema-priority'
+import { requireProjectPermission } from '@/lib/actions/role-resolution'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -148,6 +149,9 @@ export async function enrichSchemaFromDocs(
       }
     }
     const projectId = dataset.project_id as string
+
+    const perm = await requireProjectPermission(projectId, 'editor')
+    if (!perm.allowed) return { success: false, corrections: [], correctedFields: 0, error: perm.error ?? 'Insufficient permissions' }
 
     // ── Step 2: Load schema + business-context documents ─────────────────────
     // Two scopes, two queries:

@@ -4,6 +4,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { callLLM, type LLMFeature } from '@/lib/ai/llm-client'
+import { requireProjectPermission } from '@/lib/actions/role-resolution'
 import { withProvenanceGuidance } from '@/lib/ai/agent-provenance-guidance'
 import { EMIT_EXTRACTED_PATTERNS_TOOL } from '@/lib/ai/tool-schemas'
 import type { MigrationIntelligence } from '@/lib/types/database'
@@ -485,6 +486,9 @@ export async function extractMigrationIntelligence(
         return { success: false, error: 'Not authenticated' }
       }
       user = authUser
+
+      const perm = await requireProjectPermission(projectId, 'viewer')
+      if (!perm.allowed) return { success: false, error: perm.error ?? 'Insufficient permissions' }
     }
 
     const { data: project, error: projectError } = await supabaseAdmin
@@ -1045,7 +1049,7 @@ ${docText || '(no documentation uploaded)'}
 
 // ── Query Helper ──────────────────────────────────────────────────────────────
 
-export async function getMigrationIntelligence(userId?: string): Promise<{
+export async function getMigrationIntelligence(): Promise<{
   success: boolean
   patterns?: MigrationIntelligence[]
   error?: string
@@ -1061,7 +1065,7 @@ export async function getMigrationIntelligence(userId?: string): Promise<{
       return { success: false, error: 'Not authenticated' }
     }
 
-    const targetUserId = userId ?? user.id
+    const targetUserId = user.id
 
     const { data, error } = await supabaseAdmin
       .from('migration_intelligence')
