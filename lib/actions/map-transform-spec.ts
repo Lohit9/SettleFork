@@ -16,6 +16,7 @@
  */
 
 import { hydrateProjectData } from '@/lib/actions/_outputs-core'
+import { requireProjectPermission } from '@/lib/actions/role-resolution'
 
 export type SpecRowKind = 'mapped' | 'value_assignment' | 'acknowledged' | 'unmapped'
 
@@ -170,6 +171,9 @@ export function buildSpecRows(input: SpecInput): MapTransformSpecRow[] {
 // ─── Server action ─────────────────────────────────────────────────────────────
 
 export async function getMapTransformSpec(projectId: string): Promise<MapTransformSpecRow[]> {
+  const perm = await requireProjectPermission(projectId, 'viewer')
+  if (!perm.allowed) throw new Error(perm.error ?? 'Insufficient permissions')
+
   const data = await hydrateProjectData(projectId)
   if (!data) return []
 

@@ -17,6 +17,7 @@
 
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getMapTransformSpec, type MapTransformSpecRow } from '@/lib/actions/map-transform-spec'
+import { requireProjectPermission } from '@/lib/actions/role-resolution'
 
 export interface ReadyToLoadTable {
   targetTable: string
@@ -26,7 +27,10 @@ export interface ReadyToLoadTable {
   sourceMapping: string[]
   /** Rows 3+: transformed records (clean load data). */
   rows: Record<string, unknown>[]
+  /** Count of the returned page (=== rows.length). */
   rowCount: number
+  /** Total staged rows for this table, independent of the returned page — bind the grid header to this. */
+  totalRowCount: number
   /** True when staged data exists; false = mapping defined but transforms not yet run. */
   materialized: boolean
 }
@@ -52,9 +56,13 @@ export function buildHeaderRows(specForTable: MapTransformSpecRow[]): {
 
 export async function getReadyToLoadView(
   projectId: string,
-  opts?: { rowLimit?: number },
+  opts?: { rowLimit?: number; offset?: number },
 ): Promise<ReadyToLoadTable[]> {
+  const perm = await requireProjectPermission(projectId, 'viewer')
+  if (!perm.allowed) throw new Error(perm.error ?? 'Insufficient permissions')
+
   const rowLimit = opts?.rowLimit ?? 500
+  const offset = opts?.offset ?? 0
 
   const spec = await getMapTransformSpec(projectId)
   if (spec.length === 0) return []
@@ -89,15 +97,17 @@ export async function getReadyToLoadView(
     const { targetFields, sourceMapping } = buildHeaderRows(specForTable)
 
     let rows: Record<string, unknown>[] = []
+    let totalRowCount = 0
     const tmId = tmIdByTableName.get(targetTable)
     if (tmId) {
-      const { data: staged } = await supabaseAdmin
+      const { data: staged, count } = await supabaseAdmin
         .from('staged_data_rows')
-        .select('transformed_row_data')
+        .select('transformed_row_data', { count: 'exact' })
         .eq('table_mapping_id', tmId)
         .order('row_number')
-        .limit(rowLimit)
+        .range(offset, offset + rowLimit - 1)
       rows = (staged ?? []).map((s) => s.transformed_row_data as Record<string, unknown>)
+      totalRowCount = count ?? rows.length
     }
 
     out.push({
@@ -106,7 +116,8 @@ export async function getReadyToLoadView(
       sourceMapping,
       rows,
       rowCount: rows.length,
-      materialized: rows.length > 0,
+      totalRowCount,
+      materialized: totalRowCount > 0,
     })
   }
   return out
