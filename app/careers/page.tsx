@@ -11,12 +11,12 @@ export const metadata: Metadata = {
     title: 'Careers — Settle',
     description:
       'Help build the AI-native version of enterprise data migration. View open roles at Settle.',
-    url: 'https://usesettle.ai/careers',
+    url: 'https://settledata.ai/careers',
     siteName: 'Settle',
     type: 'website',
     images: [
       {
-        url: 'https://usesettle.ai/images/og-image.png',
+        url: 'https://settledata.ai/images/og-image.png',
         width: 1200,
         height: 630,
         alt: 'Careers at Settle',
@@ -28,7 +28,7 @@ export const metadata: Metadata = {
     title: 'Careers — Settle',
     description:
       'Help build the AI-native version of enterprise data migration.',
-    images: ['https://usesettle.ai/images/og-image.png'],
+    images: ['https://settledata.ai/images/og-image.png'],
   },
 }
 

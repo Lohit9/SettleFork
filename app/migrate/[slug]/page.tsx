@@ -114,7 +114,7 @@ export async function generateMetadata({
   const page = await getMigrationPage(slug)
   if (!page) return {}
 
-  const canonical = `https://usesettle.ai/migrate/${slug}`
+  const canonical = `https://settledata.ai/migrate/${slug}`
 
   return {
     title: page.meta_title,
@@ -127,7 +127,7 @@ export async function generateMetadata({
       type: 'website',
       images: [
         {
-          url: 'https://usesettle.ai/images/og-image.png',
+          url: 'https://settledata.ai/images/og-image.png',
           width: 1200,
           height: 630,
           alt: page.meta_title,
@@ -138,7 +138,7 @@ export async function generateMetadata({
       card: 'summary_large_image',
       title: page.meta_title,
       description: page.meta_description,
-      images: ['https://usesettle.ai/images/og-image.png'],
+      images: ['https://settledata.ai/images/og-image.png'],
     },
   }
 }
@@ -160,7 +160,7 @@ export default async function MigrationPageRoute({
   const src = page.source_system
   const tgt = page.target_system
   const stats = page.migration_stats ?? {}
-  const canonical = `https://usesettle.ai/migrate/${slug}`
+  const canonical = `https://settledata.ai/migrate/${slug}`
 
   // JSON-LD
   const faqSchema = {
@@ -177,8 +177,8 @@ export default async function MigrationPageRoute({
     '@context': 'https://schema.org',
     '@type': 'BreadcrumbList',
     itemListElement: [
-      { '@type': 'ListItem', position: 1, name: 'Home', item: 'https://usesettle.ai' },
-      { '@type': 'ListItem', position: 2, name: 'Migrations', item: 'https://usesettle.ai/migrate' },
+      { '@type': 'ListItem', position: 1, name: 'Home', item: 'https://settledata.ai' },
+      { '@type': 'ListItem', position: 2, name: 'Migrations', item: 'https://settledata.ai/migrate' },
       { '@type': 'ListItem', position: 3, name: `${src} to ${tgt}`, item: canonical },
     ],
   }

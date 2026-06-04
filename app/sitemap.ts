@@ -1,7 +1,7 @@
 import type { MetadataRoute } from 'next'
 import { createClient } from '@supabase/supabase-js'
 
-const BASE_URL = 'https://usesettle.ai'
+const BASE_URL = 'https://settledata.ai'
 
 const STATIC_PAGES: MetadataRoute.Sitemap = [
   { url: `${BASE_URL}/`,             lastModified: new Date(), changeFrequency: 'weekly',  priority: 1.0 },
