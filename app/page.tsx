@@ -4,7 +4,7 @@ const organizationSchema = {
   '@context': 'https://schema.org',
   '@type': 'Organization',
   name: 'Settle',
-  url: 'https://usesettle.ai',
+  url: 'https://settledata.ai',
   description:
     'AI-native enterprise data migration platform. Automates schema profiling, field mapping, SQL generation, and data quality validation.',
   foundingDate: '2025',
@@ -62,7 +62,7 @@ const webPageSchema = {
   '@context': 'https://schema.org',
   '@type': 'WebPage',
   name: 'Settle — AI-Native Data Migration',
-  url: 'https://usesettle.ai',
+  url: 'https://settledata.ai',
   speakable: {
     '@type': 'SpeakableSpecification',
     cssSelector: ['.hero-description', '.faq-section'],

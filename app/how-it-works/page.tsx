@@ -13,12 +13,12 @@ export const metadata: Metadata = {
     title: 'How Settle automates data migration',
     description:
       'AI schema profiling, field mapping, cleansing, ETL generation, and validation — the full migration lifecycle automated.',
-    url: 'https://usesettle.ai/how-it-works',
+    url: 'https://settledata.ai/how-it-works',
     siteName: 'Settle',
     type: 'website',
     images: [
       {
-        url: 'https://usesettle.ai/images/og-image.png',
+        url: 'https://settledata.ai/images/og-image.png',
         width: 1200,
         height: 630,
         alt: 'How Settle automates data migration',
@@ -30,7 +30,7 @@ export const metadata: Metadata = {
     title: 'How Settle automates data migration',
     description:
       'AI schema profiling, field mapping, cleansing, ETL generation, and validation — the full migration lifecycle automated.',
-    images: ['https://usesettle.ai/images/og-image.png'],
+    images: ['https://settledata.ai/images/og-image.png'],
   },
 }
 

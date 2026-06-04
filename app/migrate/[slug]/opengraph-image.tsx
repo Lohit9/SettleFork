@@ -97,7 +97,7 @@ export default async function OGImage({ params }: { params: Promise<{ slug: stri
         {/* Footer URL */}
         <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
           <span style={{ color: '#64748B', fontSize: '16px' }}>
-            usesettle.ai/migrate/{slug}
+            settledata.ai/migrate/{slug}
           </span>
         </div>
       </div>

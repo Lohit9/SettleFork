@@ -11,12 +11,12 @@ export const metadata: Metadata = {
     title: 'Co-Founder & CTO — Settle',
     description:
       'Build the AI-native enterprise data migration platform alongside the founder. In the Antler residency, paying enterprise customer live.',
-    url: 'https://usesettle.ai/careers/co-founder-cto',
+    url: 'https://settledata.ai/careers/co-founder-cto',
     siteName: 'Settle',
     type: 'website',
     images: [
       {
-        url: 'https://usesettle.ai/images/og-image.png',
+        url: 'https://settledata.ai/images/og-image.png',
         width: 1200,
         height: 630,
         alt: 'Co-Founder & CTO at Settle',
@@ -28,7 +28,7 @@ export const metadata: Metadata = {
     title: 'Co-Founder & CTO — Settle',
     description:
       'Build the AI-native enterprise data migration platform alongside the founder.',
-    images: ['https://usesettle.ai/images/og-image.png'],
+    images: ['https://settledata.ai/images/og-image.png'],
   },
 }
 
