@@ -20,6 +20,9 @@ import { requireProjectPermission } from '@/lib/actions/role-resolution'
 
 export type SpecRowKind = 'mapped' | 'value_assignment' | 'acknowledged' | 'unmapped'
 
+/** Human review state — soft sign-off (SET-237/SET-240), never a gate. */
+export type ReviewState = 'reviewed' | 'needs_review' | 'rejected'
+
 export interface MapTransformSpecRow {
   sourceTable: string | null
   sourceField: string | null
@@ -31,6 +34,13 @@ export interface MapTransformSpecRow {
   confidence: number | null
   /** Per SET-115: true when confidence < 25% (raw 0.25). UI shows confidence as a raw % with no buckets; this is the only threshold. */
   needsReview: boolean
+  /**
+   * Human review state, distinct from `needsReview` (a low-confidence flag, not a sign-off).
+   * `status='approved'` surfaces as `'reviewed'`; `'rejected'` stays `'rejected'`; everything
+   * else — including unmapped targets with no TFM — is `'needs_review'`. Backs the SET-160
+   * "Reviewed X/Y" counter and the per-field review glyph (SET-237). Soft signal, never gates.
+   */
+  reviewState: ReviewState
   kind: SpecRowKind
   /** Raw SQL behind `transformation`, for the UI's "show SQL" affordance. */
   transformSql: string | null
@@ -51,11 +61,21 @@ export function needsReview(confidence: number | null): boolean {
   return pct != null && pct < 25
 }
 
+/**
+ * Human review state from the persisted mapping status — the vocabulary the
+ * Configure UI speaks. `approved` is surfaced as "reviewed" (human sign-off is
+ * soft per SET-237/SET-240). No TFM / unknown status → `needs_review`.
+ */
+export function reviewStateOf(status: string | null | undefined): ReviewState {
+  return status === 'approved' ? 'reviewed' : status === 'rejected' ? 'rejected' : 'needs_review'
+}
+
 // ─── Pure shaping core (no I/O — unit-tested directly) ─────────────────────────
 
 export interface SpecTfm {
   id: string
   target_field_id: string
+  status: string | null
   confidence: number | null
   ai_reasoning: string | null
   is_acknowledged: boolean | null
@@ -124,7 +144,7 @@ export function buildSpecRows(input: SpecInput): MapTransformSpecRow[] {
       rows.push({
         sourceTable: null, sourceField: null, targetTable, targetField: tf.name,
         transformation: '—', explanation: 'No source mapped to this target field.',
-        confidence: null, needsReview: false, kind: 'unmapped', transformSql: null,
+        confidence: null, needsReview: false, reviewState: 'needs_review', kind: 'unmapped', transformSql: null,
       })
       continue
     }
@@ -161,6 +181,7 @@ export function buildSpecRows(input: SpecInput): MapTransformSpecRow[] {
       explanation,
       confidence: confidencePct(tfm.confidence),
       needsReview: needsReview(tfm.confidence),
+      reviewState: reviewStateOf(tfm.status),
       kind,
       transformSql: tfm.combination_sql,
     })
@@ -190,7 +211,7 @@ export async function getMapTransformSpec(projectId: string): Promise<MapTransfo
       id: f.id, table_id: f.table_id, name: f.name, ordinal_position: f.ordinal_position ?? null,
     })),
     tfms: data.targetFieldMappings.map((t) => ({
-      id: t.id, target_field_id: t.target_field_id, confidence: t.confidence,
+      id: t.id, target_field_id: t.target_field_id, status: t.status, confidence: t.confidence,
       ai_reasoning: t.ai_reasoning, is_acknowledged: t.is_acknowledged,
       acknowledgment_reason: t.acknowledgment_reason, combination_type: t.combination_type,
       combination_sql: t.combination_sql, needs_transformation: t.needs_transformation,

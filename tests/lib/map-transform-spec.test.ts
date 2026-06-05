@@ -4,7 +4,7 @@
 // Pure — exercises buildSpecRows directly with in-memory inputs, no DB.
 
 import { describe, it, expect } from 'vitest'
-import { buildSpecRows, confidencePct, needsReview, type SpecTfm, type SpecSource } from '@/lib/actions/map-transform-spec'
+import { buildSpecRows, confidencePct, needsReview, reviewStateOf, type SpecTfm, type SpecSource } from '@/lib/actions/map-transform-spec'
 
 describe('confidencePct — raw % , scale-normalized (SET-115: no buckets)', () => {
   it('normalizes 0–100 (legacy) and 0.0–1.0 (Path D) to a percent', () => {
@@ -27,6 +27,16 @@ describe('needsReview — SET-115 threshold (< 0.25 / 25%)', () => {
   })
 })
 
+describe('reviewStateOf — status → review vocabulary (SET-237/SET-240)', () => {
+  it('maps approved→reviewed, rejected→rejected, everything else→needs_review', () => {
+    expect(reviewStateOf('approved')).toBe('reviewed')
+    expect(reviewStateOf('rejected')).toBe('rejected')
+    expect(reviewStateOf('needs_review')).toBe('needs_review')
+    expect(reviewStateOf(null)).toBe('needs_review')
+    expect(reviewStateOf(undefined)).toBe('needs_review')
+  })
+})
+
 const tableNameById = new Map<string, string>([
   ['tt', 'Engineering Item Master'],
   ['st1', 'Products'],
@@ -45,7 +55,7 @@ const targetFields = [
 
 function tfm(over: Partial<SpecTfm> & { id: string; target_field_id: string }): SpecTfm {
   return {
-    confidence: null, ai_reasoning: null, is_acknowledged: false, acknowledgment_reason: null,
+    status: 'needs_review', confidence: null, ai_reasoning: null, is_acknowledged: false, acknowledgment_reason: null,
     combination_type: 'single', combination_sql: null, needs_transformation: false, ...over,
   }
 }
@@ -129,5 +139,12 @@ describe('Map & Transform spec — buildSpecRows', () => {
     expect(r.transformation).toMatch(/Concatenate \(space\)/)
     expect(r.transformation).toContain('Products.ProductSKU')
     expect(r.transformation).toContain('BOM Masters.Assy Item')
+  })
+
+  it('reviewState reflects mapping status; unmapped targets default to needs_review', () => {
+    const approved = tfm({ id: 'm6', target_field_id: 'tf1', status: 'approved', confidence: 95 })
+    const rows = run([approved], [src({ target_field_mapping_id: 'm6', source_field_id: 'sf3', source_table_id: 'st1' })])
+    expect(rows.find((r) => r.targetField === 'Item Number')!.reviewState).toBe('reviewed')
+    expect(rows.find((r) => r.targetField === 'Unmapped FK')!.reviewState).toBe('needs_review')
   })
 })
