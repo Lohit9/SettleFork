@@ -45,12 +45,24 @@ export default async function MappingPage({ params }: Props) {
       getProjectStats([projectId], supabase),
     ])
     const projectStats = projectStatsByProject.get(projectId) ?? null
+
+    // Source/target system names for the header breadcrumb (Configure | <project>
+    // — <source> → <target>), matching the Settle MVP design.
+    const { data: datasets } = await supabase
+      .from('datasets')
+      .select('name, role')
+      .eq('project_id', projectId)
+    const sourceSystemName = datasets?.find((d) => d.role === 'source')?.name ?? null
+    const targetSystemName = datasets?.find((d) => d.role === 'target')?.name ?? null
+
     return (
       <MappingRedesignContent
         projectId={projectId}
         projectName={project.name}
         initialRedesignData={initialRedesignData}
         projectStats={projectStats}
+        sourceSystemName={sourceSystemName}
+        targetSystemName={targetSystemName}
       />
     )
   }
