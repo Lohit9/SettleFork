@@ -3,86 +3,155 @@
 import { useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import ScrollReveal from '@/components/ui/ScrollReveal'
-import SchemaTable from './how-it-works/SchemaTable'
-import MappingTable from './how-it-works/MappingTable'
-import ValidationDashboard from './how-it-works/ValidationDashboard'
+import IngestStage from './how-it-works/IngestStage'
+import GenerateStage from './how-it-works/GenerateStage'
+import ValidateStage from './how-it-works/ValidateStage'
+import ExportStage from './how-it-works/ExportStage'
 
-const TABS = [
-  { fullLabel: '1. Schema understanding', shortLabel: '1. Schema'    },
-  { fullLabel: '2. Auto-mapping & transformation', shortLabel: '2. Mapping' },
-  { fullLabel: '3. Validation & readiness', shortLabel: '3. Validation' },
+const STAGES = [
+  {
+    label: 'Ingest',
+    heading: 'Connect & understand your data',
+    sub: 'Settle profiles both sides and flags anomalies before any mapping begins.',
+  },
+  {
+    label: 'Generate',
+    heading: 'Review your ready-to-load data',
+    sub: 'Every field mapping and transform, proposed with a confidence score.',
+  },
+  {
+    label: 'Validate',
+    heading: 'Validate results',
+    sub: "Every row is checked against your target — see what loads clean and what's blocked.",
+  },
+  {
+    label: 'Export',
+    heading: 'Export deliverables & migration',
+    sub: 'A complete, reusable execution package your team reviews and runs.',
+  },
 ]
 
-const TAB_CONTENT = [
-  <SchemaTable key="schema" />,
-  <MappingTable key="mapping" />,
-  <ValidationDashboard key="validation" />,
-]
+const STAGE_TRANSITION = {
+  initial: { opacity: 0, y: 8 },
+  animate: { opacity: 1, y: 0 },
+  exit: { opacity: 0, y: -8 },
+  transition: { duration: 0.3 },
+}
 
 export default function HowItWorks() {
-  const [activeTab, setActiveTab] = useState(0)
+  const [active, setActive] = useState(0)
+  const stage = STAGES[active]
+
+  const bodies = [
+    <IngestStage key="ingest" onAdvance={() => setActive(1)} />,
+    <GenerateStage key="generate" />,
+    <ValidateStage key="validate" />,
+    <ExportStage key="export" />,
+  ]
 
   return (
-    <section id="how" className="py-24 px-6 lg:px-12">
-      <div className="max-w-7xl mx-auto">
+    <section id="how" className="relative bg-[color:var(--bg)] py-24 px-6">
+      <div className="mx-auto max-w-3xl">
 
-        {/* Header */}
         <ScrollReveal>
-          <h2 className="text-4xl font-bold text-[#0F172A] tracking-tight text-center mb-3">
-            See Settle work end-to-end
-          </h2>
-          <p className="text-[#64748B] text-[17px] text-center max-w-xl mx-auto mb-12">
-            One enterprise migration. 240 tables. 3,412 fields. Watch the autonomous workflow from profiling to production-ready load files.
-          </p>
+          <h2 className="h2 text-center mb-10">Watch a migration run, end to end.</h2>
         </ScrollReveal>
 
-        {/* Tab bar */}
         <ScrollReveal delay={0.1}>
-          <div className="flex justify-center border-b border-[#E2E8F0] gap-0 mb-0">
-            {TABS.map((tab, i) => (
-              <button
-                key={tab.fullLabel}
-                onClick={() => setActiveTab(i)}
-                className={`px-4 py-3 text-sm font-medium border-b-2 transition-all whitespace-nowrap cursor-pointer bg-transparent ${
-                  activeTab === i
-                    ? 'text-[#2358D4] border-[#2358D4]'
-                    : 'text-[#64748B] border-transparent hover:text-[#334155]'
-                }`}
-              >
-                <span className="hidden md:inline">{tab.fullLabel}</span>
-                <span className="md:hidden">{tab.shortLabel}</span>
-              </button>
-            ))}
-          </div>
-        </ScrollReveal>
-
-        {/* Tab content */}
-        <ScrollReveal delay={0.15}>
-          <div className="mt-6">
+          {/* Per-stage eyebrow + heading + sub */}
+          <div className="text-center min-h-[150px]">
             <AnimatePresence mode="wait">
-              <motion.div
-                key={activeTab}
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -8 }}
-                transition={{ duration: 0.3 }}
-              >
-                {TAB_CONTENT[activeTab]}
+              <motion.div key={`head-${active}`} {...STAGE_TRANSITION}>
+                <p className="mono text-xs font-semibold tracking-[0.15em] text-[color:var(--blue)] mb-3">
+                  STEP {String(active + 1).padStart(2, '0')} / 04
+                </p>
+                <h3 className="text-2xl sm:text-[28px] font-semibold tracking-tight text-[color:var(--ink)] mb-2.5">
+                  {stage.heading}
+                </h3>
+                <p className="lede mx-auto max-w-xl">{stage.sub}</p>
               </motion.div>
             </AnimatePresence>
           </div>
+
+          {/* Browser-chrome mockup */}
+          <div className="card overflow-hidden mt-2">
+            {/* Window chrome + URL bar */}
+            <div className="flex items-center gap-3 border-b border-[color:var(--line)] px-4 py-3">
+              <div className="flex gap-1.5 shrink-0">
+                <span className="h-2.5 w-2.5 rounded-full bg-[color:var(--line-3)]" />
+                <span className="h-2.5 w-2.5 rounded-full bg-[color:var(--line-3)]" />
+                <span className="h-2.5 w-2.5 rounded-full bg-[color:var(--line-3)]" />
+              </div>
+              <div className="flex-1 rounded-md bg-[color:var(--surface-2)] px-3 py-1.5">
+                <span className="mono text-[11px] text-[color:var(--ink-3)]">
+                  settledata.ai/app/migrations/erp-to-erp
+                </span>
+              </div>
+            </div>
+
+            {/* Stepper */}
+            <div className="flex items-center gap-2 sm:gap-3 overflow-x-auto border-b border-[color:var(--line)] px-4 py-3">
+              {STAGES.map((s, i) => {
+                const done = i < active
+                const isActive = i === active
+                return (
+                  <div key={s.label} className="flex items-center gap-2 sm:gap-3 shrink-0">
+                    {i > 0 && (
+                      <span className="text-[color:var(--line-3)]" aria-hidden="true">·</span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setActive(i)}
+                      aria-current={isActive ? 'step' : undefined}
+                      className={`flex items-center gap-1.5 whitespace-nowrap text-xs sm:text-[13px] font-medium transition-colors ${
+                        done
+                          ? 'text-[color:var(--green)]'
+                          : isActive
+                            ? 'text-[color:var(--blue)]'
+                            : 'text-[color:var(--ink-3)] hover:text-[color:var(--ink-2)]'
+                      }`}
+                    >
+                      <span className="mono">{done ? '✓' : String(i + 1).padStart(2, '0')}</span>
+                      <span>{s.label}</span>
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+
+            {/* Active stage body */}
+            <div className="p-5 sm:p-6 min-h-[360px]">
+              <AnimatePresence mode="wait">
+                <motion.div key={`body-${active}`} {...STAGE_TRANSITION}>
+                  {bodies[active]}
+                </motion.div>
+              </AnimatePresence>
+            </div>
+          </div>
         </ScrollReveal>
 
-        {/* Result callout */}
-        <ScrollReveal delay={0.2}>
-          <div className="mt-8 max-w-4xl mx-auto px-6 py-4 bg-[#ECFDF5] rounded-xl border border-teal-200 flex items-center justify-center gap-3">
-            <span className="text-xs font-semibold uppercase tracking-wider text-[#0D9488] shrink-0 whitespace-nowrap">
-              Result
-            </span>
-            <span className="text-[#115E59] text-[15px] font-medium">
-              Migrations in weeks, not months — 40–50% lower cost, dramatically reduced risk.
-            </span>
+        {/* Pagination dots */}
+        <ScrollReveal delay={0.15}>
+          <div className="mt-8 flex items-center justify-center gap-2.5">
+            {STAGES.map((s, i) => (
+              <button
+                key={s.label}
+                type="button"
+                onClick={() => setActive(i)}
+                aria-label={`Go to ${s.label} step`}
+                aria-current={i === active ? 'step' : undefined}
+                className={`h-2 rounded-full transition-all ${
+                  i === active
+                    ? 'w-6 bg-[color:var(--blue)]'
+                    : 'w-2 bg-[color:var(--line-3)] hover:bg-[color:var(--ink-3)]'
+                }`}
+              />
+            ))}
           </div>
+
+          <p className="mt-5 text-center text-sm text-[color:var(--ink-3)]">
+            From profiling to a production-ready package in days, not months.
+          </p>
         </ScrollReveal>
 
       </div>
