@@ -69,14 +69,23 @@ export default function Differentiation() {
         <div className="mx-auto mt-12 max-w-[1000px] overflow-x-auto" style={{ padding: '14px 2px 4px' }}>
           <div
             className="relative grid"
-            style={{ gridTemplateColumns: 'minmax(228px, 1.4fr) repeat(3, minmax(140px, 1fr))', minWidth: 720 }}
+            style={{
+              gridTemplateColumns: 'minmax(228px, 1.4fr) repeat(3, minmax(140px, 1fr))',
+              gridTemplateRows: 'repeat(6, auto)',
+              minWidth: 720,
+            }}
           >
-            {/* raised green-tinted card over the Settle column */}
+            {/* raised green-tinted card over the Settle column — an absolute
+                overlay (mirrors the reference's .cmp-winhl) so it does not
+                displace the auto-placed cells; its grid area is its containing
+                block, and inset:0 makes it fill column 4 across every row. */}
             <div
               aria-hidden="true"
               style={{
+                position: 'absolute',
                 gridColumn: 4,
                 gridRow: '1 / -1',
+                inset: 0,
                 zIndex: 0,
                 background: 'rgba(29,158,117,.06)',
                 border: '1px solid rgba(29,158,117,.30)',
