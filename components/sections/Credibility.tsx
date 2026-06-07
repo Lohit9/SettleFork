@@ -33,17 +33,24 @@ export default function Credibility() {
           {/* Testimonial card */}
           <div className="flex">
             <div
-              className="relative flex flex-1 flex-col rounded-[18px] border border-[color:var(--line)] bg-[color:var(--surface-2)] px-8 pb-[26px] pt-8"
-              style={{ boxShadow: 'var(--sh-sm)' }}
+              className="relative flex flex-1 flex-col rounded-[18px] border border-[color:var(--line)] bg-[color:var(--surface)] px-8 pb-[26px] pt-8"
+              style={{ boxShadow: 'var(--sh-md)' }}
             >
+              <div className="kicker">
+                <span
+                  aria-hidden="true"
+                  className="h-[6px] w-[6px] rotate-45 rounded-[1.5px] bg-[color:var(--blue)]"
+                />
+                From a customer
+              </div>
               <div
-                className="font-bold leading-[.6] text-[color:var(--blue-line)]"
+                className="mt-5 font-bold leading-[.6] text-[color:var(--blue-line)]"
                 style={{ fontSize: 64, height: 30 }}
                 aria-hidden="true"
               >
                 &ldquo;
               </div>
-              <blockquote className="flex-1 text-[17px] font-medium leading-[1.5] tracking-[-0.015em] text-[color:var(--ink-2)]">
+              <blockquote className="flex-1 text-[19px] font-medium leading-[1.55] tracking-[-0.015em] text-[color:var(--ink)]">
                 We don&apos;t have a data team, and we didn&apos;t need one. Settle did the heavy lifting,
                 flagged the few things that needed our call, and let us check every record before it landed.
                 Easily the smoothest system change we&apos;ve made.
@@ -51,7 +58,7 @@ export default function Credibility() {
               <div className="mt-[26px] flex items-center gap-[13px] border-t border-[color:var(--line)] pt-5">
                 <div
                   aria-hidden="true"
-                  className="flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-[11px] bg-[color:var(--ink)] text-[15px] font-bold tracking-[-0.02em] text-white"
+                  className="flex h-[48px] w-[48px] shrink-0 items-center justify-center rounded-[11px] bg-[color:var(--ink)] text-[15px] font-bold tracking-[-0.02em] text-white"
                 >
                   3L
                 </div>
