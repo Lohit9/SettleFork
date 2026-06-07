@@ -51,14 +51,14 @@ export default function IngestStage({ onAdvance }: IngestStageProps) {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between gap-3 px-5 pt-4 pb-3 max-md:pt-3 max-md:pb-2">
+      <div className="flex items-center justify-between gap-3 px-5 pt-4 pb-3 max-md:hidden">
         <div className="text-[15px] max-md:text-[13.5px] font-[650] tracking-[-0.015em] text-[color:var(--ink)]">
           Set up your migration
         </div>
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col justify-center overflow-hidden px-5">
-        <div className="flex flex-col rounded-[12px] border border-[color:var(--line)]">
+        <div className="flex flex-col rounded-[12px] border border-[color:var(--line)] max-md:hidden">
           {ROWS.map((row) => (
             <div
               key={row.label}
@@ -84,6 +84,34 @@ export default function IngestStage({ onAdvance }: IngestStageProps) {
                     {row.status.text}
                   </span>
                 ))}
+            </div>
+          ))}
+        </div>
+
+        {/* mobile: quiet two-line rows, no icon tiles, no inner heading (below md) */}
+        <div className="hidden flex-col rounded-[12px] border border-[color:var(--line)] max-md:flex">
+          {ROWS.map((row) => (
+            <div
+              key={row.label}
+              className="flex flex-col gap-[3px] border-t border-[color:var(--line-2)] px-3 py-2 first:border-t-0"
+            >
+              <div className="flex items-center gap-2">
+                <b className="text-[13px] font-semibold tracking-[-0.01em] text-[color:var(--ink)]">{row.label}</b>
+                {row.status &&
+                  (row.status.ok ? (
+                    <span className="ml-auto inline-flex shrink-0 items-center gap-[5px] whitespace-nowrap text-xs font-semibold text-[color:var(--green-deep)]">
+                      <svg width="11" height="11" viewBox="0 0 14 14" fill="none">
+                        <path d="M2.6 7.3l2.8 2.8 6-6.4" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                      {row.status.text}
+                    </span>
+                  ) : (
+                    <span className="ml-auto shrink-0 whitespace-nowrap text-xs font-medium text-[color:var(--ink-3)]">
+                      {row.status.text}
+                    </span>
+                  ))}
+              </div>
+              <span className="mono whitespace-nowrap text-[11px] text-[color:var(--ink-3)]">{row.detail}</span>
             </div>
           ))}
         </div>
