@@ -2,7 +2,8 @@ type Variant = 'blue' | 'neutral' | 'green'
 
 const CHIP: Record<Variant, { bg: string; color: string; dot: string }> = {
   blue: { bg: 'var(--blue-tint)', color: 'var(--blue-press)', dot: 'var(--blue)' },
-  neutral: { bg: 'var(--surface-2)', color: 'var(--ink)', dot: 'var(--ink)' },
+  // reason: reference's neutral-chip tint — distinct from the --surface-2 card it sits on (no token equivalent) so the pill stays visible
+  neutral: { bg: '#EAEDF3', color: 'var(--ink)', dot: 'var(--ink)' },
   green: { bg: 'var(--green-tint)', color: 'var(--green-deep)', dot: 'var(--green)' },
 }
 
