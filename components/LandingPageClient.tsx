@@ -2,7 +2,6 @@
 
 import { useState } from 'react'
 import Header from '@/components/Header'
-import { SignUpModal, ContactModal } from '@/components/Modal'
 import Hero from '@/components/sections/Hero'
 import HowItWorks from '@/components/sections/HowItWorks'
 import Payoff from '@/components/sections/Payoff'
