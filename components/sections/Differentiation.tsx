@@ -92,7 +92,7 @@ export default function Differentiation() {
                 and inset:0 makes it fill the Settle column across every row. */}
             <div
               aria-hidden="true"
-              className="col-start-2"
+              className="col-start-2 col-end-3"
               style={{
                 position: 'absolute',
                 gridRow: '1 / -1',
