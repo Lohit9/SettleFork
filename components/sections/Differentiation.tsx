@@ -23,6 +23,15 @@ const ROWS: { label: string; cells: [Mk, string][] }[] = [
   },
 ]
 
+// Mobile stacked cards render the three columns in winner-first order; ci maps
+// back into each row's cells array (0 = Manual, 1 = Newer-AI, 2 = Settle), so the
+// md+ grid and the cards share one source of truth.
+const CARD_COLS: { ci: number; label: string; win: boolean }[] = [
+  { ci: 2, label: 'SETTLE', win: true },
+  { ci: 0, label: 'MANUAL & ETL', win: false },
+  { ci: 1, label: 'NEW-GEN ETL/AI', win: false },
+]
+
 function Mark({ type }: { type: Mk }) {
   if (type === 'na') {
     return (
@@ -51,14 +60,6 @@ function Mark({ type }: { type: Mk }) {
 const LINE = '1px solid var(--line)'
 const WIN_LINE = '1px solid rgba(29,158,117,.16)'
 
-// Below md the table scrolls horizontally and Settle leads (col 2) so its column
-// + green card show first; Manual/Newer-AI sit to its right behind the scroll.
-// md+ keeps source order (Settle rightmost, col 4). ci: 0=Manual, 1=Newer-AI, 2=Settle.
-// DOM order is never reordered — only grid-column placement changes per breakpoint.
-const colClass = (ci: number) =>
-  ci === 2 ? 'col-start-2 md:col-start-4' : ci === 0 ? 'col-start-3 md:col-start-2' : 'col-start-4 md:col-start-3'
-const ROW_START = ['row-start-2', 'row-start-3', 'row-start-4', 'row-start-5', 'row-start-6']
-
 export default function Differentiation() {
   return (
     <section id="why" className="section">
@@ -73,22 +74,25 @@ export default function Differentiation() {
           </p>
         </div>
 
-        {/* horizontally scrollable on narrow screens; below md Settle leads (col 2) */}
-        <div className="relative mx-auto mt-12 max-w-[1000px]">
-          <div className="overflow-x-auto" style={{ padding: '14px 2px 4px' }}>
-            <div
-              className="relative grid min-w-[586px] md:min-w-[720px] grid-cols-[minmax(172px,1.4fr)_repeat(3,minmax(138px,1fr))] md:grid-cols-[minmax(228px,1.4fr)_repeat(3,minmax(140px,1fr))]"
-              style={{ gridTemplateRows: 'repeat(6, auto)' }}
-            >
+        {/* md+ : the comparison grid (hidden below md, replaced by stacked cards) */}
+        <div className="mx-auto mt-12 max-w-[1000px] overflow-x-auto max-md:hidden" style={{ padding: '14px 2px 4px' }}>
+          <div
+            className="relative grid"
+            style={{
+              gridTemplateColumns: 'minmax(228px, 1.4fr) repeat(3, minmax(140px, 1fr))',
+              gridTemplateRows: 'repeat(6, auto)',
+              minWidth: 720,
+            }}
+          >
             {/* raised green-tinted card over the Settle column — an absolute
                 overlay (mirrors the reference's .cmp-winhl) so it does not
                 displace the auto-placed cells; its grid area is its containing
                 block, and inset:0 makes it fill column 4 across every row. */}
             <div
               aria-hidden="true"
-              className="col-start-2 md:col-start-4"
               style={{
                 position: 'absolute',
+                gridColumn: 4,
                 gridRow: '1 / -1',
                 inset: 0,
                 zIndex: 0,
@@ -100,13 +104,13 @@ export default function Differentiation() {
             />
 
             {/* header row */}
-            <div className="relative z-[1] col-start-1 row-start-1" style={{ borderBottom: LINE }} />
+            <div className="relative z-[1]" style={{ borderBottom: LINE }} />
             {COLS.map((col, ci) => {
               const win = ci === 2
               return (
                 <div
                   key={col}
-                  className={`relative z-[1] flex px-5 row-start-1 ${colClass(ci)} ${
+                  className={`relative z-[1] flex px-5 ${
                     win
                       ? 'min-h-0 items-center pt-[18px] text-[16px] font-bold text-[color:var(--ink)]'
                       : 'min-h-[58px] items-end pb-[14px] text-[14px] font-semibold tracking-[-0.01em] text-[color:var(--ink-2)]'
@@ -124,7 +128,7 @@ export default function Differentiation() {
               return (
                 <Fragment key={row.label}>
                   <div
-                    className={`relative z-[1] flex min-h-[64px] items-center px-5 py-3 text-[14px] font-medium leading-[1.35] text-[color:var(--ink-2)] col-start-1 ${ROW_START[ri]}`}
+                    className="relative z-[1] flex min-h-[64px] items-center px-5 py-3 text-[14px] font-medium leading-[1.35] text-[color:var(--ink-2)]"
                     style={{ borderBottom: last ? 'none' : LINE }}
                   >
                     {row.label}
@@ -134,7 +138,7 @@ export default function Differentiation() {
                     return (
                       <div
                         key={ci}
-                        className={`relative z-[1] flex min-h-[64px] items-center gap-[10px] py-3 text-[14px] ${ROW_START[ri]} ${colClass(ci)} ${
+                        className={`relative z-[1] flex min-h-[64px] items-center gap-[10px] py-3 text-[14px] ${
                           win
                             ? 'pl-[22px] pr-5 font-[550] text-[color:var(--ink)]'
                             : 'px-5 text-[color:var(--ink-3)]'
@@ -153,13 +157,43 @@ export default function Differentiation() {
               )
             })}
           </div>
-          </div>
-          {/* right-edge scroll affordance — mobile only, fades content into the page edge */}
-          <div
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-y-0 right-0 w-8 md:hidden"
-            style={{ background: 'linear-gradient(to right, rgba(250,251,252,0), var(--bg))' }}
-          />
+        </div>
+
+        {/* below md : the same comparison as stacked cards — winner first, no horizontal scroll */}
+        <div className="mt-10 hidden flex-col gap-4 max-md:flex">
+          {ROWS.map((row) => (
+            <div
+              key={row.label}
+              className="rounded-[14px] border border-[color:var(--line)] bg-[color:var(--surface)]"
+              style={{ padding: '16px 18px' }}
+            >
+              <div className="text-[15px] font-semibold tracking-[-0.01em] text-[color:var(--ink)]">{row.label}</div>
+              <div className="mt-[10px] flex flex-col">
+                {CARD_COLS.map(({ ci, label, win }) => {
+                  const [mark, value] = row.cells[ci]
+                  return (
+                    <div
+                      key={label}
+                      className="flex items-start gap-[10px] border-t border-[color:var(--line-2)] py-[10px] first:border-t-0"
+                      style={win ? { background: 'rgba(29,158,117,.06)' } : undefined}
+                    >
+                      <Mark type={mark} />
+                      <span className="mono mt-[1px] w-[96px] shrink-0 whitespace-nowrap text-[11px] font-semibold uppercase tracking-[0.05em] text-[color:var(--ink-3)]">
+                        {label}
+                      </span>
+                      <span
+                        className={`min-w-0 flex-1 text-[13px] leading-[1.4] ${
+                          win ? 'font-[550] text-[color:var(--ink)]' : 'text-[color:var(--ink-2)]'
+                        }`}
+                      >
+                        {value}
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          ))}
         </div>
       </div>
     </section>
