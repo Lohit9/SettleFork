@@ -14,7 +14,7 @@ export const metadata: Metadata = {
     title: 'Pricing — Settle | AI-Native Data Migration',
     description:
       'Get an instant migration estimate. Settle replaces months of consulting work with an AI-native platform.',
-    url: 'https://usesettle.ai/pricing',
+    url: 'https://settledata.ai/pricing',
     siteName: 'Settle',
     type: 'website',
   },

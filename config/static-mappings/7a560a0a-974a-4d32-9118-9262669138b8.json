@@ -47,14 +47,14 @@
       {
         "source_table": "Engineering BOM Masters",
         "source_field": "Assy Item",
-        "target_field": "Item Number",
-        "target_table": "Engineering Item Master",
-        "explanation": "Field type: Text(50), Required.\n\nEach distinct Assy Item is a manufactured assembly that should become one Engineering Item Master record with Inventory Source = Manufactured. The Engineering BOM Masters contains 1,562 rows but only 123 unique parent assemblies — duplicates collapse on distinct extraction. After whitespace trimming, all 123 Assy Items match a corresponding Products.ProductSKU.",
-        "transformation_needed": true,
+        "target_field": "Unmapped",
+        "target_table": "Unmapped",
+        "explanation": "Per Joanna (Rootstock PS) on the Jun 5 call: Item Number is sourced from Products.ProductSKU exclusively, because every item including BoM parents appears in the Products file (RCB's item master). The Engineering BOM Masters Assy Item column is redundant for Item Number and not mapped. Note: the Manufactured-vs-Purchased distinction (which previously relied on Assy Item presence) is preserved via the InvMasterSKU → Inventory Source mapping, which still tests for BoM presence. VERIFY before load: spot-check that BoM parents all appear in Products.",
+        "transformation_needed": false,
         "transformations": [
-          "Take distinct trimmed values of Assy Item where Assy Item is not null. When merging with Products.ProductSKU extraction: SKUs that exist in both sources keep Inventory Source = Manufactured (a SKU with a Bill of Materials is manufactured regardless of Products presence), but Products.ProductName wins for Item Description because it is more complete (4,587 Products descriptions vs 123 Engineering BOM Masters descriptions)."
+          "No transformation needed — this field is not loaded. Item Number comes from Products.ProductSKU, per Joanna (Jun 5). Note: Inventory Source still uses BoM-presence to flag Manufactured items (see InvMasterSKU → Inventory Source)."
         ],
-        "confidence": 97
+        "confidence": 78
       },
       {
         "source_table": "Engineering BOM Masters",
@@ -71,62 +71,62 @@
       {
         "source_table": "Engineering BOM Masters",
         "source_field": "Assy Desc",
-        "target_field": "Item Description",
-        "target_table": "Engineering Item Master",
-        "explanation": "Field type: Text(100), Required.\n\nDescription for parent assemblies, repeated identically across every component row within an assembly. Used as a fallback when the corresponding SKU has no ProductName in Products. Products.ProductName is preferred when available because it covers more SKUs (4,587 vs 123) and tends to be more current.",
-        "transformation_needed": true,
+        "target_field": "Unmapped",
+        "target_table": "Unmapped",
+        "explanation": "Per Joanna (Rootstock PS) on the Jun 5 call: the Products file (which is RCB's item master) carries ProductName for all items, including BoM components, so item descriptions come from Products exclusively. The Engineering BOM Masters Assy Desc column is redundant and not mapped. VERIFY before load: this assumes every BoM component also appears in the Products file. Prior data review suggested ~68 components (raw paper PR-*, inks A0xxx, glues D0xxx, boxes BX-*) may exist only in the BoM — if so, those items would lose their description source. Spot-check that BoM components appear in Products.",
+        "transformation_needed": false,
         "transformations": [
-          "Take distinct trimmed values of Assy Desc paired with Assy Item. When the same SKU also exists in Products: use COALESCE(Products.ProductName, Engineering BOM Masters.Assy_Desc) — Products.ProductName wins when both are present."
+          "No transformation needed — this field is not loaded. Item Description is sourced from Products.ProductName exclusively, per Joanna (Jun 5)."
         ],
-        "confidence": 82
+        "confidence": 78
       },
       {
         "source_table": "Engineering BOM Masters",
         "source_field": "Part #",
-        "target_field": "Item Number",
-        "target_table": "Engineering Item Master",
-        "explanation": "Field type: Text(50), Required.\n\nEach distinct Part # represents a component used in a Bill of Materials that should become its own Engineering Item Master record. About 68 of 125 components exist only in the Engineering BOM Masters and not in Products — these include raw paper (PR-SBS-*), inks (A000x), glues (D0001), boxes (BX-*), and tape. For these items, the Engineering BOM Masters is the only source available. Items extracted from Part # default to Inventory Source = Purchased unless they also appear as an Assy Item in the Engineering BOM Masters (Assy Item).",
-        "transformation_needed": true,
+        "target_field": "Unmapped",
+        "target_table": "Unmapped",
+        "explanation": "Per Joanna (Rootstock PS) on the Jun 5 call: Item Number is sourced from Products.ProductSKU exclusively, because every component appears in the Products file (RCB's item master). The Engineering BOM Masters Part # column is redundant for Item Number and not mapped. VERIFY before load: this is the highest-risk of the four BoM unmappings — prior data review suggested ~68 components (raw paper PR-*, inks A0xxx, glues D0xxx, boxes BX-*, tape) may exist ONLY in the BoM and not in Products. If that is correct, unmapping Part # drops those items from the migration entirely. Spot-check before proceeding.",
+        "transformation_needed": false,
         "transformations": [
-          "Take distinct trimmed values of Part # where Part # is not null. Then exclude any value that already exists as an Assy Item (those are manufactured parents — already loaded with Inventory Source = Manufactured) or as a Products.ProductSKU (those come from Products instead). Only emit Part # values that no other source already created."
+          "No transformation needed — this field is not loaded. Item Number comes from Products.ProductSKU, per Joanna (Jun 5). CAUTION: if BoM-only components exist (not in Products), they are dropped by this change — verify first."
         ],
-        "confidence": 92
+        "confidence": 75
       },
       {
         "source_table": "Engineering BOM Masters",
         "source_field": "Item",
-        "target_field": "Item Description",
-        "target_table": "Engineering Item Master",
-        "explanation": "Field type: Text(100), Required.\n\nPer the business context document, the Item column describes components of sub-assemblies — RCB's BOMs are structured as Parent Work Orders containing Sub-Assembly Work Orders, and Item is the description at the sub-assembly-component grain (for example, 'Atlantic 16pt SBS, 23\"x29\"' for a paper stock component). Used in our mapping as the Item Description source for the ~68 Part # values that don't exist in Products. When a Part # also appears in Products.ProductSKU, Products.ProductName takes priority because it's more complete and current.",
-        "transformation_needed": true,
+        "target_field": "Unmapped",
+        "target_table": "Unmapped",
+        "explanation": "Per Joanna (Rootstock PS) on the Jun 5 call: item descriptions come from Products.ProductName exclusively, because the Products file (RCB's item master) covers all items including BoM components. The Engineering BOM Masters Item description column is redundant and not mapped. VERIFY before load: assumes every BoM component appears in Products — spot-check the ~68 potentially BoM-only components (raw paper, inks, glues, boxes).",
+        "transformation_needed": false,
         "transformations": [
-          "Trim whitespace. Use only when the Part # has no corresponding Products.ProductName. Final priority for Item Description: Products.ProductName > Engineering BOM Masters.Assy_Desc > Engineering BOM Masters.Item."
+          "No transformation needed — this field is not loaded. Item Description comes from Products.ProductName, per Joanna (Jun 5)."
         ],
-        "confidence": 80
+        "confidence": 78
       },
       {
         "source_table": "Engineering BOM Masters",
         "source_field": "BOM Quantity",
-        "target_field": "Unmapped",
-        "target_table": "Unmapped",
-        "explanation": "A binary flag (0.0, 1.0, or null) with unclear semantics in the source data. The actual per-unit consumption quantity is captured in the Qty field in Engineering BOM Masters, not here. This field would belong on a BOM Component record (the table that links a parent to its components with quantities), which is a separate target object not included in the current Engineering Item Master and Inventory Commodity Code migration scope.",
-        "transformation_needed": false,
+        "target_field": "Eng Type",
+        "target_table": "Engineering Item Master",
+        "explanation": "Field type: Picklist {Standard, Phantom, Reference}, Optional (inherits from commodity code if blank).\n\nPer Joanna (Rootstock PS) on the Jun 5 call, Eng Type is derived from two structural signals rather than a dedicated source column:\n  • Reference items are identified by BOM Quantity = 0 (RCB convention — reference items appear in BoMs at zero quantity to indicate they are referenced but not consumed). Joanna is providing a business context document explaining this convention.\n  • Phantom items are identified by a SKU appearing as both Assy Item (parent) and Part # (component) — sub-assemblies never independently inventoried (8 SKUs in the current data: B-CHC08/12/16/20, WHC08/12/16/20).\n  • Everything else defaults to Standard.\n\nThis replaces the prior Sub-Assembly Flag → Eng Type mapping, which Joanna confirmed is not a usable source. Confidence is held at 70 pending Joanna's context document confirming the BOM Quantity = 0 convention.",
+        "transformation_needed": true,
         "transformations": [
-          "No transformation needed for these tables. Preserve this field for the future BOM Component migration phase."
+          "CASE\n  WHEN SKU IN (SELECT \"Assy Item\" FROM \"Engineering BOM Masters\")\n   AND SKU IN (SELECT \"Part #\" FROM \"Engineering BOM Masters\")\n  THEN 'Phantom'\n  WHEN \"BOM Quantity\" = 0\n  THEN 'Reference'\n  ELSE 'Standard'\nEND\n\nThe Phantom check runs first (a structural property of the SKU, true regardless of quantity). The Reference check runs second on the BOM Quantity = 0 convention. Standard is the default. Phantom and Reference items keep their underlying Inventory Source (Manufactured for assemblies); only Eng Type changes. Pending Joanna's business context document confirming the BOM Quantity = 0 = Reference convention."
         ],
-        "confidence": 86
+        "confidence": 70
       },
       {
         "source_table": "Engineering BOM Masters",
         "source_field": "Unit of Measure",
         "target_field": "rstk__peitem_enguom__r external id",
         "target_table": "Engineering Item Master",
-        "explanation": "Field type: Lookup(Unit of Measure), External ID, Required.\n\nPer-component engineering UOM in the Engineering BOM Masters (Sheet, 5Kg, Gallon, Each, Roll, Linear FT, Lbs, Liter). This drives the Eng UOM for components extracted from Engineering BOM Masters.Part #. Parent assemblies (finished cups and sleeves) are always counted as Each and use a hardcoded EA value — they don't pull from this field.",
+        "explanation": "Field type: Lookup(Unit of Measure), External ID, Required.\n\nPer-component engineering UOM in the Engineering BOM Masters (Sheet, 5Kg, Gallon, Each, Roll, Linear FT, Lbs, Liter). This drives the Eng UOM for components extracted from Engineering BOM Masters.Part #. Parent assemblies (finished cups and sleeves) are always counted as Each and use a hardcoded EA value — they do not pull from this field.\n\nUOM code corrections confirmed by Joanna (Rootstock PS) on the Jun 5 call: Roll → RL (not ROLL), Liter → LTR (not L). Joanna is providing the UOM reference file (export of the target org's UOM master) to validate all codes and surface any remaining mismatches.",
         "transformation_needed": true,
         "transformations": [
-          "For components extracted from Engineering BOM Masters.Part #, look up the source UOM and map to Rootstock UOM external ID:\n\n  Sheet     → SHEET\n  5Kg       → KG    (note: '5Kg' is the pail size, not a unit — confirm with RCB whether inks should be tracked in KG by weight or in pails as Each)\n  Gallon    → GAL\n  Each      → EA\n  Roll      → ROLL\n  Linear FT → FT\n  Lbs       → LB\n  Liter     → L\n\nFor parent assemblies extracted from Engineering BOM Masters.Assy Item, hardcode EA. Pre-create any missing UOM records in Rootstock before loading Engineering Item Master rows."
+          "For components extracted from Engineering BOM Masters.Part #, look up the source UOM and map to Rootstock UOM external ID:\n\n  Sheet     → SHEET\n  5Kg       → KG    (note: '5Kg' is the pail size, not a unit — confirm with RCB whether inks should be tracked in KG by weight or in pails as Each)\n  Gallon    → GAL\n  Each      → EA\n  Roll      → RL    (corrected from ROLL per Joanna, Jun 5)\n  Linear FT → FT\n  Lbs       → LB\n  Liter     → LTR   (corrected from L per Joanna, Jun 5)\n\nUOM codes confirmed against the Rootstock target org per Joanna (Jun 5); the forthcoming UOM reference file will validate the full set. For parent assemblies extracted from Assy Item, hardcode EA. Pre-create any missing UOM records in Rootstock before loading."
         ],
-        "confidence": 83
+        "confidence": 85
       },
       {
         "source_table": "Engineering BOM Masters",
@@ -191,14 +191,14 @@
       {
         "source_table": "Engineering BOM Masters",
         "source_field": "Sub-Assembly Flag",
-        "target_field": "Eng Type",
-        "target_table": "Engineering Item Master",
-        "explanation": "Field type: Picklist {Standard, Phantom, Reference}, Optional (inherits from commodity code if blank).\n\nIdentifies components that are themselves assemblies (have their own BoM). Per the business context document, RCB's manufacturing model is structured as Parent Work Orders containing Sub-Assembly Work Orders — meaning sub-assemblies are a routine structural element of every BoM, not an exception. The Sub-Assembly Flag column itself explicitly flags only 1 SKU (WHC16) in the source data, but the structural pattern described in the context document is observable directly: 8 SKUs appear as both Assy Item (parent) and Part # (component): `B-CHC08/12/16/20` and `WHC08/12/16/20`. These are the structural sub-assemblies and should all be marked Eng Type = Phantom in Rootstock, since they're never independently inventoried.\n\nApproach: use the structural test (SKU appears in both Assy Item and Part #) as the primary signal, rather than relying on the under-reported Sub-Assembly Flag column. The 1 explicit flag row (WHC16) confirms the convention but doesn't define the population.",
-        "transformation_needed": true,
+        "target_field": "Unmapped",
+        "target_table": "Unmapped",
+        "explanation": "Per Joanna (Rootstock PS) on the Jun 5 call: RCB's source data does not contain a Sub-Assembly Flag suitable for driving Eng Type. The Eng Type distinction (Standard / Phantom / Reference) is derived from other signals instead — see the BOM Quantity → Eng Type mapping, which uses BOM Quantity = 0 to detect Reference items and the structural parent-and-component test to detect Phantom items. This source field is not loaded.",
+        "transformation_needed": false,
         "transformations": [
-          "Apply this structural rule when extracting components:\n\n  CASE \n    WHEN SKU IN (SELECT \"Assy Item\" FROM Engineering BOM Masters)\n     AND SKU IN (SELECT \"Part #\" FROM Engineering BOM Masters)\n    THEN 'Phantom'\n    ELSE 'Standard'\n  END\n\nThis catches all 8 SKUs that appear as both parent and component (B-CHC08/12/16/20, WHC08/12/16/20) and marks them as Phantom. The explicit Sub-Assembly Flag column on the source row (which only populates for WHC16) is treated as confirmatory evidence rather than the population-defining signal.\n\nPhantom items keep Inventory Source = Manufactured (they are manufactured assemblies); only Eng Type changes from Standard to Phantom."
+          "No transformation needed — this field is not loaded. Eng Type is populated from BOM Quantity and the structural sub-assembly test instead (see the BOM Quantity → Eng Type mapping)."
         ],
-        "confidence": 72
+        "confidence": 90
       },
       {
         "source_table": "Products",
@@ -229,10 +229,10 @@
         "source_field": "ProductSKU",
         "target_field": "Item Number",
         "target_table": "Engineering Item Master",
-        "explanation": "Field type: Text(50), Required.\n\nThe primary business SKU used across orders, purchase orders, and invoices. Each distinct ProductSKU becomes one Engineering Item Master record. This produces ~4,587 EIM records covering every Products variant.\n\n**Decision point — EIM grain.** RCB's current production Rootstock org has only 338 EIM records, a curated subset closer to InvMasterSKU grain (~386 unique non-sentinel values). There are two defensible approaches:\n  (a) ProductSKU grain (~4,587 EIMs) — the platform's default, treats every Products variant as a distinct item. Matches the natural grain of Products.\n  (b) InvMasterSKU grain (~386 EIMs) — matches the prod org pattern. Treats EIM as the underlying inventory item; print/decoration variants live on Salesforce Product, not EIM.\nConfidence is reduced (55) to surface this as a decision RCB needs to make. The mapping defaults to ProductSKU grain because it preserves all source rows; switching to InvMasterSKU grain requires remapping the source field on Item Number from ProductSKU to InvMasterSKU (with sentinel filtering).\n\nAdditional consideration: ProductSKU has 622 duplicate values across 1,873 rows (32% of file). See the transformation rule for dedup logic.",
+        "explanation": "Field type: Text(50), Required.\n\nThe primary business SKU used across orders, purchase orders, and invoices. Per Joanna (Rootstock PS) on the Jun 5 call, the Products file is RCB's item master and is the sole source for Item Number (the Engineering BOM Masters Assy Item and Part # sources have been unmapped). Each distinct ProductSKU becomes one Engineering Item Master record, producing ~4,587 EIM records.\n\n**Decision point — EIM grain.** RCB's current production Rootstock org has only 338 EIM records, a curated subset closer to InvMasterSKU grain (~386 unique non-sentinel values). Two defensible approaches:\n  (a) ProductSKU grain (~4,587 EIMs) — the default; treats every Products row as a distinct item.\n  (b) InvMasterSKU grain (~386 EIMs) — matches the prod org pattern.\nConfidence is held at 55 to surface this as a decision RCB needs to make.\n\nAdditional consideration: ProductSKU has 622 duplicate values across 1,873 rows (32% of file). See the transformation for dedup logic.",
         "transformation_needed": true,
         "transformations": [
-          "Apply dedup before extracting Item Number:\n\n  WITH ranked AS (\n    SELECT ProductSKU, ProductName, InvMasterSKU, ProductActive, ProductUpdated,\n           ROW_NUMBER() OVER (\n             PARTITION BY TRIM(ProductSKU)\n             ORDER BY \n               CASE WHEN InvMasterSKU IS NOT NULL AND InvMasterSKU NOT IN ('NO INVENTORY','OUTSOURCED') THEN 0 ELSE 1 END,\n               ProductActive DESC,\n               ProductUpdated DESC NULLS LAST\n           ) AS rn\n    FROM products\n  )\n  SELECT TRIM(ProductSKU) AS item_number FROM ranked WHERE rn = 1\n\nTiebreaker priority: (1) rows with real InvMasterSKU win over sentinel/null, (2) active items win over inactive, (3) most recently updated wins. Resolves the 622 duplicate SKUs (1,873 rows = 32% of source).\n\nWhen merging with Item Numbers sourced from Engineering BOM Masters: SKUs that exist as Engineering BOM Masters Assy Items keep Inventory Source = Manufactured."
+          "Apply dedup before extracting Item Number:\n\n  WITH ranked AS (\n    SELECT ProductSKU, ProductName, InvMasterSKU, ProductActive, ProductUpdated,\n           ROW_NUMBER() OVER (\n             PARTITION BY TRIM(ProductSKU)\n             ORDER BY \n               CASE WHEN InvMasterSKU IS NOT NULL AND InvMasterSKU NOT IN ('NO INVENTORY','OUTSOURCED') THEN 0 ELSE 1 END,\n               ProductActive DESC,\n               ProductUpdated DESC NULLS LAST\n           ) AS rn\n    FROM products\n  )\n  SELECT TRIM(ProductSKU) AS item_number FROM ranked WHERE rn = 1\n\nTiebreaker priority: (1) rows with real InvMasterSKU win over sentinel/null, (2) active items win over inactive, (3) most recently updated wins. Resolves the 622 duplicate SKUs (1,873 rows = 32% of source). Per Joanna (Jun 5), ProductSKU is the only Item Number source — no merge with BoM-sourced numbers (those sources are unmapped)."
         ],
         "confidence": 55
       },
@@ -253,19 +253,19 @@
         "source_field": "ProductName",
         "target_field": "Item Description",
         "target_table": "Engineering Item Master",
-        "explanation": "Field type: Text(100), Required.\n\nFree-text product description from Products. This is the primary source of item descriptions in Rootstock because it covers all 4,587 Products SKUs and tends to be more complete and current than Engineering BOM Masters descriptions.",
+        "explanation": "Field type: Text(100), Required.\n\nFree-text product description from the Products file (RCB's item master). Per Joanna (Rootstock PS) on the Jun 5 call, this is the sole source of item descriptions — the Engineering BOM Masters description sources (Assy Desc, Item) have been unmapped, since every item appears in Products.",
         "transformation_needed": true,
         "transformations": [
-          "Trim whitespace. Truncate to Rootstock's Item Description max length. When a SKU has descriptions available from multiple sources, apply this priority: Products.ProductName > Engineering BOM Masters.Assy_Desc > Engineering BOM Masters.Item."
+          "Trim whitespace. Truncate to Rootstock's Item Description max length. Products.ProductName is the only description source (BoM description sources are unmapped per Joanna, Jun 5)."
         ],
-        "confidence": 93
+        "confidence": 95
       },
       {
         "source_table": "Products",
         "source_field": "ProductGroupName",
         "target_field": "rstk__peitem_iccomcod__r external id",
         "target_table": "Engineering Item Master",
-        "explanation": "Field type: Lookup(Inventory Commodity Code), External ID, Required.\n\nProduct category in the source system, with 18 distinct values such as 20WHC, DWS, Pad, Warehoused, and Apparel-Outsource. For most items the commodity code is determined by SKU pattern rather than this field, but two ProductGroupName values trigger important commodity code routings: 'Apparel-Outsource' routes items to RCB-APPAREL-DROP (Subcontract), and 'Warehoused' routes them to RCB-STOCK-RESALE.",
+        "explanation": "Field type: Lookup(Inventory Commodity Code), External ID, Required.\n\nProduct category in the source system, with 18 distinct values such as 20WHC, DWS, Pad, Warehoused, and Apparel-Outsource. For most items the commodity code is determined by SKU pattern rather than this field, but two ProductGroupName values trigger important commodity code routings: 'Apparel-Outsource' routes items to RCB-APPAREL-DROP, and 'Warehoused' routes them to RCB-STOCK-RESALE.",
         "transformation_needed": true,
         "transformations": [
           "Apply this rule first, before SKU-pattern routing:\n\n  WHEN ProductGroupName = 'Apparel-Outsource' → '2_RCB-APPAREL-DROP'\n  WHEN ProductGroupName = 'Warehoused'        → '2_RCB-STOCK-RESALE'\n\nFor any other ProductGroupName value, fall through to the SKU-pattern rule (ProductSKU → Inventory Commodity Code) and the Engineering BOM Masters.Item Type rule.\n\nExternal ID format follows '<division_external_id>_<commodity_code>'. All outputs prefixed with '2_' (division 2)."
@@ -301,12 +301,12 @@
         "source_field": "InvMasterSKU",
         "target_field": "Inventory Source",
         "target_table": "Engineering Item Master",
-        "explanation": "Field type: Picklist {Manufactured, Purchased, Subcontract}, Optional (inherits from commodity code if blank).\n\nThe inventory key in the source system, with 388 distinct values plus TWO sentinels:\n  - 'NO INVENTORY' (376 rows) — items not stock-tracked, typically one-off custom orders\n  - 'OUTSOURCED' (1,378 rows / 1,275 unique SKUs) — drop-ship items supplied by external vendors. All filed under ProductGroupName='20WHC' in the source data but are actually apparel (Bayside hoodies, Comfort Colors t-shirts, Gildan tees, Alternative pullovers, Sportsman caps, etc.). The ProductGroupName label is misleading for these items; the real discriminator is InvMasterSKU='OUTSOURCED'.\n\nCombined with presence in the Engineering BOM Masters, this field determines whether an item becomes Manufactured, Purchased, Subcontract, or is filtered out of the migration.",
+        "explanation": "Field type: Picklist {Manufactured, Purchased, Subcontract}, Optional (inherits from commodity code if blank).\n\nPer Joanna (Rootstock PS) on the Jun 5 call, RCB uses only Manufactured and Purchased — no Subcontract. The rule is simple: if a SKU has a Bill of Materials (appears as an Assy Item in Engineering BOM Masters) it is Manufactured; everything else is Purchased.\n\nData observation (retained for reference): the source contains two sentinel values in InvMasterSKU — 'NO INVENTORY' (376 rows, typically one-off custom orders) and 'OUTSOURCED' (1,378 rows / 1,275 unique SKUs, drop-ship apparel filed under ProductGroupName='20WHC'). Under Joanna's simplified rule, both sentinel groups resolve to Purchased (they have no BoM). This is a change from the prior spec, which routed OUTSOURCED to Subcontract.",
         "transformation_needed": true,
         "transformations": [
-          "Apply this resolution rule (order matters):\n\n  IF SKU appears as an Assy Item in the Engineering BOM Masters\n      → Inventory Source = Manufactured\n  ELSE IF InvMasterSKU = 'OUTSOURCED'\n      → Inventory Source = Subcontract  (catches 1,275 drop-ship apparel SKUs)\n  ELSE IF ProductGroupName = 'Apparel-Outsource'\n      → Inventory Source = Subcontract  (catches 26 stadium cup SKUs)\n  ELSE IF InvMasterSKU is non-null AND ≠ 'NO INVENTORY'\n      → Inventory Source = Purchased\n  ELSE IF InvMasterSKU = 'NO INVENTORY' AND SKU not used in any Bill of Materials\n      → Filter out (do not load)\n\nThe OUTSOURCED branch runs BEFORE the ProductGroupName check because the OUTSOURCED sentinel is the more reliable signal (1,275 SKUs vs 26 SKUs)."
+          "Per Joanna (Rootstock PS), Jun 5:\n\n  CASE\n    WHEN SKU appears as an Assy Item in Engineering BOM Masters THEN 'Manufactured'\n    ELSE 'Purchased'\n  END\n\nNo Subcontract is used. Note: 'NO INVENTORY' items (376 rows, one-off custom orders) resolve to Purchased under this rule — confirm with RCB whether these should be loaded or filtered out."
         ],
-        "confidence": 78
+        "confidence": 88
       },
       {
         "source_table": "Products",
@@ -325,12 +325,12 @@
         "source_field": "ProductUnitsName",
         "target_field": "Unmapped",
         "target_table": "Unmapped",
-        "explanation": "The selling unit of measure (Case, Single, or Roll). In Rootstock, inventory and engineering UOMs are always EA for these items — the Case and Roll relationships belong on UOM Conversion and Sales Order tables, not on the item master. Do not conflate this with the engineering UOM.",
+        "explanation": "The selling unit of measure (Case, Single, or Roll). Per Joanna (Rootstock PS) on the Jun 5 call, this is the SELLING UOM and belongs on the Product Master target object in Rootstock — not on the Engineering Item Master. RCB uses the same UOM codes for selling and engineering, but the selling UOM is a distinct field on a distinct object. Product Master is not yet an in-scope target table for this POC. This field will be remapped to Product Master.Selling UOM once Joanna ingests the Product Master table. (A manual mapping to Engineering UOM on PE Item was created during testing; that should be removed since the correct destination is Product Master.)",
         "transformation_needed": false,
         "transformations": [
-          "No transformation needed for these tables. Preserve this field for the future UOM Conversion and Sales Order migration phases."
+          "No transformation needed for the current target tables. Awaiting ingestion of the Product Master target table, after which this maps to Product Master.Selling UOM."
         ],
-        "confidence": 87
+        "confidence": 90
       },
       {
         "source_table": "Products",
@@ -385,12 +385,12 @@
         "source_field": "ProductActive",
         "target_field": "Status",
         "target_table": "Engineering Item Master",
-        "explanation": "Field type: Picklist {Pending, Active}, Required.\n\nLifecycle status of the item. Reference data shows Status values of Active and Pending. In Rootstock, Status and Inactive Status are orthogonal: Status represents the record lifecycle (Active = released, Pending = draft), while Inactive Status represents the usage flag. Inactive items typically keep Status = Active and gain an Inactive Status code; see the Inactive Status mapping for that flag.",
+        "explanation": "Field type: Picklist {Pending, Active}, Required.\n\nLifecycle status of the item. Per Joanna (Rootstock PS) on the Jun 5 call, ProductActive drives Status directly: an active product (ProductActive = 1) maps to Status = Active, and an inactive product (ProductActive = 0) maps to Status = Pending. This is distinct from Inactive Status (the usage flag) — see the ProductActive → Inactive Status mapping. Note: the source file labeled 'Products' is RCB's item master (confirmed by Joanna on the Jun 5 call), so pulling Status from it is correct.",
         "transformation_needed": true,
         "transformations": [
-          "For items sourced from Products, set Status = 'Active' regardless of the ProductActive value (the active/inactive distinction is handled by Inactive Status). Use 'Pending' only if RCB has a specific convention for items not yet released. For items sourced only from the Engineering BOM Masters with no Products match, default to Status = 'Active'."
+          "Per Joanna (Rootstock PS), Jun 5:\n\n  CASE WHEN Products.ProductActive = 1 THEN 'Active' ELSE 'Pending' END\n\nFor items sourced only from Engineering BOM Masters with no Products match, default to Status = 'Active'."
         ],
-        "confidence": 79
+        "confidence": 85
       },
       {
         "source_table": "Products",
@@ -544,7 +544,7 @@
         "explanation": "Field type: Text(20), Required.\n\nThe commodity code name (primary identifier). One Inventory Commodity Code row per code.",
         "transformation_needed": true,
         "transformations": [
-          "Per-code value. Proposed set (11 codes):\n\nManufactured:\n  • RCB-PRINT-CUP        — printed paper hot cups (P-WHC*, P-KIC*, P-CHC*, etc.)\n  • RCB-PRINT-SLEEVE     — printed sleeves (P-DWS, P-DKS, P-CWS, P-CKS)\n  • RCB-BLANK-CUP        — manufactured blank cups (WHC08/12/16/20, CHC*, B-CHC*, WSC22/32)\n  • RCB-BLANK-SLEEVE     — manufactured blank sleeves (if any)\n\nPurchased:\n  • RCB-PRINT-MAT        — paper raw materials (PR-* paper sheets)\n  • RCB-CONSUMABLE-INK   — inks (A0xxx)\n  • RCB-CONSUMABLE-GLUE  — glues (D0xxx, C0xxx) — split from INK because operationally different\n  • RCB-PACKAGING        — boxes, bags, tape, labels, printed instructions (BX-*, BG-*, BC*, N0*, TAPE-*, LABEL-*, BCI)\n  • RCB-STOCK-RESALE     — warehoused stock for resale (Products.ProductGroupName = 'Warehoused')\n\nSubcontract:\n  • RCB-APPAREL-DROP     — drop-ship apparel (InvMasterSKU = 'OUTSOURCED', 1,275 SKUs)\n\nCatch-all:\n  • RCB-UNROUTED         — items that did not match any routing rule. Requires user review before load.\n\nExternal IDs format as '2_<code>' (e.g., '2_RCB-PRINT-CUP') per the division prefix requirement."
+          "Per-code value. Proposed set (11 codes):\n\nManufactured:\n  • RCB-PRINT-CUP        — printed paper hot cups (P-WHC*, P-KIC*, P-CHC*, etc.)\n  • RCB-PRINT-SLEEVE     — printed sleeves (P-DWS, P-DKS, P-CWS, P-CKS)\n  • RCB-BLANK-CUP        — manufactured blank cups (WHC08/12/16/20, CHC*, B-CHC*, WSC22/32)\n  • RCB-BLANK-SLEEVE     — manufactured blank sleeves (if any)\n\nPurchased:\n  • RCB-PRINT-MAT        — paper raw materials (PR-* paper sheets)\n  • RCB-CONSUMABLE-INK   — inks (A0xxx)\n  • RCB-CONSUMABLE-GLUE  — glues (D0xxx, C0xxx) — split from INK because operationally different\n  • RCB-PACKAGING        — boxes, bags, tape, labels, printed instructions (BX-*, BG-*, BC*, N0*, TAPE-*, LABEL-*, BCI)\n  • RCB-STOCK-RESALE     — warehoused stock for resale (Products.ProductGroupName = 'Warehoused')\n  • RCB-APPAREL-DROP     — drop-ship apparel (InvMasterSKU = 'OUTSOURCED', 1,275 SKUs). NOTE (Jun 5): per Joanna, RCB uses no Subcontract — this code's default Inventory Source is Purchased, not Subcontract. See decisions log; ICC value fields pending dedicated review.\n\nCatch-all:\n  • RCB-UNROUTED         — items that did not match any routing rule. Requires user review before load.\n\nExternal IDs format as '2_<code>' (e.g., '2_RCB-PRINT-CUP') per the division prefix requirement."
         ],
         "confidence": 56
       },
@@ -556,7 +556,7 @@
         "explanation": "Field type: Text(100), Required.\n\nHuman-readable description of the commodity code.",
         "transformation_needed": true,
         "transformations": [
-          "Per-code value (human-readable):\n\n  RCB-PRINT-CUP        → 'Printed Paper Hot Cups'\n  RCB-PRINT-SLEEVE     → 'Printed Cup Sleeves'\n  RCB-BLANK-CUP        → 'Manufactured Blank Cups'\n  RCB-BLANK-SLEEVE     → 'Manufactured Blank Sleeves'\n  RCB-PRINT-MAT        → 'Print Materials — Paper Stock'\n  RCB-CONSUMABLE-INK   → 'Ink Consumables'\n  RCB-CONSUMABLE-GLUE  → 'Glue Consumables'\n  RCB-PACKAGING        → 'Packaging Materials (Boxes, Bags, Tape, Labels)'\n  RCB-STOCK-RESALE     → 'Warehoused Stock for Resale'\n  RCB-APPAREL-DROP     → 'Drop-Ship Apparel (Subcontract)'\n  RCB-UNROUTED         → 'Items Requiring Review — Did Not Match Routing Rules'"
+          "Per-code value (human-readable):\n\n  RCB-PRINT-CUP        → 'Printed Paper Hot Cups'\n  RCB-PRINT-SLEEVE     → 'Printed Cup Sleeves'\n  RCB-BLANK-CUP        → 'Manufactured Blank Cups'\n  RCB-BLANK-SLEEVE     → 'Manufactured Blank Sleeves'\n  RCB-PRINT-MAT        → 'Print Materials — Paper Stock'\n  RCB-CONSUMABLE-INK   → 'Ink Consumables'\n  RCB-CONSUMABLE-GLUE  → 'Glue Consumables'\n  RCB-PACKAGING        → 'Packaging Materials (Boxes, Bags, Tape, Labels)'\n  RCB-STOCK-RESALE     → 'Warehoused Stock for Resale'\n  RCB-APPAREL-DROP     → 'Drop-Ship Apparel'\n  RCB-UNROUTED         → 'Items Requiring Review — Did Not Match Routing Rules'"
         ],
         "confidence": 58
       },
@@ -625,10 +625,10 @@
         "source_field": "Unmapped",
         "target_field": "INVENTORY SOURCE",
         "target_table": "Inventory Commodity Code",
-        "explanation": "Field type: Picklist {Manufactured, Purchased, Subcontract}, Required.\n\nDefault Inventory Source for items in this code.",
+        "explanation": "Field type: Picklist {Manufactured, Purchased, Subcontract}, Required.\n\nDefault Inventory Source for items in this code. NOTE (Jun 5 call): per Joanna, RCB uses only Manufactured and Purchased — no Subcontract. The item-level InvMasterSKU → Inventory Source mapping now reflects this. The per-code defaults below still list RCB-APPAREL-DROP as Subcontract from the prior spec; this should be changed to Purchased to stay consistent. The full set of ICC value-assignment fields was NOT reviewed in the Jun 5 meeting (the call ended at Unit of Measure) and needs a dedicated review pass — see decisions log.",
         "transformation_needed": true,
         "transformations": [
-          "Per commodity code:\n\n  Manufactured: RCB-PRINT-CUP, RCB-PRINT-SLEEVE, RCB-BLANK-CUP, RCB-BLANK-SLEEVE\n  Purchased:    RCB-PRINT-MAT, RCB-CONSUMABLE-INK, RCB-CONSUMABLE-GLUE, RCB-PACKAGING, RCB-STOCK-RESALE\n  Subcontract:  RCB-APPAREL-DROP\n  Catch-all:    RCB-UNROUTED (set after user review; provisionally Purchased)"
+          "Per commodity code:\n\n  Manufactured: RCB-PRINT-CUP, RCB-PRINT-SLEEVE, RCB-BLANK-CUP, RCB-BLANK-SLEEVE\n  Purchased:    RCB-PRINT-MAT, RCB-CONSUMABLE-INK, RCB-CONSUMABLE-GLUE, RCB-PACKAGING, RCB-STOCK-RESALE\n  Purchased:    RCB-APPAREL-DROP  (changed from Subcontract per Joanna's no-Subcontract rule, Jun 5 — confirm in ICC review)\n  Catch-all:    RCB-UNROUTED (set after user review; provisionally Purchased)"
         ],
         "confidence": 82
       },
@@ -904,7 +904,7 @@
         "explanation": "Field type: Picklist {Direct (including Sub-contract), Indirect, Outside Operation, Service}, Required.\n\nType of purchase/transaction for items in this commodity code.\n\nPicklist value caveat: the schema doc shows 'Direct (including Sub-contract)' for the direct value. The reference template CSV uses 'Direct Purchases' for the same field. One of the two artifacts is wrong. The mapping below uses the schema-doc value; if the load rejects it, switch to 'Direct Purchases'.\n\nNote: different concept from Engineering Item Master.Item Type (Blank/Direct Material/Labor Only) — picklists do not align across the two objects.",
         "transformation_needed": true,
         "transformations": [
-          "Per commodity code, set one of the schema's four picklist values:\n\n  `Direct (including Sub-contract)` for most purchased and manufactured codes\n  `Outside Operation` for RCB-APPAREL-DROP\n\n  `Indirect` and `Service` are not used for RCB."
+          "Per commodity code, set one of the schema's four picklist values:\n\n  `Direct (including Sub-contract)` for most purchased and manufactured codes\n  `Direct (including Sub-contract)` for RCB-APPAREL-DROP (changed from 'Outside Operation' per Joanna's no-Subcontract rule, Jun 5 — confirm in ICC review)\n\n  `Indirect` and `Service` are not used for RCB."
         ],
         "confidence": 72
       },
@@ -1168,7 +1168,7 @@
         "explanation": "Field type: Picklist {No Backflush, First Op, Last Op}, Required.\n\nWhen to backflush components from inventory automatically.\n\nPicklist value caveat: the schema documentation lists values as 'No Backflush', 'First Op', 'Last Op'. The reference template CSV from RCB's other Rootstock org uses 'No Backflushing', 'First Operation', 'Last Operation' for the same field. One of the two artifacts is using display labels and the other API values; we cannot determine which the live RCB org accepts without testing. The mapping below uses the schema-doc values; if the load rejects them, switch to the template values.",
         "transformation_needed": true,
         "transformations": [
-          "Per commodity code, set one of the schema's three picklist values:\n\n  `First Op` or `Last Op` for manufactured codes (RCB-PRINT-CUP, RCB-PRINT-SLEEVE)\n  `No Backflush` for purchased codes (RCB-BLANK, RCB-PRINT-MAT, RCB-CONSUMABLE-INK, RCB-PACKAGING, RCB-STOCK-RESALE)\n  `No Backflush` for RCB-APPAREL-DROP (Subcontract)"
+          "Per commodity code, set one of the schema's three picklist values:\n\n  `First Op` or `Last Op` for manufactured codes (RCB-PRINT-CUP, RCB-PRINT-SLEEVE)\n  `No Backflush` for purchased codes (RCB-BLANK, RCB-PRINT-MAT, RCB-CONSUMABLE-INK, RCB-PACKAGING, RCB-STOCK-RESALE)\n  `No Backflush` for RCB-APPAREL-DROP"
         ],
         "confidence": 76
       },

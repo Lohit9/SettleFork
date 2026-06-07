@@ -1,0 +1,272 @@
+/* ============================================================
+   SETTLE — Design Tokens
+   AI-native enterprise data migration
+   Source of truth for color, type, spacing, radius, shadow, motion.
+
+   Scoped under .mkt (the marketing route-group wrapper) so these
+   tokens and utilities apply ONLY to the marketing surface and can
+   never leak into the authenticated platform. Defined-but-dormant:
+   nothing on a marketing page consumes them yet — the reskin PRs do.
+   ============================================================ */
+
+/* Fonts resolve from the next/font variables the root layout exposes on
+   <html> (--font-dm-sans, --font-jetbrains-mono); no external @import. */
+
+.mkt {
+  /* ---------------------------------------------------------
+     COLOR — Surfaces
+     Subtly cool, navy-tinted whites. Never pure #fff/#000.
+     --------------------------------------------------------- */
+  --bg:         #FAFBFC;  /* page background */
+  --surface:    #FFFFFF;  /* cards, panels, raised UI */
+  --surface-2:  #F4F6FA;  /* insets, footers, table headers, chips */
+
+  /* COLOR — Ink (text), navy hue across the stack */
+  --ink:    #1A2332;  /* headings, primary text */
+  --ink-2:  #515C70;  /* body copy, secondary text */
+  --ink-3:  #87909F;  /* meta, captions, muted labels */
+
+  /* COLOR — Lines / borders */
+  --line:    #E6EAF1;  /* default hairline borders */
+  --line-2:  #EEF1F6;  /* lighter internal dividers (table rows) */
+  --line-3:  #C2CBDA;  /* control borders (checkbox, inputs) */
+
+  /* COLOR — Action / brand blue (the one accent) */
+  --blue:       #2358D4;  /* primary buttons, links, accent text */
+  --blue-press: #1C49B0;  /* hover/pressed, blue text on tint */
+  --blue-tint:  #EDF2FE;  /* blue chip / badge background */
+  --blue-line:  #CFDCFA;  /* blue chip / badge border */
+
+  /* COLOR — Success / data-flow green (validation, "clean") */
+  --green:       #1D9E75;
+  --green-deep:  #167A5A;  /* green text on tint */
+  --green-tint:  #E5F4EE;
+  --green-line:  #BFE6D5;
+
+  /* COLOR — Review / caution amber (use sparingly: flags, "needs review") */
+  --amber:       #B0791F;
+  --amber-tint:  #FAF1E1;
+
+  /* COLOR — Error / blocked red (rare; blocked rows, destructive) */
+  --red:  #E2655A;
+
+  /* ---------------------------------------------------------
+     TYPOGRAPHY
+     --------------------------------------------------------- */
+  --font: var(--font-dm-sans), -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --mono: var(--font-jetbrains-mono), ui-monospace, 'SF Mono', Menlo, monospace;
+
+  /* Type scale (px). Headings use tight negative tracking; see utilities below. */
+  --fs-hero:   clamp(42px, 6.4vw, 78px); /* h1 / hero */
+  --fs-h2:     clamp(30px, 4vw, 46px);   /* section headings */
+  --fs-h3:     21px;                     /* card / column headings */
+  --fs-lede:   19px;                     /* intro paragraphs */
+  --fs-body:   15px;                     /* default UI text */
+  --fs-sm:     13px;                     /* dense UI, table cells */
+  --fs-meta:   12px;                     /* eyebrows, captions, meta */
+  --fs-micro:  11px;                     /* tiny mono labels */
+
+  --fw-regular: 400;
+  --fw-book:    450;  /* body copy, nav links */
+  --fw-medium:  500;
+  --fw-semi:    600;  /* headings, emphasis */
+  --fw-bold:    700;
+
+  --lh-tight:  1.03;  /* display headings */
+  --lh-snug:   1.2;
+  --lh-body:   1.55;  /* paragraphs */
+
+  --ls-display: -0.032em; /* hero */
+  --ls-h2:      -0.028em;
+  --ls-tight:   -0.02em;
+  --ls-eyebrow:  0.15em;  /* uppercase mono eyebrows */
+
+  /* ---------------------------------------------------------
+     SPACING — 4px base rhythm
+     --------------------------------------------------------- */
+  --sp-1:   4px;
+  --sp-2:   8px;
+  --sp-3:   12px;
+  --sp-4:   16px;
+  --sp-5:   20px;
+  --sp-6:   24px;
+  --sp-8:   32px;
+  --sp-10:  40px;
+  --sp-16:  64px;
+  --sp-26:  104px;  /* vertical section padding */
+
+  --container:    1200px;  /* max content width */
+  --container-pad: 32px;   /* horizontal gutter */
+
+  /* ---------------------------------------------------------
+     RADIUS
+     --------------------------------------------------------- */
+  --r-sm:  7px;    /* buttons, small controls, chips */
+  --r:     10px;   /* inputs, mid elements */
+  --r-lg:  16px;   /* cards, panels */
+  --r-xl:  22px;   /* hero console, large surfaces */
+  --r-pill: 999px; /* tags, badges */
+
+  /* ---------------------------------------------------------
+     SHADOW — soft, low-opacity, navy-tinted
+     --------------------------------------------------------- */
+  --sh-sm:   0 1px 2px rgba(26,35,50,.05), 0 1px 3px rgba(26,35,50,.05);
+  --sh-md:   0 2px 6px rgba(26,35,50,.05), 0 14px 32px rgba(26,35,50,.07);
+  --sh-lg:   0 4px 14px rgba(26,35,50,.06), 0 30px 70px rgba(26,35,50,.12);
+  --sh-blue: 0 1px 2px rgba(35,88,212,.30), 0 8px 22px rgba(35,88,212,.22); /* primary button glow */
+
+  /* ---------------------------------------------------------
+     MOTION
+     --------------------------------------------------------- */
+  --ease:      cubic-bezier(.2,.7,.3,1);  /* standard easing for all transitions */
+  --dur-fast:  .14s;  /* press / hover */
+  --dur-base:  .25s;  /* state changes */
+  --dur-slow:  .45s;  /* view transitions */
+  --dur-enter: .7s;   /* entrance reveals (fadeUp) */
+}
+
+/* ============================================================
+   BASE & UTILITY CLASSES
+   ============================================================ */
+.mkt .mono { font-family: var(--mono); font-feature-settings: normal; }
+.mkt .tnum { font-variant-numeric: tabular-nums; }
+
+/* Eyebrow / kicker — uppercase mono label above headings */
+.mkt .eyebrow,
+.mkt .kicker {
+  font-family: var(--mono);
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-semi);
+  letter-spacing: var(--ls-eyebrow);
+  text-transform: uppercase;
+  color: var(--blue);
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+}
+/* diamond bullet before an .eyebrow */
+.mkt .eyebrow::before {
+  content: '';
+  width: 6px; height: 6px;
+  background: var(--blue);
+  border-radius: 1.5px;
+  transform: rotate(45deg);
+}
+
+/* Headings */
+.mkt .h1 {
+  font-size: var(--fs-hero);
+  font-weight: var(--fw-semi);
+  letter-spacing: var(--ls-display);
+  line-height: var(--lh-tight);
+  color: var(--ink);
+  text-wrap: balance;
+}
+.mkt .h2 {
+  font-size: var(--fs-h2);
+  font-weight: var(--fw-semi);
+  letter-spacing: var(--ls-h2);
+  line-height: 1.06;
+  color: var(--ink);
+  text-wrap: balance;
+}
+.mkt .h3 {
+  font-size: var(--fs-h3);
+  font-weight: var(--fw-semi);
+  letter-spacing: var(--ls-tight);
+  color: var(--ink);
+}
+.mkt .lede {
+  font-size: var(--fs-lede);
+  line-height: var(--lh-body);
+  color: var(--ink-2);
+  font-weight: var(--fw-book);
+  text-wrap: pretty;
+}
+
+/* Layout helpers */
+.mkt .wrap { max-width: var(--container); margin: 0 auto; padding: 0 var(--container-pad); }
+.mkt .section { padding: var(--sp-26) 0; position: relative; }
+
+/* ============================================================
+   BUTTONS
+   ============================================================ */
+.mkt .btn {
+  font-family: var(--font);
+  font-size: var(--fs-body);
+  font-weight: 550;
+  letter-spacing: -0.01em;
+  border-radius: var(--r-sm);
+  padding: 0 18px;
+  height: 46px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: transform var(--dur-fast) var(--ease), box-shadow .18s, background .15s, border-color .15s;
+  white-space: nowrap;
+}
+.mkt .btn:active { transform: translateY(1px); }
+.mkt .btn svg { width: 16px; height: 16px; }
+
+.mkt .btn-primary {
+  background: var(--blue);
+  color: #fff;
+  box-shadow: var(--sh-blue);
+}
+.mkt .btn-primary:hover { background: var(--blue-press); }
+
+.mkt .btn-ghost {
+  background: var(--surface);
+  color: var(--ink);
+  border-color: var(--line);
+  box-shadow: var(--sh-sm);
+}
+.mkt .btn-ghost:hover { border-color: #D4DAE6; background: #fff; }
+
+/* ============================================================
+   CHIPS / BADGES  — mono, small, status-colored
+   ============================================================ */
+.mkt .chip {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  font-weight: var(--fw-medium);
+  padding: 3px 8px;
+  border-radius: 5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.mkt .chip-blue  { background: var(--blue-tint);  color: var(--blue-press); }
+.mkt .chip-green { background: var(--green-tint); color: var(--green-deep); }
+.mkt .chip-amber { background: var(--amber-tint); color: var(--amber); }
+.mkt .chip-gray  { background: var(--surface-2);  color: var(--ink-2); }
+
+/* ============================================================
+   CARD
+   ============================================================ */
+.mkt .card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-md);
+}
+
+/* ============================================================
+   MOTION — entrance reveals
+   Resting state is VISIBLE so print / reduced-motion show content;
+   motion-enabled viewers animate FROM hidden.
+   ============================================================ */
+@keyframes fadeUp { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes scaleIn { from { opacity: 0; transform: scale(.96); } to { opacity: 1; transform: scale(1); } }
+
+.mkt .anim { opacity: 1; }
+@media (prefers-reduced-motion: no-preference) {
+  .mkt .anim { opacity: 0; animation: fadeUp var(--dur-enter) var(--ease) forwards; }
+}
+@media print, (prefers-reduced-motion: reduce) {
+  .mkt .anim { opacity: 1 !important; animation: none !important; }
+}

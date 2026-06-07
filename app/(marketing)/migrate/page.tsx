@@ -12,17 +12,17 @@ export const metadata: Metadata = {
   title: 'Enterprise data migration paths — automated by AI | Settle',
   description:
     'Browse 100+ automated migration paths across SAP, Oracle EBS, NetSuite, Salesforce, HubSpot, and more. AI-powered schema mapping, SQL generation, and validation — delivered in weeks, not months.',
-  alternates: { canonical: 'https://usesettle.ai/migrate' },
+  alternates: { canonical: 'https://settledata.ai/migrate' },
   openGraph: {
     title: 'Enterprise data migration paths — automated by AI',
     description:
       'Browse 100+ automated migration paths. AI-powered schema mapping, SQL generation, and validation across SAP, Oracle, Salesforce, NetSuite, and more.',
-    url: 'https://usesettle.ai/migrate',
+    url: 'https://settledata.ai/migrate',
     siteName: 'Settle',
     type: 'website',
     images: [
       {
-        url: 'https://usesettle.ai/images/og-image.png',
+        url: 'https://settledata.ai/images/og-image.png',
         width: 1200,
         height: 630,
         alt: 'Settle — Enterprise data migration paths',
@@ -34,7 +34,7 @@ export const metadata: Metadata = {
     title: 'Enterprise data migration paths — automated by AI',
     description:
       'Browse 100+ automated migration paths. AI-powered schema mapping, SQL generation, and validation across SAP, Oracle, Salesforce, NetSuite, and more.',
-    images: ['https://usesettle.ai/images/og-image.png'],
+    images: ['https://settledata.ai/images/og-image.png'],
   },
 }
 
@@ -83,7 +83,7 @@ export default async function MigrateIndexPage({
       '@type': 'ListItem',
       position: index + 1,
       name: `${page.source_system} to ${page.target_system} migration`,
-      url: `https://usesettle.ai/migrate/${page.slug}`,
+      url: `https://settledata.ai/migrate/${page.slug}`,
     })),
   }
 

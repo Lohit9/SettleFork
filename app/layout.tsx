@@ -22,12 +22,12 @@ export const metadata: Metadata = {
     title: 'Settle — AI-Native Data Migration Platform',
     description:
       'Automate enterprise data migrations. AI profiles schemas, maps fields, generates SQL, and validates data — delivering production-ready migration packages.',
-    url: 'https://usesettle.ai',
+    url: 'https://settledata.ai',
     siteName: 'Settle',
     type: 'website',
     images: [
       {
-        url: 'https://usesettle.ai/images/og-image.png',
+        url: 'https://settledata.ai/images/og-image.png',
         width: 1200,
         height: 630,
         alt: 'Settle — AI-Native Data Migration Platform',
@@ -39,7 +39,7 @@ export const metadata: Metadata = {
     title: 'Settle — AI-Native Data Migration Platform',
     description:
       'Automate enterprise data migrations. AI profiles schemas, maps fields, generates SQL, and validates data — delivering production-ready migration packages.',
-    images: ['https://usesettle.ai/images/og-image.png'],
+    images: ['https://settledata.ai/images/og-image.png'],
   },
 }
 
