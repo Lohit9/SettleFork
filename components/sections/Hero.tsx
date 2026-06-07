@@ -1,237 +1,111 @@
 'use client'
 
 import Link from 'next/link'
-import { useState, useEffect } from 'react'
 import ScrollReveal from '@/components/ui/ScrollReveal'
 
-const MIGRATION_SYSTEMS = [
-  { name: 'Salesforce',             slug: 'Salesforce' },
-  { name: 'SAP S/4HANA',            slug: 'SAP'        },
-  { name: 'NetSuite',               slug: 'Netsuite'   },
-  { name: 'HubSpot',                slug: 'Hubspot'    },
-  { name: 'Microsoft Dynamics 365', slug: 'Dynamics'   },
-  { name: 'Oracle',                 slug: 'Oracle'     },
-] as const
-
-const SOURCE_FIELDS = ['customer_id', 'cust_name', 'service_addr', 'acct_status']
-const TARGET_FIELDS = ['AccountId', 'Account.Name', 'ServiceAddress__c', 'Status__c']
-
-function HeroFlow() {
-  const [step, setStep] = useState(0)
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setStep((s) => (s + 1) % 4)
-    }, 1800)
-    return () => clearInterval(interval)
-  }, [])
-
-  return (
-    <div className="bg-[#0F172A] rounded-2xl p-6 w-full shadow-2xl shadow-slate-900/40">
-      {/* Title bar */}
-      <div className="flex items-center gap-2 mb-6">
-        <div className="flex gap-1.5">
-          <div className="w-2.5 h-2.5 rounded-full bg-red-500/80" />
-          <div className="w-2.5 h-2.5 rounded-full bg-yellow-500/80" />
-          <div className="w-2.5 h-2.5 rounded-full bg-green-500/80" />
-        </div>
-        <span className="text-[#64748B] text-xs ml-2 font-mono">
-          settle — enterprise data migration
-        </span>
-      </div>
-
-      {/* Flow grid */}
-      <div className="grid grid-cols-[1fr_40px_1fr] gap-3 items-center mb-6">
-        {/* Source fields */}
-        <div className="space-y-2">
-          {SOURCE_FIELDS.map((field, i) => (
-            <div
-              key={field}
-              className={`font-mono text-xs px-3 py-1.5 rounded-md border transition-all duration-500 ${
-                step >= 1
-                  ? 'border-blue-500/40 bg-blue-500/10 text-blue-300'
-                  : 'border-slate-700 bg-slate-800/60 text-slate-600'
-              }`}
-              style={{ transitionDelay: `${i * 60}ms` }}
-            >
-              {field}
-            </div>
-          ))}
-        </div>
-
-        {/* Center connector */}
-        <div className="flex flex-col items-center gap-1.5">
-          {[0, 1, 2, 3, 4].map((i) => (
-            <div
-              key={i}
-              className={`rounded-full transition-all duration-300 ${
-                step === 2
-                  ? 'w-2 h-2 bg-blue-400 scale-125'
-                  : 'w-1.5 h-1.5 bg-slate-700'
-              }`}
-              style={{ transitionDelay: `${i * 80}ms` }}
-            />
-          ))}
-          <div
-            className={`mt-1 text-[9px] font-bold tracking-widest px-1.5 py-0.5 rounded transition-all duration-300 ${
-              step >= 1
-                ? 'text-blue-300 bg-blue-500/20 border border-blue-500/30'
-                : 'text-slate-600 bg-slate-800 border border-slate-700'
-            }`}
-          >
-            Settle
-          </div>
-        </div>
-
-        {/* Target fields */}
-        <div className="space-y-2">
-          {TARGET_FIELDS.map((field, i) => (
-            <div
-              key={field}
-              className={`font-mono text-xs px-3 py-1.5 rounded-md border transition-all duration-500 ${
-                step >= 3
-                  ? 'border-teal-500/40 bg-teal-500/10 text-teal-300'
-                  : 'border-slate-700 bg-slate-800/60 text-slate-600'
-              }`}
-              style={{ transitionDelay: `${i * 60}ms` }}
-            >
-              {field}
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Status bar */}
-      <div className="flex items-center gap-5 pt-4 border-t border-slate-800">
-        <span
-          className={`flex items-center gap-1.5 text-xs font-medium transition-colors duration-300 ${
-            step >= 1 ? 'text-blue-400' : 'text-slate-600'
-          }`}
-        >
-          <span className="text-[8px]">●</span> Profiled
-        </span>
-        <span
-          className={`flex items-center gap-1.5 text-xs font-medium transition-colors duration-300 ${
-            step >= 2 ? 'text-indigo-400' : 'text-slate-600'
-          }`}
-        >
-          <span className="text-[8px]">●</span> Mapped
-        </span>
-        <span
-          className={`flex items-center gap-1.5 text-xs font-medium transition-colors duration-300 ${
-            step >= 3 ? 'text-teal-400' : 'text-slate-600'
-          }`}
-        >
-          <span className="text-[8px]">●</span> Validated
-        </span>
-      </div>
-    </div>
-  )
-}
+const CALENDLY = 'https://calendly.com/settle-ai/demo'
 
 export default function Hero() {
+  const scrollToWalkthrough = () => {
+    document.getElementById('how')?.scrollIntoView({ behavior: 'smooth' })
+  }
+
   return (
-    <section className="pt-20 lg:pt-24 pb-10 lg:pb-12 bg-white">
-      <div className="max-w-7xl mx-auto px-6 lg:px-12">
-        <div className="grid lg:grid-cols-2 gap-14 items-center">
+    <section className="relative overflow-hidden bg-[color:var(--bg)] pt-24 lg:pt-32 pb-16 lg:pb-24">
+      {/* Faint grid texture, fading out toward the edges */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0"
+        style={{
+          backgroundImage:
+            'linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px)',
+          backgroundSize: '64px 64px',
+          opacity: 0.5,
+          maskImage:
+            'radial-gradient(ellipse 65% 55% at 50% 28%, #000 25%, transparent 75%)',
+          WebkitMaskImage:
+            'radial-gradient(ellipse 65% 55% at 50% 28%, #000 25%, transparent 75%)',
+        }}
+      />
 
-          {/* Left: Text */}
-          <ScrollReveal>
-            <p className="text-xs font-semibold uppercase tracking-widest text-[#2358D4] mb-4">
-              AI-Native Data Migration
-            </p>
-            <h1 className="text-5xl lg:text-[3.25rem] font-bold text-[#0F172A] leading-[1.12] tracking-tight mb-5">
-              Automate your entire data migration.
-            </h1>
-            <p className="hero-description text-lg text-[#475569] leading-relaxed max-w-lg mb-8">
-              Settle is an AI-native platform that automates enterprise data migration — schema profiling, field mapping, transformations, and validation. Cut months to weeks. Catch errors before production.
-            </p>
+      <div className="relative mx-auto max-w-3xl px-6 text-center">
+        <ScrollReveal>
+          {/* 1 — Eyebrow chip */}
+          <span className="inline-flex items-center rounded-full border border-[color:var(--blue-line)] bg-[color:var(--blue-tint)] px-3.5 py-1.5 mb-7">
+            <span className="eyebrow">AI-native enterprise data migration</span>
+          </span>
 
-            <div className="flex flex-wrap gap-3 mb-3">
-              <a
-                href="https://calendly.com/settle-ai/demo"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="bg-[#2358D4] hover:bg-[#1D4ED8] text-white font-semibold px-8 py-3.5 rounded-xl shadow-lg shadow-blue-600/20 hover:-translate-y-0.5 transition-all text-sm"
-              >
-                Book a Demo
-              </a>
-              <Link
-                href="/pricing"
-                className="border border-[#CBD5E1] text-[#0F172A] font-medium px-8 py-3.5 rounded-xl hover:border-[#2358D4] hover:text-[#2358D4] transition-all text-sm"
-              >
-                Get an Estimate
-              </Link>
-            </div>
+          {/* 2 — Headline */}
+          <h1 className="h1 mb-6">
+            Months of migration, done in{' '}
+            <span style={{ color: 'var(--blue)' }}>weeks</span>.
+          </h1>
 
-            {/* Trust signals */}
-            <div className="grid grid-cols-2 gap-x-6 gap-y-2 pt-4 max-w-md">
-              {[
-                'AWS-hosted',
-                'AES-256-GCM encryption',
-                'Anthropic Enterprise LLMs',
-                'SOC 2 in progress',
-              ].map((badge) => (
-                <span
-                  key={badge}
-                  className="flex items-center gap-1.5 text-xs text-[#94A3B8] font-medium"
-                >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth={2}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    className="w-3 h-3 text-[#22C55E] shrink-0"
-                    aria-hidden="true"
-                  >
-                    <polyline points="20 6 9 17 4 12" />
-                  </svg>
-                  {badge}
-                </span>
-              ))}
-            </div>
+          {/* 3 — Sub-headline (.hero-description is an AEO speakable selector — keep it) */}
+          <p className="hero-description lede mx-auto max-w-2xl mb-9">
+            Settle is the AI-native platform that profiles, maps, validates, and
+            packages enterprise data for migration — with every row checked before
+            it reaches production.
+          </p>
 
-
-          </ScrollReveal>
-
-          {/* Right: Animated product demo */}
-          <ScrollReveal delay={0.15} className="max-w-md mx-auto lg:max-w-none">
-            <HeroFlow />
-            <p className="text-sm text-[#64748B] text-center mt-4">
-              Built by a former Deloitte enterprise data migration lead.
-            </p>
-          </ScrollReveal>
-        </div>
-
-        {/* Logo bar */}
-        <ScrollReveal delay={0.1}>
-          <div className="mt-16">
-            <p className="text-center text-xs uppercase tracking-widest text-[#94A3B8] mb-5">
-              Designed for migrations to
-            </p>
-            <div className="flex flex-wrap justify-center gap-12">
-              {MIGRATION_SYSTEMS.map(({ name, slug }) => (
-                <Link
-                  key={name}
-                  href={`/migrate?target=${slug}`}
-                  className="text-sm font-bold text-[#0F172A] opacity-30 hover:opacity-60 transition-opacity tracking-tight cursor-pointer"
-                >
-                  {name}
-                </Link>
-              ))}
-            </div>
-
-            <Link
-              href="/migrate"
-              className="block text-center text-xs text-[#94A3B8] hover:text-[#2358D4] transition-colors mt-5"
+          {/* 4 — CTAs */}
+          <div className="flex flex-wrap items-center justify-center gap-3 mb-5">
+            <a
+              href={CALENDLY}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="btn btn-primary group"
             >
-              View all 100+ migration paths →
+              Book a demo
+              <span
+                aria-hidden="true"
+                className="transition-transform group-hover:translate-x-0.5"
+              >
+                →
+              </span>
+            </a>
+            <Link href="/pricing" className="btn btn-ghost">
+              Get an estimate
             </Link>
-
           </div>
+
+          {/* 5 — Audience microcopy */}
+          <p className="text-[13px] text-[color:var(--ink-3)]">
+            Built for VPs of IT, data architects &amp; migration leads
+          </p>
+        </ScrollReveal>
+
+        {/* 6 — Scroll cue → walkthrough (#how) */}
+        <ScrollReveal delay={0.15}>
+          <button
+            type="button"
+            onClick={scrollToWalkthrough}
+            aria-label="See it in action"
+            className="group mx-auto mt-16 flex flex-col items-center gap-2.5"
+          >
+            <span className="mono text-[11px] tracking-[0.18em] text-[color:var(--ink-3)]">
+              SEE IT IN ACTION
+            </span>
+            <span
+              aria-hidden="true"
+              className="flex flex-col items-center text-[color:var(--ink-3)] transition-transform group-hover:translate-y-0.5"
+            >
+              <span className="block h-7 w-px bg-current opacity-50" />
+              <svg
+                viewBox="0 0 24 24"
+                width="14"
+                height="14"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={2}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="-mt-1.5"
+              >
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+            </span>
+          </button>
         </ScrollReveal>
       </div>
     </section>
