@@ -2,13 +2,6 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { Search, X } from '@/components/icons'
-import { Layers, ChevronDown, ListFilter } from 'lucide-react'
-
-// Settle MVP design reskin: the Configure filter bar is Search · Group by ·
-// Status only. The source/target/confidence table-filters are kept in the code
-// (handlers + props intact) but hidden behind this flag so they can be restored
-// without re-plumbing. Group by is a visual stub (no grouping wired yet).
-const SHOW_LEGACY_FILTERS: boolean = false
 import {
   Select,
   SelectContent,
@@ -113,23 +106,6 @@ interface FilterRowProps {
    */
   onApproveHighConfidenceClick?: () => void
   /**
-   * Count of rows currently marked approved (reviewed). Drives the
-   * "N of M reviewed" counter in the toolbar's right-side review CTA.
-   * When omitted the review CTA is hidden.
-   */
-  reviewedCount?: number
-  /**
-   * Total reviewable rows (denominator for the "N of M reviewed" counter).
-   * Typically `effectiveCounts.total` from the parent.
-   */
-  totalReviewable?: number
-  /**
-   * Fired when the user clicks "Review fields →" / "Resume · N left →".
-   * Parent is responsible for opening the drawer on the first
-   * needs-review row.
-   */
-  onReviewFieldsClick?: () => void
-  /**
    * PR Ω.3.2.2 — partition catalog from
    * `MappingsForRedesignResult.partitionsByTargetTable`. Threaded
    * through to `<FlatPartitionChip>` which renders the multi-select
@@ -197,9 +173,6 @@ export function FilterRow({
   partitionsEnabled,
   selectedFlatPartitionIds,
   onFlatPartitionIdsChange,
-  reviewedCount,
-  totalReviewable,
-  onReviewFieldsClick,
 }: FilterRowProps) {
   // Local mirror for the search input so typing stays instant even
   // when the parent debounces URL writes. We sync back FROM the parent
@@ -335,91 +308,69 @@ export function FilterRow({
         target-axis "Unmapped" selects rows with no target
         (unmapped-source).
       */}
-      {SHOW_LEGACY_FILTERS ? (
-        <>
-          <FilterSelect
-            ariaLabel="Filter by source table"
-            testId="filter-source"
-            value={filters.source}
-            onChange={handleSourceChange}
-            allLabel="All source tables"
-            unmappedLabel="Unmapped"
-            options={sourceTables}
-            isActive={filters.source !== 'all'}
-          />
+      <FilterSelect
+        ariaLabel="Filter by source table"
+        testId="filter-source"
+        value={filters.source}
+        onChange={handleSourceChange}
+        allLabel="All source tables"
+        unmappedLabel="Unmapped"
+        options={sourceTables}
+        isActive={filters.source !== 'all'}
+      />
 
-          <FilterSelect
-            ariaLabel="Filter by target table"
-            testId="filter-target"
-            value={filters.target}
-            onChange={handleTargetChange}
-            allLabel="All target tables"
-            unmappedLabel="Unmapped"
-            options={targetTables}
-            isActive={filters.target !== 'all'}
-          />
-        </>
-      ) : null}
+      <FilterSelect
+        ariaLabel="Filter by target table"
+        testId="filter-target"
+        value={filters.target}
+        onChange={handleTargetChange}
+        allLabel="All target tables"
+        unmappedLabel="Unmapped"
+        options={targetTables}
+        isActive={filters.target !== 'all'}
+      />
 
-      {/* Status — design-styled stub (inert), matching the Group by control. */}
-      <button
-        type="button"
-        title="Status filter — coming soon"
-        data-testid="filter-status"
-        className="order-3 inline-flex h-8 flex-shrink-0 items-center gap-1.5 rounded-md border border-gray-200 bg-white px-2.5 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50"
-      >
-        <ListFilter className="h-3.5 w-3.5 text-gray-400" />
-        <span>
-          <span className="text-gray-500">Status:</span> All
-        </span>
-        <ChevronDown className="h-3 w-3 text-gray-400" />
-      </button>
+      <Select value={filters.status} onValueChange={handleStatusChange}>
+        <SelectTrigger
+          aria-label="Filter by status"
+          data-testid="filter-status"
+          className={cn(
+            'h-8 w-auto min-w-[7rem] text-xs',
+            filters.status !== 'all' &&
+              'border-blue-200 bg-blue-50/60 text-blue-900',
+          )}
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {STATUS_OPTIONS.map((opt) => (
+            <SelectItem key={opt.value} value={opt.value}>
+              {opt.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
 
-      {SHOW_LEGACY_FILTERS ? (
-        <Select value={filters.status} onValueChange={handleStatusChange}>
-          <SelectTrigger
-            aria-label="Filter by status"
-            data-testid="filter-status-legacy"
-            className={cn(
-              'h-8 w-auto min-w-[7rem] text-xs',
-              filters.status !== 'all' &&
-                'border-blue-200 bg-blue-50/60 text-blue-900',
-            )}
-          >
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {STATUS_OPTIONS.map((opt) => (
-              <SelectItem key={opt.value} value={opt.value}>
-                {opt.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      ) : null}
-
-      {SHOW_LEGACY_FILTERS ? (
-        <Select value={filters.confidence} onValueChange={handleConfidenceChange}>
-          <SelectTrigger
-            aria-label="Filter by confidence"
-            data-testid="filter-confidence"
-            className={cn(
-              'h-8 w-auto min-w-[8rem] text-xs',
-              filters.confidence !== 'all' &&
-                'border-blue-200 bg-blue-50/60 text-blue-900',
-            )}
-          >
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {CONFIDENCE_OPTIONS.map((opt) => (
-              <SelectItem key={opt.value} value={opt.value}>
-                {opt.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      ) : null}
+      <Select value={filters.confidence} onValueChange={handleConfidenceChange}>
+        <SelectTrigger
+          aria-label="Filter by confidence"
+          data-testid="filter-confidence"
+          className={cn(
+            'h-8 w-auto min-w-[8rem] text-xs',
+            filters.confidence !== 'all' &&
+              'border-blue-200 bg-blue-50/60 text-blue-900',
+          )}
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {CONFIDENCE_OPTIONS.map((opt) => (
+            <SelectItem key={opt.value} value={opt.value}>
+              {opt.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
 
       {/*
         PR Ω.3.2.2 — flat-view partition chip. Mounts only when the
@@ -429,8 +380,7 @@ export function FilterRow({
         multi-partition target table; heritage projects get zero chip
         DOM. See FlatPartitionChip.tsx for the auto-hide contract.
       */}
-      {SHOW_LEGACY_FILTERS &&
-      partitionsByTargetTable !== undefined &&
+      {partitionsByTargetTable !== undefined &&
       onFlatPartitionIdsChange !== undefined ? (
         <FlatPartitionChip
           partitionsByTargetTable={partitionsByTargetTable}
@@ -452,7 +402,7 @@ export function FilterRow({
         large whitespace between, matching the legacy mapping page.
       */}
       <div
-        className="relative order-1 w-72 flex-shrink-0"
+        className="relative ml-auto w-72 flex-shrink-0"
         data-testid="filter-row-search-wrapper"
       >
         <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
@@ -462,7 +412,7 @@ export function FilterRow({
           value={searchInput}
           onChange={(e) => handleSearchInput(e.target.value)}
           onKeyDown={handleSearchKeyDown}
-          placeholder="Search fields..."
+          placeholder="Search fields, tables, and mappings..."
           aria-label="Search mappings"
           data-testid="filter-search-input"
           className={cn(
@@ -485,21 +435,7 @@ export function FilterRow({
         ) : null}
       </div>
 
-      {/* Group by — visual stub (no grouping wired yet), matching the design. */}
-      <button
-        type="button"
-        title="Grouping — coming soon"
-        data-testid="filter-group-by"
-        className="order-2 inline-flex h-8 flex-shrink-0 items-center gap-1.5 rounded-md border border-gray-200 bg-white px-2.5 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50"
-      >
-        <Layers className="h-3.5 w-3.5 text-gray-400" />
-        <span>
-          <span className="text-gray-500">Group by:</span> None
-        </span>
-        <ChevronDown className="h-3 w-3 text-gray-400" />
-      </button>
-
-      {SHOW_LEGACY_FILTERS && filtersActive ? (
+      {filtersActive ? (
         <button
           type="button"
           onClick={handleClearAll}
@@ -524,7 +460,7 @@ export function FilterRow({
         `gap-3` when present. When the approve button is absent,
         nothing else competes for the right edge.
       */}
-      {SHOW_LEGACY_FILTERS && showContextualBulkApprove ? (
+      {showContextualBulkApprove ? (
         <button
           type="button"
           onClick={onApproveHighConfidenceClick}
@@ -533,32 +469,6 @@ export function FilterRow({
         >
           Approve {highConfidenceCount} high-confidence
         </button>
-      ) : null}
-
-      {/* Review progress CTA — right-edge. Shows "N of M reviewed" counter
-          and a "Review fields →" / "Resume · N left →" primary button.
-          Hidden when the parent does not supply `reviewedCount`. */}
-      {reviewedCount !== undefined && totalReviewable !== undefined && onReviewFieldsClick !== undefined ? (
-        <div
-          data-testid="filter-row-review-cta"
-          className="ml-auto order-last flex flex-shrink-0 items-center gap-2.5"
-        >
-          <span className="whitespace-nowrap text-xs text-gray-500">
-            <span className="font-medium tabular-nums text-gray-800">{reviewedCount}</span>
-            {' of '}
-            <span className="tabular-nums">{totalReviewable}</span>
-            {' reviewed'}
-          </span>
-          <button
-            type="button"
-            onClick={onReviewFieldsClick}
-            data-testid="filter-row-review-fields-btn"
-            className="inline-flex h-8 flex-shrink-0 items-center gap-1 rounded-md bg-[#2358D4] px-3 text-xs font-medium text-white transition-colors hover:bg-[#1E47B3] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/30"
-          >
-            {reviewedCount === 0 ? 'Review fields' : `Resume · ${totalReviewable - reviewedCount} left`}
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
-          </button>
-        </div>
       ) : null}
     </div>
   )

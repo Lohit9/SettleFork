@@ -143,9 +143,9 @@ export default function EmailFirstLoginForm() {
 
     setLoading(true)
 
-    let result: { required: boolean; orgSlug?: string } = { required: false }
+    let result: { required: boolean; orgSlug?: string }
     try {
-      result = (await checkSSOEnabledForEmail(email)) ?? { required: false }
+      result = await checkSSOEnabledForEmail(email)
     } catch (probeErr) {
       // Fail-soft: a thrown probe (network blip, Vercel function
       // timeout) must NOT block login. Strict-SSO orgs are still
