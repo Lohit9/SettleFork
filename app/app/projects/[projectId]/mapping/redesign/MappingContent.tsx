@@ -85,6 +85,10 @@ import { MergeTargetDialog } from './components/MergeTargetDialog'
 import { SourceDisambiguationDialog } from './components/SourceDisambiguationDialog'
 import { MappingListView } from './components/MappingListView'
 import { MockDataPreview } from './components/MockDataPreview'
+import {
+  USE_REAL_SPEC_TABLE,
+  USE_REAL_DATA_PREVIEW,
+} from '@/lib/flags/mapping-surfaces'
 import { useMappingListMutations } from './hooks/useMappingListMutations'
 import {
   applyViewModeToParams,
@@ -144,10 +148,6 @@ import type { ProjectStats } from '@/lib/quality/project-stats'
 const HIGH_CONFIDENCE_THRESHOLD = CONFIDENCE_THRESHOLD_ROW_HIGH
 
 const SEARCH_DEBOUNCE_MS = 200
-
-// Mirror of MappingListView.MOCK_SPEC_TABLE — when true the filter bar
-// shows stub counts so the "Review fields →" button never shows "Resume".
-const MOCK_SPEC_TABLE: boolean = true
 
 interface Props {
   projectId: string
@@ -628,7 +628,7 @@ function MappingContentLoaded({
   // Design reskin: the "Mapping & Transformation Spec" section toggles between
   // the Map & Transform spec (default) and the Data Preview surface. Local-only
   // mock state — Data Preview is a self-contained mock (`<MockDataPreview>`) and
-  // is only reachable when `MOCK_SPEC_TABLE` is true.
+  // is only reachable when USE_REAL_DATA_PREVIEW is unset (mock).
   const [specTab, setSpecTab] = useState<'map' | 'data'>('map')
   const [drawerHighlightedSourceFieldId, setDrawerHighlightedSourceFieldId] =
     useState<string | null>(null)
@@ -2596,8 +2596,8 @@ function MappingContentLoaded({
               partitionsEnabled={data.partitionsEnabled}
               selectedFlatPartitionIds={flatPartitionSelection}
               onFlatPartitionIdsChange={handleFlatPartitionSelectionChange}
-              reviewedCount={MOCK_SPEC_TABLE ? 0 : effectiveCounts.approved}
-              totalReviewable={MOCK_SPEC_TABLE ? 50 : effectiveCounts.total}
+              reviewedCount={USE_REAL_SPEC_TABLE ? effectiveCounts.approved : 0}
+              totalReviewable={USE_REAL_SPEC_TABLE ? effectiveCounts.total : 50}
               onReviewFieldsClick={handleReviewFieldsClick}
             />
           )}
@@ -2636,7 +2636,7 @@ function MappingContentLoaded({
           <div className="w-full px-6 py-6">
             {isEmptyMappingState ? (
               <EmptyMappingState projectId={projectId} data={data} />
-            ) : MOCK_SPEC_TABLE && specTab === 'data' ? (
+            ) : !USE_REAL_DATA_PREVIEW && specTab === 'data' ? (
               <MockDataPreview />
             ) : viewMode === 'flat' ? (
               <MappingListView

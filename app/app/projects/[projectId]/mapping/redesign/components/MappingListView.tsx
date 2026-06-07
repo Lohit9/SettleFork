@@ -29,10 +29,7 @@ import { RejectConfirmPopover } from './RejectConfirmPopover'
 import { TargetFieldCellPicker } from './TargetFieldCellPicker'
 import { MockSpecTable } from './MockSpecTable'
 import type { MappingListMutations } from '../hooks/useMappingListMutations'
-
-// UI reskin flag — render the Settle MVP design's mocked spec table instead of
-// the live data-wired list. Flip to false to restore the real table.
-const MOCK_SPEC_TABLE: boolean = true
+import { USE_REAL_SPEC_TABLE } from '@/lib/flags/mapping-surfaces'
 
 // Per-row rationale source. The TFM-level prose is the headline for the
 // new RATIONALE column; the drawer continues to render the full text.
@@ -707,11 +704,10 @@ export function MappingListView({
     [mutations, openPicker],
   )
 
-  // UI reskin: render the Settle MVP design's mocked spec table (3 collapsible
-  // sections, design rows, footer). The real data-wired table below is kept
-  // intact for when MOCK_SPEC_TABLE is flipped off and the stub is replaced
-  // with live data.
-  if (MOCK_SPEC_TABLE) {
+  // Mock→real migration: the design's mocked spec table renders until
+  // USE_REAL_SPEC_TABLE is set. The real data-wired table below is the
+  // replacement target — see lib/flags/mapping-surfaces.ts.
+  if (!USE_REAL_SPEC_TABLE) {
     return <MockSpecTable />
   }
 
