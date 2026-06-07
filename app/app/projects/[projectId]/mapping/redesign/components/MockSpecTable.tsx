@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   ChevronRight,
   ChevronDown,
@@ -20,13 +21,22 @@ import {
   User,
   Cpu,
   Plus,
+  AlertTriangle,
+  Code,
+  Play,
+  Wrench,
+  RefreshCw,
+  Loader2,
+  Layers,
+  Search,
 } from 'lucide-react'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MOCK — Settle MVP "Map & Transform" spec table (src/screen-configure.jsx).
-// Pure presentational stub with hardcoded design data so the Configure surface
-// matches the design pixel-for-pixel ahead of real data wiring. No interactivity
-// beyond section collapse; rationale dropdowns / row actions are inert.
+// Hardcoded design data so the Configure surface matches the design ahead of
+// real data wiring. The row-click drawer is interactive (edit mode, transform
+// editor, dry-run validation with Fix/Accept, per-field Reviewed state); the
+// underlying mappings are still mock, so edits and fixes are not persisted.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const GRID =
@@ -47,7 +57,7 @@ interface MappedMock {
   transform: string
   rationale: string
   confidence: number
-  issue?: { tone: 'red' | 'amber'; count: number }
+  issue?: { tone: 'red' | 'amber'; count: number; heading?: string; samples?: string[] }
 }
 
 const SRC_TYPE: Record<string, string> = {
@@ -87,8 +97,8 @@ const RATIONALE_PROSE: Record<string, string> = {
 
 const MAPPED: MappedMock[] = [
   { srcTable: 'BOM_MASTERS', srcField: 'ASSY_ITEM', tgtTable: 'Engineering Item Master', tgtField: 'item_number', transform: 'No Transform · suggested: no transform', rationale: 'Direct match', confidence: 97 },
-  { srcTable: 'BOM_MASTERS', srcField: 'COMM_HINT', tgtTable: 'Engineering Item Master', tgtField: 'commodity_code', transform: 'Applied · Commodity lookup', rationale: 'Inferred', confidence: 71, issue: { tone: 'red', count: 1 } },
-  { srcTable: 'BOM_MASTERS', srcField: 'PRODUCT_NAME', extraSources: [{ table: 'BOM_MASTERS', field: 'ASSY_DESC', note: 'Fallback when ProductName is null' }], tgtTable: 'Engineering Item Master', tgtField: 'item_description', transform: 'Draft · COALESCE name fallback', rationale: 'Multi-source', confidence: 84, issue: { tone: 'amber', count: 1 } },
+  { srcTable: 'BOM_MASTERS', srcField: 'COMM_HINT', tgtTable: 'Engineering Item Master', tgtField: 'commodity_code', transform: 'Applied · Commodity lookup', rationale: 'Inferred', confidence: 71, issue: { tone: 'red', count: 41, heading: 'Hint has no matching commodity', samples: ['CMP-X12', 'LEG-0098', 'TMP-5523', 'OBS-1190'] } },
+  { srcTable: 'BOM_MASTERS', srcField: 'PRODUCT_NAME', extraSources: [{ table: 'BOM_MASTERS', field: 'ASSY_DESC', note: 'Fallback when ProductName is null' }], tgtTable: 'Engineering Item Master', tgtField: 'item_description', transform: 'Draft · COALESCE name fallback', rationale: 'Multi-source', confidence: 84, issue: { tone: 'amber', count: 12, heading: 'ProductName null — fell back to Assy Desc', samples: ['(null) → PUMP ASSY 4IN', '(null) → VALVE BODY', '(null) → GASKET KIT'] } },
   { srcTable: 'BOM_MASTERS', srcField: 'REV', tgtTable: 'Engineering Item Master', tgtField: 'revision', transform: 'No Transform · suggested: no transform', rationale: 'Direct match', confidence: 96 },
   { srcTable: 'COMMODITY_MASTER', srcField: 'ACTIVE_FLG', tgtTable: 'Commodity Codes', tgtField: 'is_active', transform: 'Applied · Cast Y/N to boolean', rationale: 'Semantic match', confidence: 98 },
   { srcTable: 'COMMODITY_MASTER', srcField: 'CLASS_CD', tgtTable: 'Commodity Codes', tgtField: 'commodity_class', transform: 'Applied · Map class codes (6)', rationale: 'Lookup via class_map', confidence: 86 },
@@ -118,10 +128,177 @@ const UNMAPPED_SOURCE = [
   { srcTable: 'CUST_MASTER', srcField: 'SALES_REGION', tag: 'No target match' },
 ]
 
-function FieldPill({ children }: { children: React.ReactNode }) {
+// Searchable catalog of source fields, grouped by source table — backs the
+// source-field picker (matches the design's SOURCE_FIELD_CATALOG / BadgePicker).
+const SOURCE_FIELD_CATALOG: Record<string, string[]> = {
+  BOM_MASTERS: ['ASSY_ITEM', 'COMM_HINT', 'PRODUCT_NAME', 'ASSY_DESC', 'REV', 'LEGACY_CODE'],
+  COMMODITY_MASTER: ['ACTIVE_FLG', 'CLASS_CD', 'COMM_CD', 'COMM_DESC', 'GL_ACCT', 'SAFETY_STOCK', 'REORDER_PT'],
+  PRODUCT_MASTER: ['STAT', 'LIST_PRICE', 'OLD_LIST_PRICE'],
+  WORKCENTER: ['SHIFT_CT', 'COST_CENTER'],
+  BOM_LINES: ['REF_DES', 'QTY_PER'],
+  CUST_MASTER: ['ADDR_1', 'SALES_REGION', 'CREDIT_HOLD'],
+}
+
+const TARGET_FIELD_CATALOG: Record<string, string[]> = {
+  'Engineering Item Master': ['item_number', 'commodity_code', 'item_description', 'revision', 'lot_controlled'],
+  'Commodity Codes': ['is_active', 'commodity_class', 'commodity_code', 'description', 'default_gl_account', 'created_by'],
+  Customer: ['address_line1', 'credit_hold'],
+  Product: ['status', 'discontinued_date'],
+  'Work Center': ['cost_center'],
+  Routing: ['std_batch_qty'],
+  'Bill of Materials': ['effectivity_date'],
+}
+
+function FieldPill({ children, noTruncate = false }: { children: React.ReactNode; noTruncate?: boolean }) {
   return (
-    <span className="inline-flex items-center rounded border border-[#E5E7EB] bg-[#F9FAFB] px-1.5 py-[3px] font-mono text-[12px] text-[#111827] truncate">
+    <span
+      className={`inline-flex items-center rounded border border-[#E5E7EB] bg-[#F9FAFB] px-1.5 py-[3px] font-mono text-[12px] text-[#111827] ${noTruncate ? 'shrink-0 whitespace-nowrap' : 'truncate'}`}
+    >
       {children}
+    </span>
+  )
+}
+
+// Source-field search popover. Portaled to <body> with fixed positioning so it
+// is never clipped by the table card's overflow. Mirrors the design's
+// BadgePicker (search box + per-table groups). onClose on scroll/resize.
+function FieldPicker({
+  side,
+  pos,
+  currentTable,
+  currentField,
+  onPick,
+  onClose,
+}: {
+  side: 'source' | 'target'
+  pos: { top: number; left: number }
+  currentTable: string
+  currentField: string
+  onPick: (table: string, field: string) => void
+  onClose: () => void
+}) {
+  const catalog = side === 'source' ? SOURCE_FIELD_CATALOG : TARGET_FIELD_CATALOG
+  const [q, setQ] = useState('')
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose()
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    window.addEventListener('scroll', onClose, true)
+    window.addEventListener('resize', onClose)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+      window.removeEventListener('scroll', onClose, true)
+      window.removeEventListener('resize', onClose)
+    }
+  }, [onClose])
+
+  const qq = q.trim().toLowerCase()
+  return createPortal(
+    <div
+      ref={ref}
+      onClick={(e) => e.stopPropagation()}
+      style={{ position: 'fixed', top: pos.top, left: pos.left }}
+      className="z-50 flex max-h-[380px] w-[320px] flex-col overflow-hidden rounded-lg border border-[#E5E7EB] bg-white shadow-[0_8px_24px_-6px_rgba(17,24,39,0.12)]"
+    >
+      <div className="border-b border-[#E5E7EB] p-2.5">
+        <div className="relative">
+          <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[#9CA3AF]">
+            <Search className="h-3 w-3" />
+          </span>
+          <input
+            autoFocus
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder={side === 'source' ? 'Search source fields…' : 'Search target fields…'}
+            className="w-full rounded-md border border-[#E5E7EB] bg-white py-1.5 pl-7 pr-2 text-[12.5px] placeholder:text-[#9CA3AF] focus:outline-none focus:ring-1 focus:ring-[#3B82F6]"
+          />
+        </div>
+      </div>
+      <div className="overflow-y-auto py-1">
+        {Object.keys(catalog).map((tbl) => {
+          const fields = catalog[tbl].filter(
+            (f) => !qq || tbl.toLowerCase().includes(qq) || f.toLowerCase().includes(qq),
+          )
+          if (fields.length === 0) return null
+          return (
+            <div key={tbl} className="py-1">
+              <div className="px-3 pb-1 pt-1 font-mono text-[10.5px] uppercase tracking-wider text-[#9CA3AF]">
+                {tbl}
+              </div>
+              {fields.map((f) => {
+                const isCurrent = tbl === currentTable && f === currentField
+                return (
+                  <button
+                    key={f}
+                    type="button"
+                    onClick={() => {
+                      onPick(tbl, f)
+                      onClose()
+                    }}
+                    className={`flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left hover:bg-[#F9FAFB] ${isCurrent ? 'bg-[#F9FAFB]' : ''}`}
+                  >
+                    <FieldPill>{f}</FieldPill>
+                    {isCurrent ? (
+                      <span className="shrink-0 text-[11px] italic text-[#9CA3AF]">current</span>
+                    ) : null}
+                  </button>
+                )
+              })}
+            </div>
+          )
+        })}
+      </div>
+    </div>,
+    document.body,
+  )
+}
+
+// Clickable source-field badge that opens the search picker. Shows the full
+// field name (no truncation); the swap is visual-only, matching the design.
+function EditableFieldBadge({ side, table, field }: { side: 'source' | 'target'; table: string; field: string }) {
+  const [open, setOpen] = useState(false)
+  const [sel, setSel] = useState({ table, field })
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
+  const btnRef = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    setSel({ table, field })
+  }, [table, field])
+
+  const toggle = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    const r = btnRef.current?.getBoundingClientRect()
+    if (r) setPos({ top: r.bottom + 6, left: r.left })
+    setOpen((o) => !o)
+  }
+
+  return (
+    <span className="relative inline-flex shrink-0" onClick={(e) => e.stopPropagation()}>
+      <button
+        ref={btnRef}
+        type="button"
+        onClick={toggle}
+        className="inline-flex shrink-0 cursor-pointer items-center whitespace-nowrap rounded border border-[#E5E7EB] bg-[#F9FAFB] px-1.5 py-[3px] font-mono text-[12px] text-[#111827] hover:bg-[#E5E7EB]"
+      >
+        {sel.field}
+      </button>
+      {open && pos ? (
+        <FieldPicker
+          side={side}
+          pos={pos}
+          currentTable={sel.table}
+          currentField={sel.field}
+          onPick={(t, f) => setSel({ table: t, field: f })}
+          onClose={() => setOpen(false)}
+        />
+      ) : null}
     </span>
   )
 }
@@ -139,7 +316,27 @@ function Placeholder({ label }: { label: string }) {
   )
 }
 
-function ReviewGlyph() {
+function ReviewGlyph({ reviewed = false }: { reviewed?: boolean }) {
+  if (reviewed) {
+    return (
+      <svg
+        viewBox="0 0 20 20"
+        className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
+        role="img"
+        aria-label="Reviewed"
+      >
+        <circle cx="10" cy="10" r="8.25" fill="none" stroke="#16A34A" strokeWidth="1.5" />
+        <path
+          d="M6.2 10.4 L8.7 12.9 L13.9 7.3"
+          fill="none"
+          stroke="#16A34A"
+          strokeWidth="1.9"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    )
+  }
   return (
     <span className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 rounded-full border border-dashed border-[#D1D5DB]" />
   )
@@ -479,10 +676,52 @@ function GlossaryView({
   )
 }
 
+function initialProse(row: MappedMock): string {
+  return row.transform.startsWith('No Transform')
+    ? 'Direct pass-through from the matched source field. No transformation required.'
+    : RATIONALE_PROSE[row.srcField] ?? ''
+}
+
+function seedSqlFor(row: MappedMock): string {
+  return row.transform.startsWith('No Transform') ? row.srcField : `TRIM(${row.srcField})`
+}
+
+function fixSqlFor(row: MappedMock): string {
+  if (row.tgtField === 'commodity_code')
+    return "COALESCE((SELECT commodity_code FROM commodity_map m WHERE m.hint = s.COMM_HINT), 'UNMAPPED')"
+  if (row.tgtField === 'item_description') return 'COALESCE(s.PRODUCT_NAME, s.ASSY_DESC)'
+  return `COALESCE(${row.srcField}, '')`
+}
+
+interface Alternative {
+  src: string
+  approach: string
+  conf: number
+  reason: string
+}
+
+// Runner-up mappings the AI weighed but didn't pick. Surfaced only where the
+// model considered real alternatives; every other field returns [] and the
+// section renders its empty state.
+function alternativesFor(row: MappedMock): Alternative[] {
+  if (row.tgtField === 'commodity_class')
+    return [
+      { src: 'CLASS_CD', approach: 'pass-through', conf: 63, reason: 'Load the raw class codes unchanged — only if Rootstock accepts legacy values.' },
+      { src: 'CLASS_CD + COMM_HINT', approach: 'coalesce → lookup', conf: 54, reason: 'Fall back to COMM_HINT when CLASS_CD is blank, then resolve via class_map.' },
+    ]
+  if (row.tgtField === 'item_description')
+    return [
+      { src: 'ASSY_DESC', approach: 'pass-through', conf: 58, reason: 'Use the assembly description directly; drops the marketing product name.' },
+    ]
+  return []
+}
+
 function MockMappingDrawer({
   row,
   index,
   total,
+  reviewed,
+  onToggleReviewed,
   onPrev,
   onNext,
   onClose,
@@ -490,6 +729,8 @@ function MockMappingDrawer({
   row: MappedMock
   index: number
   total: number
+  reviewed: boolean
+  onToggleReviewed: () => void
   onPrev: () => void
   onNext: () => void
   onClose: () => void
@@ -498,14 +739,49 @@ function MockMappingDrawer({
   const [glossaryOpen, setGlossaryOpen] = useState(false)
   const [moreOpen, setMoreOpen] = useState(false)
   const [rulesOpen, setRulesOpen] = useState(false)
+  const [altsOpen, setAltsOpen] = useState(false)
   const moreRef = useRef<HTMLDivElement>(null)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const onCloseRef = useRef(onClose)
+  useEffect(() => {
+    onCloseRef.current = onClose
+  })
+
+  // Edit-mode + validation working state — all local and reset per row. The
+  // underlying mock mappings are not mutated, so Save / Fix / Accept only
+  // affect this drawer session.
+  const [editing, setEditing] = useState(false)
+  const [transformMode, setTransformMode] = useState<'none' | 'transform' | 'value'>(() =>
+    row.transform.startsWith('No Transform') ? 'none' : 'transform',
+  )
+  const [sqlView, setSqlView] = useState(false)
+  const [descDraft, setDescDraft] = useState(() => initialProse(row))
+  const [sqlDraft, setSqlDraft] = useState(() => seedSqlFor(row))
+  const [valueDraft, setValueDraft] = useState('')
+  const [rationaleText, setRationaleText] = useState(() => initialProse(row))
+  const [regenRat, setRegenRat] = useState(false)
+  const [accepted, setAccepted] = useState(false)
+  const [testing, setTesting] = useState(false)
+  const [valCleared, setValCleared] = useState(false)
 
   useEffect(() => {
     setHistoryOpen(false)
     setGlossaryOpen(false)
     setMoreOpen(false)
     setRulesOpen(false)
-  }, [row.srcField, row.tgtField])
+    setAltsOpen(false)
+    setEditing(false)
+    setSqlView(false)
+    setAccepted(false)
+    setTesting(false)
+    setValCleared(false)
+    setRegenRat(false)
+    setTransformMode(row.transform.startsWith('No Transform') ? 'none' : 'transform')
+    setRationaleText(initialProse(row))
+    setDescDraft(initialProse(row))
+    setSqlDraft(seedSqlFor(row))
+    setValueDraft('')
+  }, [row])
 
   useEffect(() => {
     if (!moreOpen) return
@@ -518,30 +794,208 @@ function MockMappingDrawer({
     return () => document.removeEventListener('mousedown', onMouseDown)
   }, [moreOpen])
 
+  // Esc + click-outside close. The deferred mousedown bind keeps the opening
+  // click from closing the drawer; clicks on another spec row switch rows
+  // (handled by the row's own onClick) instead of closing.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCloseRef.current()
+    }
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Element | null
+      if (!t) return
+      if (rootRef.current && rootRef.current.contains(t)) return
+      if (t.closest('[data-spec-row]')) return
+      onCloseRef.current()
+    }
+    document.addEventListener('keydown', onKey)
+    const id = window.setTimeout(() => document.addEventListener('mousedown', onDown), 0)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.removeEventListener('mousedown', onDown)
+      window.clearTimeout(id)
+    }
+  }, [])
+
   const srcType = SRC_TYPE[row.srcField] ?? 'VARCHAR(20)'
   const tgtType = TGT_TYPE[row.tgtField] ?? 'VARCHAR(20)'
   const isPassThrough = row.transform.startsWith('No Transform')
-  const prose = isPassThrough
-    ? 'Direct pass-through from the matched source field. No transformation required.'
-    : RATIONALE_PROSE[row.srcField] ?? ''
   const transformLabel = isPassThrough ? 'None' : row.transform.split(' · ')[0]
   const transformDetail = isPassThrough ? 'pass-through' : row.transform.split(' · ').slice(1).join(' · ')
+  const issue = row.issue
+  const resolved = !issue || accepted || valCleared
+  // A reviewed field can always be unchecked, even if its issue reads as
+  // unresolved again after reopening. Matches the design: Reviewed is a free
+  // toggle once cleared; the lock only blocks the very first check.
+  const canToggleReviewed = resolved || reviewed
+  const alternatives = alternativesFor(row)
+
+  const enterEdit = () => setEditing(true)
+  const discard = () => {
+    setTransformMode(isPassThrough ? 'none' : 'transform')
+    setDescDraft(rationaleText)
+    setSqlDraft(seedSqlFor(row))
+    setValueDraft('')
+    setSqlView(false)
+    setEditing(false)
+  }
+  const save = () => setEditing(false)
+  const generate = () => {
+    setTransformMode('transform')
+    setSqlDraft((s) => s || seedSqlFor(row))
+    setSqlView(true)
+  }
+  const applyTest = () => {
+    setTesting(true)
+    window.setTimeout(() => {
+      setValCleared(true)
+      setTesting(false)
+    }, 700)
+  }
+  const regenerateRationale = () => {
+    setRegenRat(true)
+    window.setTimeout(() => {
+      setRationaleText((r) => `${r} Re-evaluated against the current mapping and transform.`)
+      setRegenRat(false)
+    }, 600)
+  }
+  const fix = () => {
+    setTransformMode('transform')
+    setSqlDraft(fixSqlFor(row))
+    setDescDraft('Resolve unmatched values via lookup; default the remainder rather than loading NULL.')
+    setSqlView(true)
+    setAccepted(false)
+    setEditing(true)
+  }
+
+  const renderValidation = () => {
+    if (testing) {
+      return (
+        <div className="flex items-center gap-2 text-[12.5px] text-[#6B7280]">
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-[#9CA3AF]" />
+          Running dry-run…
+        </div>
+      )
+    }
+    if (!issue || valCleared) {
+      return (
+        <div className="flex items-center gap-2 text-[12.5px] font-normal text-[#9CA3AF]">
+          <Check className="h-[13px] w-[13px] shrink-0 text-[#10B981]" strokeWidth={2} />
+          Passes all checks
+        </div>
+      )
+    }
+    if (accepted) {
+      return (
+        <div className="flex items-center gap-2 text-[12.5px] text-[#6B7280]">
+          <Check className="h-[13px] w-[13px] shrink-0 text-[#9CA3AF]" strokeWidth={2} />
+          Accepted with issue logged · {issue.count} row{issue.count === 1 ? '' : 's'}
+          <button
+            type="button"
+            onClick={() => setAccepted(false)}
+            className="ml-1 text-[12px] text-[#2358D4] hover:underline"
+          >
+            Undo
+          </button>
+        </div>
+      )
+    }
+    const blocking = issue.tone === 'red'
+    const color = blocking ? '#DC2626' : '#D97706'
+    const bg = blocking ? '#FEF2F2' : '#FFFBEB'
+    const border = blocking ? '#FECACA' : '#FDE68A'
+    const headColor = blocking ? '#991B1B' : '#92400E'
+    return (
+      <div className="rounded-md border px-3.5 py-3" style={{ background: bg, borderColor: border }}>
+        <div className="flex items-start gap-2.5">
+          <AlertTriangle className="mt-0.5 h-[15px] w-[15px] shrink-0" style={{ color }} />
+          <div className="min-w-0 flex-1">
+            <div className="text-[13px] font-medium leading-snug" style={{ color: headColor }}>
+              {issue.count} row{issue.count === 1 ? '' : 's'} · {issue.heading}
+            </div>
+            {issue.samples && issue.samples.length > 0 ? (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {issue.samples.map((v, i) => (
+                  <span
+                    key={i}
+                    className="rounded border bg-white/70 px-1.5 py-[2px] font-mono text-[11.5px] text-[#374151]"
+                    style={{ borderColor: border }}
+                  >
+                    {v}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+            {editing ? (
+              <div className="mt-2.5 text-[12px] text-[#6B7280]">Re-runs on Apply &amp; Test.</div>
+            ) : (
+              <div className="mt-3 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={fix}
+                  className="inline-flex items-center gap-1.5 rounded-md bg-[#2358D4] px-2.5 py-1.5 text-[12.5px] font-medium text-white transition-colors hover:bg-[#1E47B3]"
+                >
+                  <Wrench className="h-3 w-3" /> Fix
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAccepted(true)}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-[#E5E7EB] bg-white px-2.5 py-1.5 text-[12.5px] font-medium text-[#374151] transition-colors hover:bg-[#F9FAFB]"
+                >
+                  Accept
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   return (
-    <div className="relative flex w-full shrink-0 flex-col border-t border-[#E5E7EB] bg-white sm:block sm:w-[440px] sm:border-l sm:border-t-0"><div className="flex h-full flex-col sm:absolute sm:inset-0">
+    <div ref={rootRef} className="relative flex w-full shrink-0 flex-col border-t border-[#E5E7EB] bg-white sm:block sm:w-[440px] sm:border-l sm:border-t-0"><div className="flex h-full flex-col sm:absolute sm:inset-0">
       <div className="flex h-12 items-center justify-between border-b border-[#E5E7EB] px-5">
         <div className="flex min-w-0 items-center gap-2">
           <span className="inline-block h-3.5 w-0.5 shrink-0 rounded-full bg-[#2358D4]" aria-hidden="true" />
           <span className="truncate font-mono text-[13px] font-medium text-[#111827]" title={`${row.tgtTable} · ${row.tgtField}`}>
             {row.tgtField}
           </span>
-          <span className="h-[13px] w-[13px] shrink-0 rounded-full border border-dashed border-[#D1D5DB]" />
+          {reviewed ? (
+            <svg
+              viewBox="0 0 20 20"
+              className="h-[13px] w-[13px] shrink-0"
+              role="img"
+              aria-label="Reviewed"
+            >
+              <circle cx="10" cy="10" r="8.25" fill="none" stroke="#16A34A" strokeWidth="1.5" />
+              <path
+                d="M6.2 10.4 L8.7 12.9 L13.9 7.3"
+                fill="none"
+                stroke="#16A34A"
+                strokeWidth="1.9"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          ) : (
+            <span className="h-[13px] w-[13px] shrink-0 rounded-full border border-dashed border-[#D1D5DB]" />
+          )}
         </div>
         <div className="flex items-center gap-2 text-[11.5px] text-[#6B7280]">
           <span className="inline-flex items-center gap-1">
             <span className="text-[#10B981]">●</span>
             <span className="tabular-nums">{row.confidence}%</span>
           </span>
+          {issue && !resolved ? (
+            <span
+              className="inline-flex items-center gap-1 font-medium tabular-nums"
+              style={{ color: issue.tone === 'red' ? '#EF4444' : '#F59E0B' }}
+              title={`${issue.count} ${issue.tone === 'red' ? 'blocking issue' : 'warning'}${issue.count === 1 ? '' : 's'}`}
+            >
+              <AlertTriangle className="h-3 w-3" />
+              {issue.count}
+            </span>
+          ) : null}
           <button
             type="button"
             onClick={() => {
@@ -613,10 +1067,16 @@ function MockMappingDrawer({
             <div className="font-mono text-[12.5px] text-[#6B7280]">
               {row.srcTable} <span className="text-[#9CA3AF]">→</span> {row.tgtTable}
             </div>
-            <button type="button" className="inline-flex items-center gap-1 text-[12px] text-[#2358D4] hover:underline">
-              <Pencil className="h-3 w-3" />
-              Edit
-            </button>
+            {!editing ? (
+              <button
+                type="button"
+                onClick={enterEdit}
+                className="inline-flex items-center gap-1 text-[12px] text-[#2358D4] hover:underline"
+              >
+                <Pencil className="h-3 w-3" />
+                Edit
+              </button>
+            ) : null}
           </div>
 
           <div className="grid grid-cols-[1fr_auto_1fr] items-start gap-3 px-5 pb-7">
@@ -633,26 +1093,202 @@ function MockMappingDrawer({
             </div>
           </div>
 
-          <div className="px-5 pb-4">
-            <div className="flex items-start gap-2">
-              <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#9CA3AF]" />
-              <p className="text-[13px] leading-relaxed text-[#6B7280]">{prose}</p>
+          {!editing ? (
+            <div className="px-5 pb-4">
+              <div className="flex items-start gap-2">
+                <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#1D9E75]" />
+                <p className="text-[13px] leading-relaxed text-[#6B7280]">{rationaleText}</p>
+              </div>
+              <div className="mt-3 text-[12.5px] text-[#6B7280]">
+                <span className="font-medium text-[#374151]">{transformLabel}</span>
+                {transformDetail ? (
+                  <>
+                    <span className="mx-1 text-[#9CA3AF]">·</span>
+                    <span>{transformDetail}</span>
+                  </>
+                ) : null}
+              </div>
             </div>
-            <div className="mt-3 text-[12.5px] text-[#6B7280]">
-              <span className="font-medium text-[#374151]">{transformLabel}</span>
-              {transformDetail ? (
-                <>
-                  <span className="mx-1 text-[#9CA3AF]">·</span>
-                  <span>{transformDetail}</span>
-                </>
-              ) : null}
-            </div>
-          </div>
+          ) : (
+            <div className="px-5 pb-5">
+              <div className="flex items-start gap-2">
+                <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#1D9E75]" />
+                <p className="min-w-0 flex-1 text-[13px] leading-relaxed text-[#6B7280]">
+                  {regenRat ? 'Regenerating rationale…' : rationaleText}
+                </p>
+                <button
+                  type="button"
+                  onClick={regenerateRationale}
+                  className="inline-flex shrink-0 items-center gap-1 text-[12px] text-[#2358D4] hover:underline"
+                >
+                  <RefreshCw className={`h-3 w-3 ${regenRat ? 'animate-spin' : ''}`} />
+                  Regenerate
+                </button>
+              </div>
 
-          <div className="flex items-center gap-2 border-t border-[#E5E7EB] px-5 py-4 text-[12.5px] font-normal text-[#9CA3AF]">
-            <Check className="h-[13px] w-[13px] shrink-0 text-[#10B981]" strokeWidth={2} />
-            Passes all checks
-          </div>
+              <div className="mt-5 flex items-center gap-3">
+                <div className="inline-flex rounded-full border border-[#E5E7EB] bg-white p-0.5">
+                  {(
+                    [
+                      { v: 'none', label: 'None' },
+                      { v: 'transform', label: 'Transform' },
+                      { v: 'value', label: 'Set value' },
+                    ] as const
+                  ).map((o) => (
+                    <button
+                      key={o.v}
+                      type="button"
+                      onClick={() => setTransformMode(o.v)}
+                      className={`whitespace-nowrap rounded-full px-3 py-0.5 text-[11.5px] font-medium ${transformMode === o.v ? 'bg-[#111827] text-white' : 'text-[#6B7280] hover:text-[#111827]'}`}
+                    >
+                      {o.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex-1" />
+                {transformMode === 'transform' ? (
+                  <button
+                    type="button"
+                    onClick={() => setSqlView((v) => !v)}
+                    className={`inline-flex shrink-0 items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium ${sqlView ? 'border-[#2358D4] bg-[#EFF4FE] text-[#2358D4]' : 'border-[#E5E7EB] bg-white text-[#6B7280] hover:text-[#111827]'}`}
+                    title={sqlView ? 'Show description' : 'Show generated SQL'}
+                  >
+                    <Code className="h-3 w-3" />
+                    SQL
+                  </button>
+                ) : null}
+              </div>
+
+              {transformMode === 'none' ? (
+                <div className="mt-4 text-[13px] italic text-[#6B7280]">
+                  No transformation — value passes through unchanged.
+                </div>
+              ) : null}
+              {transformMode === 'value' ? (
+                <div className="mt-4">
+                  <input
+                    type="text"
+                    value={valueDraft}
+                    onChange={(e) => setValueDraft(e.target.value)}
+                    placeholder="Enter value…"
+                    spellCheck={false}
+                    className="w-full rounded-md border border-[#E5E7EB] bg-white px-3 py-2 font-mono text-[12.5px] text-[#111827] placeholder:text-[#9CA3AF] focus:outline-none focus:ring-1 focus:ring-[#3B82F6]"
+                  />
+                </div>
+              ) : null}
+              {transformMode === 'transform' ? (
+                <div className="mt-4">
+                  <textarea
+                    value={sqlView ? sqlDraft : descDraft}
+                    onChange={(e) =>
+                      sqlView ? setSqlDraft(e.target.value) : setDescDraft(e.target.value)
+                    }
+                    placeholder='e.g., "Standardize date formats to ISO 8601"'
+                    spellCheck={false}
+                    rows={4}
+                    className={`w-full resize-y rounded-md border border-[#E5E7EB] bg-white p-3 text-[13px] text-[#111827] placeholder:text-[#9CA3AF] focus:outline-none focus:ring-1 focus:ring-[#3B82F6] ${sqlView ? 'bg-[#F9FAFB] font-mono text-[12.5px]' : ''}`}
+                  />
+                </div>
+              ) : null}
+
+              {transformMode !== 'none' ? (
+                <div className="mt-4 flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={generate}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-[#E5E7EB] bg-white px-2.5 py-1.5 text-[12.5px] font-medium text-[#374151] hover:bg-[#F9FAFB]"
+                  >
+                    <Sparkles className="h-3 w-3 text-[#1D9E75]" /> Generate
+                  </button>
+                  <button
+                    type="button"
+                    onClick={applyTest}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-[#E5E7EB] bg-white px-2.5 py-1.5 text-[12.5px] font-medium text-[#374151] hover:bg-[#F9FAFB]"
+                  >
+                    <Play className="h-3 w-3" /> Apply &amp; Test
+                  </button>
+                </div>
+              ) : null}
+
+              <div className="mt-6 flex items-center gap-3 border-t border-[#E5E7EB] pt-4">
+                <button
+                  type="button"
+                  onClick={discard}
+                  className="text-[12.5px] text-[#6B7280] underline underline-offset-2 hover:text-[#111827]"
+                >
+                  Discard changes
+                </button>
+                <div className="flex-1" />
+                <button
+                  type="button"
+                  onClick={save}
+                  className="inline-flex items-center gap-1.5 rounded-md bg-[#2358D4] px-4 py-1.5 text-[13px] font-medium text-white hover:bg-[#1E47B3]"
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div className="border-t border-[#E5E7EB] px-5 py-4">{renderValidation()}</div>
+
+          <section className="border-t border-[#E5E7EB] px-5 py-5">
+            <button
+              type="button"
+              onClick={() => setAltsOpen((v) => !v)}
+              aria-expanded={altsOpen}
+              className="flex w-full items-center gap-2 text-left text-[#6B7280] hover:text-[#111827]"
+            >
+              <Layers className="h-3.5 w-3.5 shrink-0 text-[#9CA3AF]" />
+              <span className="text-[12px] font-semibold uppercase tracking-wider">
+                Alternatives considered · {alternatives.length}
+              </span>
+              <div className="flex-1" />
+              {altsOpen ? (
+                <ChevronDown className="h-3.5 w-3.5 text-[#9CA3AF]" />
+              ) : (
+                <ChevronRight className="h-3.5 w-3.5 text-[#9CA3AF]" />
+              )}
+            </button>
+            {altsOpen ? (
+              alternatives.length > 0 ? (
+                <div className="mt-3 divide-y divide-[#F1F1F4] pl-[22px]">
+                  {alternatives.map((a, i) => (
+                    <div key={i} className="py-2.5 first:pt-0">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 text-[13px] leading-snug">
+                          <span className="font-mono text-[12.5px] text-[#111827]">{a.src}</span>
+                          <span className="mx-1.5 text-[#D1D5DB]">·</span>
+                          <span className="text-[#6B7280]">{a.approach}</span>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-3">
+                          <span className="inline-flex items-center gap-1" title={`${a.conf}% confidence`}>
+                            <span
+                              className="inline-block h-1.5 w-1.5 rounded-full"
+                              style={{ background: a.conf >= 90 ? '#10B981' : '#F59E0B' }}
+                              aria-hidden="true"
+                            />
+                            <span className="font-mono text-[11px] tabular-nums text-[#6B7280]">{a.conf}%</span>
+                          </span>
+                          <button
+                            type="button"
+                            className="whitespace-nowrap text-[12px] font-medium text-[#2358D4] hover:underline"
+                          >
+                            Use this
+                          </button>
+                        </div>
+                      </div>
+                      <div className="mt-1 text-[12.5px] leading-snug text-[#9CA3AF]">{a.reason}</div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="mt-3 pl-[22px] text-[12.5px] italic text-[#9CA3AF]">
+                  No alternatives considered.
+                </div>
+              )
+            ) : null}
+          </section>
 
           <section className="border-y border-[#E5E7EB] px-5 py-5">
             <button
@@ -716,10 +1352,21 @@ function MockMappingDrawer({
             <ChevronLeft className="h-3.5 w-3.5" />
             Prev
           </button>
-          <span className="text-[12.5px] tabular-nums text-[#9CA3AF]">Field {index + 1} of 20</span>
+          <span className="text-[12.5px] tabular-nums text-[#9CA3AF]">
+            Field {index + 1} of {total}
+          </span>
           <div className="flex items-center gap-3">
-            <label className="inline-flex cursor-pointer items-center gap-1.5 text-[12.5px] text-[#6B7280]">
-              <input type="checkbox" className="h-3.5 w-3.5 rounded border-[#D1D5DB] accent-[#2358D4]" />
+            <label
+              className={`inline-flex items-center gap-1.5 text-[12.5px] ${canToggleReviewed ? 'cursor-pointer text-[#6B7280]' : 'cursor-not-allowed text-[#9CA3AF]'}`}
+              title={canToggleReviewed ? undefined : 'Resolve the issue (Fix or Accept) to mark reviewed'}
+            >
+              <input
+                type="checkbox"
+                checked={reviewed}
+                disabled={!canToggleReviewed}
+                onChange={onToggleReviewed}
+                className="h-3.5 w-3.5 rounded border-[#D1D5DB] accent-[#2358D4] disabled:opacity-50"
+              />
               Reviewed
             </label>
             <button
@@ -777,23 +1424,24 @@ function CollapsibleSpecSection({
   )
 }
 
-function MappedRow({ row, onOpen, isActive }: { row: MappedMock; onOpen: () => void; isActive: boolean }) {
+function MappedRow({ row, onOpen, isActive, reviewed }: { row: MappedMock; onOpen: () => void; isActive: boolean; reviewed: boolean }) {
   const [expanded, setExpanded] = useState(false)
   const hasExtra = (row.extraSources?.length ?? 0) > 0
 
   return (
-    <div className="border-b border-[#F3F4F6] last:border-b-0">
+    <div className="spec-rowline">
       <div
+        data-spec-row
         className={`relative ${GRID} min-h-[56px] cursor-pointer py-3.5 ${isActive ? 'bg-[#F9FAFB]' : 'hover:bg-[#F9FAFB]'}`}
         onClick={onOpen}
       >
         {isActive ? (
           <span className="absolute inset-y-0 left-0 w-[3px] bg-[#2358D4]" aria-hidden="true" />
         ) : null}
-        <ReviewGlyph />
+        <ReviewGlyph reviewed={reviewed} />
         <div className="flex min-w-0 items-center gap-2" title={row.srcTable}>
           <SystemName>{row.srcTable}</SystemName>
-          <FieldPill>{row.srcField}</FieldPill>
+          <EditableFieldBadge side="source" table={row.srcTable} field={row.srcField} />
           {hasExtra ? (
             <button
               type="button"
@@ -815,16 +1463,24 @@ function MappedRow({ row, onOpen, isActive }: { row: MappedMock; onOpen: () => v
         <ArrowRight className="h-3.5 w-3.5 text-[#D1D5DB]" />
         <div className="flex min-w-0 items-center gap-2" title={row.tgtTable}>
           <SystemName>{row.tgtTable}</SystemName>
-          <FieldPill>{row.tgtField}</FieldPill>
+          <EditableFieldBadge side="target" table={row.tgtTable} field={row.tgtField} />
         </div>
         <div className="min-w-0 truncate pl-7 text-[12.5px] text-[#6B7280]" title={row.transform}>
           {row.transform}
         </div>
         <RationalePopover rationale={row.rationale} confidence={row.confidence} srcField={row.srcField} />
-        <div className="text-[12px]">
+        <div className="text-[11.5px]">
           {row.issue ? (
-            <span className="inline-flex items-center gap-1 tabular-nums">
-              <span className={row.issue.tone === 'red' ? 'text-[#DC2626]' : 'text-[#D97706]'}>●</span>
+            <span
+              className="inline-flex items-center gap-1 tabular-nums"
+              style={{ color: row.issue.tone === 'red' ? '#EF4444' : '#F59E0B' }}
+              title={`${row.issue.count} ${row.issue.tone === 'red' ? 'blocking issue' : 'warning'}${row.issue.count === 1 ? '' : 's'}`}
+            >
+              <span
+                className="inline-block h-[5px] w-[5px] rounded-full"
+                style={{ background: row.issue.tone === 'red' ? '#EF4444' : '#F59E0B' }}
+                aria-hidden="true"
+              />
               {row.issue.count}
             </span>
           ) : null}
@@ -849,13 +1505,32 @@ function MappedRow({ row, onOpen, isActive }: { row: MappedMock; onOpen: () => v
 export function MockSpecTable() {
   const [open, setOpen] = useState({ mapped: true, utgt: false, usrc: false })
   const [openIndex, setOpenIndex] = useState<number | null>(null)
+  // Per-field Reviewed state, lifted here so the drawer footer checkbox and the
+  // row's circular-arrow glyph stay in sync. Keyed by MAPPED index.
+  const [reviewed, setReviewed] = useState<Set<number>>(new Set())
+  const toggleReviewed = (i: number) =>
+    setReviewed((prev) => {
+      const next = new Set(prev)
+      if (next.has(i)) next.delete(i)
+      else next.add(i)
+      return next
+    })
 
   return (
     <div className="flex w-full flex-col rounded-lg border border-[#D4D4D8] bg-white sm:flex-row">
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+      {/* Hairline dividers — match the design's 0.5px rules (.ml-rowline /
+          .ml-underhead): a faint rule between rows and a slightly stronger one
+          under the column header. Tailwind's border-b is 1px, so these are
+          spelled out. */}
+      <style>{`
+        .spec-rowline { border-bottom: 0.5px solid #F3F4F6; }
+        .spec-rowline:last-child { border-bottom: 0; }
+      `}</style>
       {/* Column headers */}
       <div
-        className={`${GRID} h-12 border-b border-[#E5E7EB] bg-white text-[11px] uppercase tracking-wider text-[#9CA3AF]`}
+        className={`${GRID} h-12 bg-white text-[11px] uppercase tracking-wider text-[#9CA3AF]`}
+        style={{ borderBottom: '0.5px solid #E5E7EB' }}
       >
         <div>Source</div>
         <div />
@@ -877,6 +1552,7 @@ export function MockSpecTable() {
             row={row}
             onOpen={() => setOpenIndex(i)}
             isActive={openIndex === i}
+            reviewed={reviewed.has(i)}
           />
         ))}
       </CollapsibleSpecSection>
@@ -888,7 +1564,7 @@ export function MockSpecTable() {
         onToggle={() => setOpen((s) => ({ ...s, utgt: !s.utgt }))}
       >
         {UNMAPPED_TARGETS.map((f) => (
-          <div key={f.tgtField} className={`relative ${GRID} min-h-[56px] border-b border-[#F3F4F6] py-3.5 last:border-b-0`}>
+          <div key={f.tgtField} className={`spec-rowline relative ${GRID} min-h-[56px] py-3.5`}>
             <ReviewGlyph />
             <div className="flex min-w-0 items-center gap-2">
               <Placeholder label="No source" />
@@ -917,7 +1593,7 @@ export function MockSpecTable() {
         onToggle={() => setOpen((s) => ({ ...s, usrc: !s.usrc }))}
       >
         {UNMAPPED_SOURCE.map((f) => (
-          <div key={`${f.srcTable}.${f.srcField}`} className={`relative ${GRID} min-h-[56px] border-b border-[#F3F4F6] py-3.5 last:border-b-0`}>
+          <div key={`${f.srcTable}.${f.srcField}`} className={`spec-rowline relative ${GRID} min-h-[56px] py-3.5`}>
             <ReviewGlyph />
             <div className="flex min-w-0 items-center gap-2" title={f.srcTable}>
               <SystemName>{f.srcTable}</SystemName>
@@ -951,6 +1627,8 @@ export function MockSpecTable() {
           row={MAPPED[openIndex]}
           index={openIndex}
           total={MAPPED.length}
+          reviewed={reviewed.has(openIndex)}
+          onToggleReviewed={() => toggleReviewed(openIndex)}
           onPrev={() => setOpenIndex((i) => (i === null ? null : Math.max(0, i - 1)))}
           onNext={() => setOpenIndex((i) => (i === null ? null : Math.min(MAPPED.length - 1, i + 1)))}
           onClose={() => setOpenIndex(null)}

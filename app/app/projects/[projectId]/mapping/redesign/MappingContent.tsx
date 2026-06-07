@@ -84,6 +84,7 @@ import { RejectConfirmPopover } from './components/RejectConfirmPopover'
 import { MergeTargetDialog } from './components/MergeTargetDialog'
 import { SourceDisambiguationDialog } from './components/SourceDisambiguationDialog'
 import { MappingListView } from './components/MappingListView'
+import { MockDataPreview } from './components/MockDataPreview'
 import { useMappingListMutations } from './hooks/useMappingListMutations'
 import {
   applyViewModeToParams,
@@ -623,6 +624,12 @@ function MappingContentLoaded({
   const [viewMode] = useState<MappingViewMode>(() =>
     parseViewModeFromParams(searchParams ?? new URLSearchParams()),
   )
+
+  // Design reskin: the "Mapping & Transformation Spec" section toggles between
+  // the Map & Transform spec (default) and the Data Preview surface. Local-only
+  // mock state — Data Preview is a self-contained mock (`<MockDataPreview>`) and
+  // is only reachable when `MOCK_SPEC_TABLE` is true.
+  const [specTab, setSpecTab] = useState<'map' | 'data'>('map')
   const [drawerHighlightedSourceFieldId, setDrawerHighlightedSourceFieldId] =
     useState<string | null>(null)
 
@@ -2574,22 +2581,26 @@ function MappingContentLoaded({
               the Map & Transform / Data Preview toggle), matching the Settle
               MVP Configure screen. */}
           <StatusStrip />
-          <SpecHeaderRow />
-          <FilterRow
-            filters={filters}
-            onFiltersChange={handleFiltersChange}
-            targetTables={data.targetTables}
-            sourceTables={data.sourceTables}
-            highConfidenceCount={highConfidenceCount}
-            onApproveHighConfidenceClick={handleApproveHighConfidenceClick}
-            partitionsByTargetTable={data.partitionsByTargetTable}
-            partitionsEnabled={data.partitionsEnabled}
-            selectedFlatPartitionIds={flatPartitionSelection}
-            onFlatPartitionIdsChange={handleFlatPartitionSelectionChange}
-            reviewedCount={MOCK_SPEC_TABLE ? 0 : effectiveCounts.approved}
-            totalReviewable={MOCK_SPEC_TABLE ? 50 : effectiveCounts.total}
-            onReviewFieldsClick={handleReviewFieldsClick}
-          />
+          <SpecHeaderRow value={specTab} onChange={setSpecTab} />
+          {/* Data Preview carries its own toolbar (`<MockDataPreview>`), so the
+              Map & Transform filter row is suppressed on that tab. */}
+          {specTab === 'map' && (
+            <FilterRow
+              filters={filters}
+              onFiltersChange={handleFiltersChange}
+              targetTables={data.targetTables}
+              sourceTables={data.sourceTables}
+              highConfidenceCount={highConfidenceCount}
+              onApproveHighConfidenceClick={handleApproveHighConfidenceClick}
+              partitionsByTargetTable={data.partitionsByTargetTable}
+              partitionsEnabled={data.partitionsEnabled}
+              selectedFlatPartitionIds={flatPartitionSelection}
+              onFlatPartitionIdsChange={handleFlatPartitionSelectionChange}
+              reviewedCount={MOCK_SPEC_TABLE ? 0 : effectiveCounts.approved}
+              totalReviewable={MOCK_SPEC_TABLE ? 50 : effectiveCounts.total}
+              onReviewFieldsClick={handleReviewFieldsClick}
+            />
+          )}
         </>
       )}
 
@@ -2625,6 +2636,8 @@ function MappingContentLoaded({
           <div className="w-full px-6 py-6">
             {isEmptyMappingState ? (
               <EmptyMappingState projectId={projectId} data={data} />
+            ) : MOCK_SPEC_TABLE && specTab === 'data' ? (
+              <MockDataPreview />
             ) : viewMode === 'flat' ? (
               <MappingListView
                 filteredResult={effectiveResult}
@@ -3107,28 +3120,43 @@ function StatusStrip() {
 }
 
 // "Mapping & Transformation Spec" heading + the Map & Transform / Data Preview
-// segmented toggle. Map & Transform is the live view; Data Preview is a visual
-// stub (inert) until that surface exists.
-function SpecHeaderRow() {
+// segmented toggle. Controlled by the parent's `specTab`; both views are live
+// (Data Preview renders the self-contained `<MockDataPreview>` mock surface).
+function SpecHeaderRow({
+  value,
+  onChange,
+}: {
+  value: 'map' | 'data'
+  onChange: (v: 'map' | 'data') => void
+}) {
   return (
     <div className="bg-white px-5 pt-4 pb-3 shrink-0 flex items-center gap-3 flex-nowrap">
       <h2 className="text-[18px] font-semibold tracking-[-0.01em] text-[#111827] whitespace-nowrap shrink-0">
-        Mapping &amp; Transformation Spec
+        {value === 'data' ? 'Ready-to-load' : 'Mapping & Transformation Spec'}
       </h2>
       <div className="flex-1 min-w-0" />
       <div className="inline-flex rounded-full border border-[#E5E7EB] bg-white p-0.5 shrink-0">
         <button
           type="button"
-          className="px-4 py-1.5 text-[13px] font-medium rounded-full transition-colors"
-          style={{ background: '#111827', color: '#FFFFFF' }}
+          onClick={() => onChange('map')}
+          className="px-4 py-1.5 text-[13px] font-medium rounded-full transition-colors hover:text-[#111827]"
+          style={
+            value === 'map'
+              ? { background: '#111827', color: '#FFFFFF' }
+              : { background: 'transparent', color: '#6B7280' }
+          }
         >
           Map &amp; Transform
         </button>
         <button
           type="button"
-          title="Data Preview — coming soon"
+          onClick={() => onChange('data')}
           className="px-4 py-1.5 text-[13px] font-medium rounded-full transition-colors hover:text-[#111827]"
-          style={{ background: 'transparent', color: '#6B7280' }}
+          style={
+            value === 'data'
+              ? { background: '#111827', color: '#FFFFFF' }
+              : { background: 'transparent', color: '#6B7280' }
+          }
         >
           Data Preview
         </button>
