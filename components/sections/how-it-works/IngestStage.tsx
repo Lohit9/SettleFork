@@ -57,8 +57,8 @@ export default function IngestStage({ onAdvance }: IngestStageProps) {
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-5">
-        <div className="flex h-full flex-col justify-center rounded-[12px] border border-[color:var(--line)]">
+      <div className="flex min-h-0 flex-1 flex-col justify-center overflow-hidden px-5">
+        <div className="flex flex-col rounded-[12px] border border-[color:var(--line)]">
           {ROWS.map((row) => (
             <div
               key={row.label}
