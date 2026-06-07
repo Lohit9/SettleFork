@@ -50,11 +50,11 @@ function FileRow({ name, badge, version, className }: { name: string; badge: str
 export default function ExportStage() {
   return (
     <div className="flex h-full flex-col">
-      <div className="grid flex-1 grid-cols-2 max-md:grid-cols-1 items-start content-center gap-[18px] overflow-hidden px-5 py-3 max-md:py-2">
+      <div className="grid flex-1 grid-cols-2 max-md:grid-cols-1 items-start content-center gap-[18px] max-md:gap-y-3 overflow-hidden px-5 py-3 max-md:py-2">
         {/* sequenced ETL scripts */}
         <div className="flex min-w-0 flex-col gap-[11px]">
           <div className="flex items-start gap-[11px]">
-            <span className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[8px] bg-[color:var(--ink)] text-white">
+            <span className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[8px] bg-[color:var(--ink)] text-white max-md:hidden">
               <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                 <path d="M8 1.8l5.4 3.1v6.2L8 14.2 2.6 11.1V4.9z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
                 <path d="M2.6 4.9L8 8l5.4-3.1M8 8v6.2" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
@@ -62,7 +62,7 @@ export default function ExportStage() {
             </span>
             <div>
               <div className="text-[13.5px] font-[650] tracking-[-0.01em] text-[color:var(--ink)]">Sequenced ETL scripts</div>
-              <div className="mt-[3px] text-[11.5px] leading-[1.4] text-[color:var(--ink-3)]">Ready to run, in order.</div>
+              <div className="mt-[3px] text-[11.5px] leading-[1.4] text-[color:var(--ink-3)] max-md:hidden">Ready to run, in order.</div>
             </div>
           </div>
           <div className="mt-4 max-md:mt-2 flex flex-col gap-[6px]">
@@ -79,7 +79,7 @@ export default function ExportStage() {
         {/* import-ready files */}
         <div className="flex min-w-0 flex-col gap-[11px] border-l border-[color:var(--line)] pl-[18px] max-md:border-l-0 max-md:pl-0">
           <div className="flex items-start gap-[11px]">
-            <span className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[8px] bg-[color:var(--ink)] text-white">
+            <span className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[8px] bg-[color:var(--ink)] text-white max-md:hidden">
               <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                 <path d="M3.5 2h5l4 4v8h-9z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
                 <path d="M8.5 2v4h4M8 8v3.4M6.2 9.6L8 11.4l1.8-1.8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
@@ -87,7 +87,7 @@ export default function ExportStage() {
             </span>
             <div>
               <div className="text-[13.5px] font-[650] tracking-[-0.01em] text-[color:var(--ink)]">Import-ready files</div>
-              <div className="mt-[3px] text-[11.5px] leading-[1.4] text-[color:var(--ink-3)]">Production-ready, every transformation applied.</div>
+              <div className="mt-[3px] text-[11.5px] leading-[1.4] text-[color:var(--ink-3)] max-md:hidden">Production-ready, every transformation applied.</div>
             </div>
           </div>
           <div className="mt-4 max-md:mt-2 flex flex-col gap-[6px]">
@@ -107,7 +107,7 @@ export default function ExportStage() {
           href={CALENDLY}
           target="_blank"
           rel="noopener noreferrer"
-          className="btn btn-primary"
+          className="btn btn-primary max-md:w-full max-md:justify-center"
           style={{ height: 40, padding: '0 22px', fontSize: 13.5 }}
         >
           Book a demo
