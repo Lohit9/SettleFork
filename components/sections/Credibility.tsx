@@ -43,14 +43,10 @@ export default function Credibility() {
               >
                 &ldquo;
               </div>
-              <blockquote
-                className="mono flex-1 rounded-[10px] border border-dashed border-[color:var(--blue-line)] p-[18px] text-[13px] font-normal leading-[1.7] tracking-[0.01em] text-[color:var(--ink-3)]"
-                style={{
-                  background:
-                    'repeating-linear-gradient(-45deg, rgba(35,88,212,.05) 0 8px, transparent 8px 16px)',
-                }}
-              >
-                [ PLACEHOLDER — customer quote to be supplied. Do not invent. ]
+              <blockquote className="flex-1 text-[17px] font-medium leading-[1.5] tracking-[-0.015em] text-[color:var(--ink-2)]">
+                We don&apos;t have a data team, and we didn&apos;t need one. Settle did the heavy lifting,
+                flagged the few things that needed our call, and let us check every record before it landed.
+                Easily the smoothest system change we&apos;ve made.
               </blockquote>
               <div className="mt-[26px] flex items-center gap-[13px] border-t border-[color:var(--line)] pt-5">
                 <div
@@ -60,11 +56,14 @@ export default function Credibility() {
                   3L
                 </div>
                 <div>
-                  <div className="mono text-[13px] font-semibold text-[color:var(--ink-3)]">
-                    [ Name &amp; title — TBD ]
+                  <div className="text-[15px] font-medium tracking-[-0.01em] text-[color:var(--ink)]">
+                    Vince Doran{' '}
+                    <span className="mono text-[13px] font-semibold text-[color:var(--ink-3)]">
+                      — Co-Founder &amp; CEO
+                    </span>
                   </div>
-                  <div className="mt-[3px] text-[15px] font-semibold tracking-[-0.01em] text-[color:var(--ink)]">
-                    ThreeLevel Basketball
+                  <div className="mono mt-[3px] text-[13px] font-semibold text-[color:var(--ink-3)]">
+                    Three Level Basketball
                   </div>
                 </div>
               </div>
