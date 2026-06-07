@@ -2,83 +2,97 @@
 
 import { useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import ScrollReveal from '@/components/ui/ScrollReveal'
 
-const FAQS = [
+const FAQS: { q: string; a: React.ReactNode }[] = [
   {
-    question: 'How does Settle handle data security?',
-    answer: 'Settle is hosted on AWS with AES-256-GCM encryption at rest and in transit. All AI processing uses Anthropic Enterprise LLMs — your data is never used for model training. Every field mapping and transformation carries a full audit trail. SOC 2 Type 2 certification is in progress.',
+    q: 'Does the AI write directly to my production database?',
+    a: (
+      <>
+        No. The model only <b>proposes</b> mappings and transforms. Deterministic engines validate every
+        row, and <b>nothing loads until your team approves</b> the export. Settle holds no standing write
+        access to your target.
+      </>
+    ),
   },
   {
-    question: 'What systems does Settle connect to?',
-    answer: 'Settle connects to major ERP, CRM, HCM, and database platforms — including Salesforce, SAP, Oracle, NetSuite, Microsoft Dynamics 365, and more. We support direct database connections, API-based extraction, and file-based imports (CSV, JSON, DDL).',
+    q: 'How does Settle handle data security?',
+    a: 'Data is encrypted in transit and at rest. AI processing runs on Anthropic Enterprise LLMs, and your data is never used to train any model. Every profile, mapping, validation, and approval is versioned and logged. SOC 2 is kicking off soon and a pen test is in progress; full security documentation is available under NDA.',
   },
   {
-    question: 'What if the AI gets a mapping wrong?',
-    answer: 'Every AI-proposed mapping includes a confidence score and explanation. Your team reviews and approves before anything executes. Ambiguous mappings are flagged for human review — the AI never acts without visibility.',
+    q: 'What sources and targets does Settle support?',
+    a: "Settle works across common enterprise systems — ERPs, CRMs, HRIS, Legal-tech, and databases — plus flat-file exports like CSV and DDL when a direct connection isn't possible. The migrations catalog lists 100+ supported paths, and because mappings are packaged and re-runnable, new paths are added quickly. If your pair isn't listed, ask — many engagements start from exactly that conversation.",
   },
   {
-    question: 'Is Settle a consulting service?',
-    answer: 'No. Settle is a software platform. We replace the manual spreadsheet-and-SQL work that consultants do today with an autonomous, reusable engine. Consultants can use Settle to accelerate their own delivery.',
+    q: 'What happens to rows that fail validation?',
+    a: "They're blocked, not silently loaded. Every failed row is flagged with the rule it broke and the AI's proposed fix, and your team resolves or accepts each flag in review. Nothing reaches the target until flags are cleared and the load is approved — which is why errors at cutover are zero by design.",
   },
   {
-    question: 'How quickly can we get started?',
-    answer: 'First mapping proposals are generated within one hour of connecting your schema. Settle profiles your source data in minutes, and full migration readiness packages are typically delivered in days, not months.',
+    q: 'Can we run Settle in our own environment?',
+    a: "Settle runs as a managed deployment hosted on AWS today, with data encrypted in transit and at rest and not retained beyond the migration. Settle can be deployed in your own private cloud on demand; VPC deployment is on our enterprise roadmap — talk to us if it's a requirement.",
+  },
+  {
+    q: 'How is this different from a custom ETL script or a systems integrator?',
+    a: "Three differences: speed, accuracy, and reuse. Scripts and integrator engagements are one-off work — weeks of mapping locked in code you can't easily audit or re-run, verified by spot checks. Settle is faster because the AI proposes the mappings up front, more accurate because deterministic engines validate every row against your rules, and reusable because the whole migration ships as a versioned, explainable, re-runnable package. The rigor of an SI engagement at software speed — and the audit trail stays yours.",
+  },
+  {
+    q: 'How long does a migration actually take?',
+    a: "It depends on volume, sources, and schema complexity, which is why every migration is scoped individually. The pattern is consistent though: profiling to a production-ready package in days to weeks rather than months, because the AI proposes the mappings up front and your team's time goes to review and approval instead of authoring. Ask for an estimate and we'll scope yours.",
   },
 ]
 
 export default function FAQ() {
-  const [openIndex, setOpenIndex] = useState<number>(0)
-
-  const toggle = (i: number) => setOpenIndex(openIndex === i ? -1 : i)
+  const [open, setOpen] = useState(0)
 
   return (
-    <section id="faq" className="faq-section py-16 px-6 lg:px-12">
-      <div className="max-w-2xl mx-auto">
+    <section id="faq" className="faq-section section">
+      <div className="wrap">
+        <div className="sec-head mx-auto max-w-[720px] text-center">
+          <div className="kicker">Questions</div>
+          <h2 className="h2 mt-[14px]">Straight answers to the hard questions.</h2>
+        </div>
 
-        <ScrollReveal>
-          <h2 className="text-4xl font-bold text-[#0F172A] tracking-tight text-center mb-6">
-            FAQ
-          </h2>
-        </ScrollReveal>
-
-        {FAQS.map((faq, i) => (
-          <ScrollReveal key={faq.question} delay={i * 0.05}>
-            <div className="border-b border-[#E2E8F0]">
-              <button
-                onClick={() => toggle(i)}
-                className="w-full flex items-center justify-between py-5 text-left group"
-              >
-                <span className="text-base font-medium text-[#1E3A5F] group-hover:text-[#2358D4] transition-colors pr-4">
-                  {faq.question}
-                </span>
-                <span
-                  className="text-[#94A3B8] text-xl shrink-0 transition-transform duration-300"
-                  style={{ transform: openIndex === i ? 'rotate(45deg)' : 'rotate(0deg)' }}
+        <div className="mx-auto mt-12 max-w-[820px] border-t border-[color:var(--line)]">
+          {FAQS.map((faq, i) => {
+            const isOpen = open === i
+            return (
+              <div key={faq.q} className="border-b border-[color:var(--line)]">
+                <button
+                  type="button"
+                  onClick={() => setOpen(isOpen ? -1 : i)}
+                  aria-expanded={isOpen}
+                  className="flex w-full items-center gap-[18px] px-1 py-[22px] text-left text-[16.5px] font-[550] tracking-[-0.01em] text-[color:var(--ink)]"
                 >
-                  +
-                </span>
-              </button>
-
-              <AnimatePresence initial={false}>
-                {openIndex === i && (
-                  <motion.div
-                    initial={{ height: 0, opacity: 0 }}
-                    animate={{ height: 'auto', opacity: 1 }}
-                    exit={{ height: 0, opacity: 0 }}
-                    transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-                    style={{ overflow: 'hidden' }}
+                  <span>{faq.q}</span>
+                  <span
+                    aria-hidden="true"
+                    className={`ml-auto flex h-[22px] w-[22px] shrink-0 items-center justify-center transition-transform duration-300 ${
+                      isOpen ? 'rotate-45 text-[color:var(--blue)]' : 'text-[color:var(--ink-3)]'
+                    }`}
                   >
-                    <p className="text-[15px] text-[#64748B] leading-relaxed pb-5">
-                      {faq.answer}
-                    </p>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
-          </ScrollReveal>
-        ))}
-
+                    <svg viewBox="0 0 22 22" fill="none" className="h-full w-full">
+                      <path d="M11 5v12M5 11h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                    </svg>
+                  </span>
+                </button>
+                <AnimatePresence initial={false}>
+                  {isOpen && (
+                    <motion.div
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: 'auto', opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      transition={{ duration: 0.3, ease: [0.3, 0.8, 0.4, 1] }}
+                      style={{ overflow: 'hidden' }}
+                    >
+                      <div className="pb-6 pl-[42px] pr-1 text-[14.5px] leading-[1.65] text-[color:var(--ink-2)] [&_b]:font-semibold [&_b]:text-[color:var(--ink)]">
+                        {faq.a}
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            )
+          })}
+        </div>
       </div>
     </section>
   )
