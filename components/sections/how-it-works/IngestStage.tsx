@@ -51,7 +51,7 @@ export default function IngestStage({ onAdvance }: IngestStageProps) {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between gap-3 px-5 pt-4 pb-3 max-md:hidden">
+      <div className="flex items-center justify-between gap-3 px-5 pt-4 pb-3 max-md:pt-3 max-md:pb-2">
         <div className="text-[15px] max-md:text-[13.5px] font-[650] tracking-[-0.015em] text-[color:var(--ink)]">
           Set up your migration
         </div>
