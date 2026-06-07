@@ -26,11 +26,7 @@ const ROWS: { label: string; cells: [Mk, string][] }[] = [
 // Mobile stacked cards render the three columns in winner-first order; ci maps
 // back into each row's cells array (0 = Manual, 1 = Newer-AI, 2 = Settle), so the
 // md+ grid and the cards share one source of truth.
-const CARD_COLS: { ci: number; label: string; win: boolean }[] = [
-  { ci: 2, label: 'SETTLE', win: true },
-  { ci: 0, label: 'MANUAL & ETL', win: false },
-  { ci: 1, label: 'NEW-GEN ETL/AI', win: false },
-]
+const CARD_COLS = [{ ci: 2, win: true }, { ci: 0, win: false }, { ci: 1, win: false }]
 
 function Mark({ type }: { type: Mk }) {
   if (type === 'na') {
@@ -169,17 +165,17 @@ export default function Differentiation() {
             >
               <div className="text-[15px] font-semibold tracking-[-0.01em] text-[color:var(--ink)]">{row.label}</div>
               <div className="mt-[10px] flex flex-col">
-                {CARD_COLS.map(({ ci, label, win }) => {
+                {CARD_COLS.map(({ ci, win }) => {
                   const [mark, value] = row.cells[ci]
                   return (
                     <div
-                      key={label}
+                      key={ci}
                       className="flex items-start gap-[10px] border-t border-[color:var(--line-2)] py-[10px] first:border-t-0"
                       style={win ? { background: 'rgba(29,158,117,.06)' } : undefined}
                     >
                       <Mark type={mark} />
-                      <span className="mono mt-[1px] w-[96px] shrink-0 whitespace-nowrap text-[11px] font-semibold uppercase tracking-[0.05em] text-[color:var(--ink-3)]">
-                        {label}
+                      <span className="mono mt-[1px] shrink-0 whitespace-nowrap text-[11px] font-semibold uppercase tracking-[0.05em] text-[color:var(--ink-3)]">
+                        {COLS[ci]}
                       </span>
                       <span
                         className={`min-w-0 flex-1 text-[13px] leading-[1.4] ${
