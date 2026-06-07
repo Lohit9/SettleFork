@@ -9,6 +9,7 @@ import Payoff from '@/components/sections/Payoff'
 import Differentiation from '@/components/sections/Differentiation'
 import ProposesValidatesApproves from '@/components/sections/ProposesValidatesApproves'
 import PricingSection from '@/components/sections/PricingSection'
+import SecurityTrust from '@/components/sections/SecurityTrust'
 import Credibility from '@/components/sections/Credibility'
 import FAQ from '@/components/sections/FAQ'
 import FinalCTA from '@/components/sections/FinalCTA'
@@ -26,6 +27,7 @@ export default function LandingPageClient() {
         <Credibility />
         <Differentiation />
         <ProposesValidatesApproves />
+        <SecurityTrust />
         <PricingSection />
         <FAQ />
         <FinalCTA />
