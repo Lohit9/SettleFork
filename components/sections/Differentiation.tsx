@@ -56,6 +56,12 @@ function Mark({ type }: { type: Mk }) {
 const LINE = '1px solid var(--line)'
 const WIN_LINE = '1px solid rgba(29,158,117,.16)'
 
+// md+ grid column order: criterion (col 1) | Settle (col 2) | Manual (col 3) |
+// Newer-AI (col 4). ci indexes row.cells (0 = Manual, 1 = Newer-AI, 2 = Settle);
+// DOM order is unchanged — explicit grid-column/row placement does the reorder.
+const COL_START = (ci: number) => (ci === 2 ? 'col-start-2' : ci === 0 ? 'col-start-3' : 'col-start-4')
+const ROW_START = ['row-start-2', 'row-start-3', 'row-start-4', 'row-start-5', 'row-start-6']
+
 export default function Differentiation() {
   return (
     <section id="why" className="section">
@@ -82,13 +88,13 @@ export default function Differentiation() {
           >
             {/* raised green-tinted card over the Settle column — an absolute
                 overlay (mirrors the reference's .cmp-winhl) so it does not
-                displace the auto-placed cells; its grid area is its containing
-                block, and inset:0 makes it fill column 4 across every row. */}
+                displace the placed cells; its grid area is its containing block,
+                and inset:0 makes it fill the Settle column across every row. */}
             <div
               aria-hidden="true"
+              className="col-start-2"
               style={{
                 position: 'absolute',
-                gridColumn: 4,
                 gridRow: '1 / -1',
                 inset: 0,
                 zIndex: 0,
@@ -100,13 +106,13 @@ export default function Differentiation() {
             />
 
             {/* header row */}
-            <div className="relative z-[1]" style={{ borderBottom: LINE }} />
+            <div className="relative z-[1] col-start-1 row-start-1" style={{ borderBottom: LINE }} />
             {COLS.map((col, ci) => {
               const win = ci === 2
               return (
                 <div
                   key={col}
-                  className={`relative z-[1] flex px-5 ${
+                  className={`relative z-[1] flex row-start-1 ${COL_START(ci)} ${ci === 0 ? 'pl-9 pr-5' : 'px-5'} ${
                     win
                       ? 'min-h-0 items-center pt-[18px] text-[16px] font-bold text-[color:var(--ink)]'
                       : 'min-h-[58px] items-end pb-[14px] text-[14px] font-semibold tracking-[-0.01em] text-[color:var(--ink-2)]'
@@ -124,7 +130,7 @@ export default function Differentiation() {
               return (
                 <Fragment key={row.label}>
                   <div
-                    className="relative z-[1] flex min-h-[64px] items-center px-5 py-3 text-[14px] font-medium leading-[1.35] text-[color:var(--ink-2)]"
+                    className={`relative z-[1] flex min-h-[64px] items-center px-5 py-3 text-[14px] font-medium leading-[1.35] text-[color:var(--ink-2)] col-start-1 ${ROW_START[ri]}`}
                     style={{ borderBottom: last ? 'none' : LINE }}
                   >
                     {row.label}
@@ -134,10 +140,12 @@ export default function Differentiation() {
                     return (
                       <div
                         key={ci}
-                        className={`relative z-[1] flex min-h-[64px] items-center gap-[10px] py-3 text-[14px] ${
+                        className={`relative z-[1] flex min-h-[64px] items-center gap-[10px] py-3 text-[14px] ${ROW_START[ri]} ${COL_START(ci)} ${
                           win
                             ? 'pl-[22px] pr-5 font-[550] text-[color:var(--ink)]'
-                            : 'px-5 text-[color:var(--ink-3)]'
+                            : ci === 0
+                              ? 'pl-9 pr-5 text-[color:var(--ink-3)]'
+                              : 'px-5 text-[color:var(--ink-3)]'
                         }`}
                         style={{
                           borderBottom: last ? 'none' : win ? WIN_LINE : LINE,
