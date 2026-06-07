@@ -44,8 +44,8 @@ export default function HowItWorks() {
 
   const bodies = [
     <IngestStage key="ingest" onAdvance={() => setActive(1)} />,
-    <GenerateStage key="generate" />,
-    <ValidateStage key="validate" />,
+    <GenerateStage key="generate" onAdvance={() => setActive(2)} />,
+    <ValidateStage key="validate" onAdvance={() => setActive(3)} />,
     <ExportStage key="export" />,
   ]
 
