@@ -85,116 +85,163 @@ export default function HowItWorks() {
   ]
 
   return (
-    <section id="how" className="relative bg-[color:var(--bg)]">
-
+    <section
+      id="how"
+      className="relative"
+      style={{
+        background:
+          'linear-gradient(180deg, var(--bg) 0%, var(--surface-2) 16%, var(--surface-2) 84%, var(--bg) 100%)',
+      }}
+    >
       {/* Intro heading — normal flow, seen before the pinned track */}
-      <div className="px-6 pt-24 pb-12">
+      <div className="mx-auto max-w-[660px] px-5 pt-[90px] pb-2 text-center">
         <ScrollReveal>
-          <h2 className="h2 mx-auto max-w-3xl text-center">Watch a migration run, end to end.</h2>
+          <h2
+            className="font-semibold tracking-[-0.025em] leading-[1.05] text-[color:var(--ink)]"
+            style={{ fontSize: 'clamp(30px, 3.6vw, 44px)' }}
+          >
+            Watch a migration run, end to end.
+          </h2>
         </ScrollReveal>
       </div>
 
       {/* Scroll track — ~one viewport per stage */}
       <div ref={trackRef} className="relative h-[400vh]">
-        {/* Pinned panel, vertically centered in the viewport */}
-        <div className="sticky top-0 flex h-screen items-center overflow-hidden px-6">
-          <div className="mx-auto w-full max-w-3xl">
+        {/* Pinned unit — below the 64px sticky header, flex column, centered */}
+        <div
+          className="sticky top-16 flex flex-col items-center justify-center overflow-hidden gap-[clamp(12px,1.9vh,20px)] px-5"
+          style={{ height: 'calc(100vh - 4rem)', paddingTop: 14, paddingBottom: 18 }}
+        >
+          {/* walk-head: fixed 128px box, content bottom-aligned */}
+          <div className="flex h-[128px] max-w-[660px] shrink-0 flex-col items-center justify-end text-center">
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={`head-${active}`}
+                {...STAGE_TRANSITION}
+                className="flex flex-col items-center gap-2"
+              >
+                <p className="mono uppercase font-semibold tracking-[0.15em] text-[11px] text-[color:var(--blue)]">
+                  STEP {String(active + 1).padStart(2, '0')} / 04
+                </p>
+                <h3
+                  className="font-semibold tracking-[-0.018em] leading-[1.1] text-[color:var(--ink)]"
+                  style={{ fontSize: 'clamp(19px, 2.1vw, 24px)' }}
+                >
+                  {stage.heading}
+                </h3>
+                <p className="mx-auto max-w-[640px] text-[13.5px] leading-[1.45] text-[color:var(--ink-2)]">
+                  {stage.sub}
+                </p>
+              </motion.div>
+            </AnimatePresence>
+          </div>
 
-            {/* Per-stage eyebrow + heading + sub */}
-            <div className="text-center min-h-[120px]">
+          {/* console */}
+          <div
+            className="shrink-0 overflow-hidden border border-[color:var(--line)] bg-[color:var(--surface)]"
+            style={{ width: 'min(1060px, 95vw)', borderRadius: 16, boxShadow: 'var(--sh-lg)' }}
+          >
+            {/* chrome bar: neutral dots at left, centered URL pill */}
+            <div className="flex h-[44px] items-center gap-2 border-b border-[color:var(--line)] bg-[color:var(--surface-2)] px-4">
+              <span className="h-[11px] w-[11px] rounded-full bg-[color:var(--line-3)]" />
+              <span className="h-[11px] w-[11px] rounded-full bg-[color:var(--line-3)]" />
+              <span className="h-[11px] w-[11px] rounded-full bg-[color:var(--line-3)]" />
+              <span className="mono mx-auto flex items-center gap-2 rounded-[7px] border border-[color:var(--line)] bg-[color:var(--bg)] px-4 py-[5px] text-[12px] text-[color:var(--ink-2)]">
+                <svg
+                  width="11"
+                  height="11"
+                  viewBox="0 0 12 12"
+                  fill="none"
+                  className="opacity-[0.65]"
+                  aria-hidden="true"
+                >
+                  <rect x="2.5" y="5" width="7" height="5" rx="1" stroke="currentColor" strokeWidth="1.1" />
+                  <path d="M4 5V3.6a2 2 0 0 1 4 0V5" stroke="currentColor" strokeWidth="1.1" />
+                </svg>
+                <span className="truncate">settledata.ai/app/migrations/erp-to-erp</span>
+              </span>
+            </div>
+
+            {/* tab bar / stepper */}
+            <div className="flex border-b border-[color:var(--line)] bg-[color:var(--surface)]">
+              {STAGES.map((s, i) => {
+                const done = i < active
+                const isActive = i === active
+                return (
+                  <button
+                    key={s.label}
+                    type="button"
+                    onClick={() => goToStage(i)}
+                    aria-current={isActive ? 'step' : undefined}
+                    className={`relative flex min-w-0 flex-1 items-center gap-2.5 px-[15px] py-[13px] text-left transition-colors hover:bg-[color:var(--surface-2)] ${
+                      i > 0 ? 'border-l border-[color:var(--line-2)]' : ''
+                    }`}
+                  >
+                    <span
+                      className={`mono flex h-[25px] w-[25px] shrink-0 items-center justify-center rounded-full text-[11px] font-semibold transition-all ${
+                        isActive
+                          ? 'border border-[color:var(--blue)] bg-[color:var(--blue)] text-white'
+                          : done
+                            ? 'border border-[color:var(--green)] bg-[color:var(--green)] text-white'
+                            : 'border border-[color:var(--line)] bg-[color:var(--surface-2)] text-[color:var(--ink-3)]'
+                      }`}
+                      style={isActive ? { boxShadow: '0 0 0 4px var(--blue-tint)' } : undefined}
+                    >
+                      {String(i + 1).padStart(2, '0')}
+                    </span>
+                    <span
+                      className={`truncate text-[13px] leading-[1.2] tracking-[-0.012em] font-[550] ${
+                        isActive
+                          ? 'text-[color:var(--ink)]'
+                          : done
+                            ? 'text-[color:var(--ink-2)]'
+                            : 'text-[color:var(--ink-3)]'
+                      }`}
+                    >
+                      {s.label}
+                    </span>
+                    {isActive && (
+                      <span className="absolute inset-x-0 bottom-[-1px] h-[2px] bg-[color:var(--blue)]" />
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+
+            {/* con-body — capped height; the active view fills it, overflow clips */}
+            <div
+              className="relative overflow-hidden"
+              style={{ height: 'clamp(334px, calc(100vh - 4rem - 320px), 460px)' }}
+            >
               <AnimatePresence mode="wait">
-                <motion.div key={`head-${active}`} {...STAGE_TRANSITION}>
-                  <p className="mono text-xs font-semibold tracking-[0.15em] text-[color:var(--blue)] mb-2">
-                    STEP {String(active + 1).padStart(2, '0')} / 04
-                  </p>
-                  <h3 className="text-2xl sm:text-[28px] font-semibold tracking-tight text-[color:var(--ink)] mb-2">
-                    {stage.heading}
-                  </h3>
-                  <p className="lede mx-auto max-w-xl">{stage.sub}</p>
+                <motion.div key={`body-${active}`} {...STAGE_TRANSITION} className="absolute inset-0">
+                  {bodies[active]}
                 </motion.div>
               </AnimatePresence>
             </div>
+          </div>
 
-            {/* Browser-chrome mockup */}
-            <div className="card overflow-hidden mt-3">
-              {/* Window chrome + URL bar */}
-              <div className="flex items-center gap-3 border-b border-[color:var(--line)] px-4 py-2.5">
-                <div className="flex gap-1.5 shrink-0">
-                  <span className="h-2.5 w-2.5 rounded-full bg-[color:var(--line-3)]" />
-                  <span className="h-2.5 w-2.5 rounded-full bg-[color:var(--line-3)]" />
-                  <span className="h-2.5 w-2.5 rounded-full bg-[color:var(--line-3)]" />
-                </div>
-                <div className="flex-1 rounded-md bg-[color:var(--surface-2)] px-3 py-1.5">
-                  <span className="mono text-[11px] text-[color:var(--ink-3)]">
-                    settledata.ai/app/migrations/erp-to-erp
-                  </span>
-                </div>
-              </div>
+          {/* rail — progress bar segments (completed + active filled) */}
+          <div className="flex shrink-0 items-center gap-2">
+            {STAGES.map((s, i) => (
+              <button
+                key={s.label}
+                type="button"
+                onClick={() => goToStage(i)}
+                aria-label={`Go to ${s.label} step`}
+                aria-current={i === active ? 'step' : undefined}
+                className={`h-[4px] w-[42px] rounded-[2px] transition-colors ${
+                  i <= active
+                    ? 'bg-[color:var(--blue)]'
+                    : 'bg-[color:var(--line-3)] hover:bg-[color:var(--ink-3)]'
+                }`}
+              />
+            ))}
+          </div>
 
-              {/* Stepper */}
-              <div className="flex items-center gap-2 sm:gap-3 overflow-x-auto border-b border-[color:var(--line)] px-4 py-2.5">
-                {STAGES.map((s, i) => {
-                  const done = i < active
-                  const isActive = i === active
-                  return (
-                    <div key={s.label} className="flex items-center gap-2 sm:gap-3 shrink-0">
-                      {i > 0 && (
-                        <span className="text-[color:var(--line-3)]" aria-hidden="true">·</span>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => goToStage(i)}
-                        aria-current={isActive ? 'step' : undefined}
-                        className={`flex items-center gap-1.5 whitespace-nowrap text-xs sm:text-[13px] font-medium transition-colors ${
-                          done
-                            ? 'text-[color:var(--green)]'
-                            : isActive
-                              ? 'text-[color:var(--blue)]'
-                              : 'text-[color:var(--ink-3)] hover:text-[color:var(--ink-2)]'
-                        }`}
-                      >
-                        <span className="mono">{done ? '✓' : String(i + 1).padStart(2, '0')}</span>
-                        <span>{s.label}</span>
-                      </button>
-                    </div>
-                  )
-                })}
-              </div>
-
-              {/* Active stage body — capped height; internal overflow clips */}
-              <div
-                className="overflow-hidden p-4 sm:p-5"
-                style={{ height: 'clamp(340px, calc(100vh - 340px), 460px)' }}
-              >
-                <AnimatePresence mode="wait">
-                  <motion.div key={`body-${active}`} {...STAGE_TRANSITION}>
-                    {bodies[active]}
-                  </motion.div>
-                </AnimatePresence>
-              </div>
-            </div>
-
-            {/* Pagination dots */}
-            <div className="mt-5 flex items-center justify-center gap-2.5">
-              {STAGES.map((s, i) => (
-                <button
-                  key={s.label}
-                  type="button"
-                  onClick={() => goToStage(i)}
-                  aria-label={`Go to ${s.label} step`}
-                  aria-current={i === active ? 'step' : undefined}
-                  className={`h-2 rounded-full transition-all ${
-                    i === active
-                      ? 'w-6 bg-[color:var(--blue)]'
-                      : 'w-2 bg-[color:var(--line-3)] hover:bg-[color:var(--ink-3)]'
-                  }`}
-                />
-              ))}
-            </div>
-
-            <p className="mt-3 text-center text-sm text-[color:var(--ink-3)]">
-              From profiling to a production-ready package in days, not months.
-            </p>
+          {/* note */}
+          <div className="shrink-0 text-center text-[13.5px] font-medium tracking-[-0.01em] text-[color:var(--ink-2)]">
+            From profiling to a production-ready package in days, not months.
           </div>
         </div>
       </div>

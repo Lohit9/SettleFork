@@ -1,16 +1,5 @@
 const CALENDLY = 'https://calendly.com/settle-ai/demo'
 
-const FILE_ICON = {
-  viewBox: '0 0 24 24',
-  width: 15,
-  height: 15,
-  fill: 'none',
-  stroke: 'currentColor',
-  strokeWidth: 1.75,
-  strokeLinecap: 'round' as const,
-  strokeLinejoin: 'round' as const,
-}
-
 const SCRIPTS = [
   { name: '00_pre_migration_checklist.sql', badge: 'CHECKLIST' },
   { name: '01_stage_load.sql', badge: 'STAGING' },
@@ -27,83 +16,90 @@ const FILES = [
 
 function FileIcon() {
   return (
-    <svg {...FILE_ICON}>
-      <path d="M14 3v4a1 1 0 0 0 1 1h4" />
-      <path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z" />
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M3.5 2h5l4 4v8h-9z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+      <path d="M8.5 2v4h4" stroke="currentColor" strokeWidth="1.2" />
     </svg>
   )
 }
 
-function FileRow({ name, badge, upper }: { name: string; badge: string; upper?: boolean }) {
+function FileRow({ name, badge, version }: { name: string; badge: string; version?: boolean }) {
   return (
-    <div className="flex items-center gap-2.5 rounded-md border border-[color:var(--line)] px-3 py-2">
-      <span className="shrink-0 text-[color:var(--ink-3)]">
+    <div className="flex h-[35px] items-center gap-[10px] rounded-[9px] border border-[color:var(--line)] bg-[color:var(--surface)] px-3">
+      <span className="flex shrink-0 text-[color:var(--ink-3)]">
         <FileIcon />
       </span>
-      <span className="mono text-xs text-[color:var(--ink)] truncate flex-1">{name}</span>
-      <span className={`chip chip-gray shrink-0 ${upper ? 'uppercase' : ''}`}>{badge}</span>
+      <span className="mono min-w-0 flex-1 truncate text-[11.5px] font-medium text-[color:var(--ink)]">{name}</span>
+      {version ? (
+        <span className="mono ml-auto shrink-0 rounded-[5px] border border-[color:var(--line)] px-[7px] py-[3px] text-[10px] text-[color:var(--ink-3)]">
+          {badge}
+        </span>
+      ) : (
+        <span className="mono ml-auto shrink-0 rounded-[5px] border border-[color:var(--line)] px-[6px] py-[3px] text-[9px] font-bold tracking-[0.06em] text-[color:var(--ink-3)]">
+          {badge}
+        </span>
+      )}
     </div>
   )
 }
 
 export default function ExportStage() {
   return (
-    <div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-
-        {/* Left — sequenced ETL scripts */}
-        <div>
-          <div className="flex items-start gap-3 mb-3">
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[color:var(--ink)] text-white">
-              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="8 6 3 12 8 18" />
-                <polyline points="16 6 21 12 16 18" />
+    <div className="flex h-full flex-col">
+      <div className="grid flex-1 grid-cols-2 items-start gap-[18px] overflow-hidden px-5 pt-7 pb-[2px]">
+        {/* sequenced ETL scripts */}
+        <div className="flex min-w-0 flex-col gap-[11px]">
+          <div className="flex items-start gap-[11px]">
+            <span className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[8px] bg-[color:var(--ink)] text-white">
+              <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M8 1.8l5.4 3.1v6.2L8 14.2 2.6 11.1V4.9z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+                <path d="M2.6 4.9L8 8l5.4-3.1M8 8v6.2" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
               </svg>
             </span>
             <div>
-              <h4 className="text-sm font-semibold text-[color:var(--ink)]">Sequenced ETL scripts</h4>
-              <p className="text-xs text-[color:var(--ink-3)]">Ready to run, in order.</p>
+              <div className="text-[13.5px] font-[650] tracking-[-0.01em] text-[color:var(--ink)]">Sequenced ETL scripts</div>
+              <div className="mt-[3px] text-[11.5px] leading-[1.4] text-[color:var(--ink-3)]">Ready to run, in order.</div>
             </div>
           </div>
-          <div className="flex flex-col gap-2">
+          <div className="mt-4 flex flex-col gap-[6px]">
             {SCRIPTS.map((f) => (
-              <FileRow key={f.name} name={f.name} badge={f.badge} upper />
-            ))}
-          </div>
-          <p className="mono text-[11px] text-[color:var(--ink-3)] mt-2">
-            + 8 more files · <span className="text-[color:var(--blue)] cursor-pointer">Show all</span>
-          </p>
-        </div>
-
-        {/* Right — import-ready files */}
-        <div>
-          <div className="flex items-start gap-3 mb-3">
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[color:var(--ink)] text-white">
-              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 2 2 7l10 5 10-5-10-5z" />
-                <path d="M2 17l10 5 10-5" />
-                <path d="M2 12l10 5 10-5" />
-              </svg>
-            </span>
-            <div>
-              <h4 className="text-sm font-semibold text-[color:var(--ink)]">Import-ready files</h4>
-              <p className="text-xs text-[color:var(--ink-3)]">Production-ready, every transformation applied.</p>
-            </div>
-          </div>
-          <div className="flex flex-col gap-2">
-            {FILES.map((f) => (
               <FileRow key={f.name} name={f.name} badge={f.badge} />
             ))}
+            <div className="mono px-[2px] pt-2 text-[11px] text-[color:var(--blue-press)]">+ 8 more files · Show all</div>
           </div>
-          <p className="mono text-[11px] text-[color:var(--ink-3)] mt-2">
-            + 3 more files · <span className="text-[color:var(--blue)] cursor-pointer">Show all</span>
-          </p>
         </div>
 
+        {/* import-ready files */}
+        <div className="flex min-w-0 flex-col gap-[11px] border-l border-[color:var(--line)] pl-[18px]">
+          <div className="flex items-start gap-[11px]">
+            <span className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[8px] bg-[color:var(--ink)] text-white">
+              <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M3.5 2h5l4 4v8h-9z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+                <path d="M8.5 2v4h4M8 8v3.4M6.2 9.6L8 11.4l1.8-1.8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </span>
+            <div>
+              <div className="text-[13.5px] font-[650] tracking-[-0.01em] text-[color:var(--ink)]">Import-ready files</div>
+              <div className="mt-[3px] text-[11.5px] leading-[1.4] text-[color:var(--ink-3)]">Production-ready, every transformation applied.</div>
+            </div>
+          </div>
+          <div className="mt-4 flex flex-col gap-[6px]">
+            {FILES.map((f) => (
+              <FileRow key={f.name} name={f.name} badge={f.badge} version />
+            ))}
+            <div className="mono px-[2px] pt-2 text-[11px] text-[color:var(--blue-press)]">+ 3 more files · Show all</div>
+          </div>
+        </div>
       </div>
 
-      <div className="flex justify-end mt-5">
-        <a href={CALENDLY} target="_blank" rel="noopener noreferrer" className="btn btn-primary">
+      <div className="flex items-center justify-end gap-[14px] border-t border-[color:var(--line)] bg-[color:var(--surface-2)] px-5 py-[13px]">
+        <a
+          href={CALENDLY}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="btn btn-primary"
+          style={{ height: 40, padding: '0 22px', fontSize: 13.5 }}
+        >
           Book a demo
         </a>
       </div>
