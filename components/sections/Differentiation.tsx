@@ -164,21 +164,21 @@ export default function Differentiation() {
         </div>
 
         {/* below md : the same comparison as stacked cards — winner first, no horizontal scroll */}
-        <div className="mt-10 hidden flex-col gap-4 max-md:flex">
+        <div className="mt-10 hidden flex-col gap-3 max-md:flex">
           {ROWS.map((row) => (
             <div
               key={row.label}
               className="rounded-[14px] border border-[color:var(--line)] bg-[color:var(--surface)]"
-              style={{ padding: '16px 18px' }}
+              style={{ padding: '12px 14px' }}
             >
               <div className="text-[15px] font-semibold tracking-[-0.01em] text-[color:var(--ink)]">{row.label}</div>
-              <div className="mt-[10px] flex flex-col">
+              <div className="mt-[6px] flex flex-col">
                 {CARD_COLS.map(({ ci, win }) => {
                   const [mark, value] = row.cells[ci]
                   return (
                     <div
                       key={ci}
-                      className="flex items-start gap-[10px] border-t border-[color:var(--line-2)] py-[10px] first:border-t-0"
+                      className="flex items-start gap-[10px] border-t border-[color:var(--line-2)] py-[6px] first:border-t-0"
                       style={win ? { background: 'rgba(29,158,117,.06)' } : undefined}
                     >
                       <Mark type={mark} />
