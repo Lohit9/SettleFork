@@ -113,12 +113,12 @@ export default function HowItWorks() {
           style={{ height: 'calc(100vh - 4rem)', paddingTop: 14, paddingBottom: 18 }}
         >
           {/* walk-head: fixed 128px box, content bottom-aligned */}
-          <div className="flex h-[128px] max-w-[660px] shrink-0 flex-col items-center justify-end text-center">
+          <div className="flex h-[128px] max-md:h-[96px] max-w-[660px] shrink-0 flex-col items-center justify-end text-center">
             <AnimatePresence mode="wait">
               <motion.div
                 key={`head-${active}`}
                 {...STAGE_TRANSITION}
-                className="flex flex-col items-center gap-2"
+                className="flex flex-col items-center gap-2 max-md:gap-1"
               >
                 <p className="mono uppercase font-semibold tracking-[0.15em] text-[11px] text-[color:var(--blue)]">
                   STEP {String(active + 1).padStart(2, '0')} / 04
@@ -210,7 +210,7 @@ export default function HowItWorks() {
 
             {/* con-body — capped height; the active view fills it, overflow clips */}
             <div
-              className="relative overflow-hidden"
+              className="relative overflow-hidden max-md:overflow-y-auto"
               style={{ height: 'clamp(334px, calc(100vh - 4rem - 320px), 460px)' }}
             >
               <AnimatePresence mode="wait">

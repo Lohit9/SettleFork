@@ -14,7 +14,7 @@ const ARROW = (
 export default function ValidateStage({ onAdvance }: ValidateStageProps) {
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between gap-3 px-5 pt-4 pb-3">
+      <div className="flex items-center justify-between gap-3 px-5 pt-4 pb-3 max-md:flex-col max-md:items-start max-md:gap-1">
         <div className="text-[15px] font-[650] tracking-[-0.015em] text-[color:var(--ink)]">Validate results</div>
         <span className="text-[12.5px] text-[color:var(--ink-2)]">
           <b className="tabular-nums font-semibold text-[color:var(--ink)]">188,000</b> / 200,000 rows load clean ·{' '}
@@ -24,7 +24,7 @@ export default function ValidateStage({ onAdvance }: ValidateStageProps) {
 
       <div className="flex min-h-0 flex-1 flex-col justify-center overflow-hidden px-5">
         <div className="flex w-full flex-col gap-[7px] rounded-[12px] border border-[color:var(--line)] bg-[color:var(--surface-2)] px-[14px] py-[11px]">
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center justify-between gap-3 max-md:flex-col max-md:items-start max-md:gap-1">
             <div className="flex items-center gap-[11px] text-[color:var(--ink-3)]">
               <span className="mono text-[13px] font-semibold text-[color:var(--ink)]">CLASS_CD</span>
               {ARROW}

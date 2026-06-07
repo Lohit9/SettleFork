@@ -127,8 +127,7 @@ export default function SecurityTrust() {
             </div>
 
             <div className="mono text-[13px] leading-[1.6] text-[color:var(--ink-3)] lg:col-start-2 lg:row-start-2">
-              Pen test in progress · SOC 2 kicking off soon. Full security overview &amp; compliance docs
-              available under NDA.{' '}
+              Full security overview &amp; compliance docs available under NDA.{' '}
               <a
                 href="mailto:security@usesettle.ai"
                 className="font-semibold text-[color:var(--blue)] hover:text-[color:var(--blue-press)]"
