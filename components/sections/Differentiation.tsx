@@ -1,96 +1,145 @@
-import ScrollReveal from '@/components/ui/ScrollReveal'
+import { Fragment } from 'react'
 
-const MUTED_CARDS = [
+const COLS = ['Manual & ETL tools', 'Newer AI tools', 'Settle']
+
+type Mk = 'yes' | 'no' | 'na'
+const ROWS: { label: string; cells: [Mk, string][] }[] = [
+  { label: 'Speed', cells: [['no', 'Months'], ['yes', 'Days'], ['yes', 'Days']] },
   {
-    title: 'Consultant-driven migrations',
-    bullets: [
-      'One-off mapping specs in decks and spreadsheets',
-      'Knowledge locked in people, not in a product',
-      'Teams rebuilt for every engagement',
-      'Decisions buried in emails and slide decks',
-      'Weeks of discovery before first deliverable',
-    ],
+    label: 'Every row validated against your rules',
+    cells: [['no', 'Manual at best'], ['no', 'Model decides'], ['yes', 'Deterministic engine']],
   },
   {
-    title: 'Legacy ETL & data tools',
-    bullets: [
-      'Rule-based, not agent-native',
-      'Manual schema and mapping management',
-      'Validation bolted on at the end',
-      'No mapping rationale — just execution logs',
-      'Days of pipeline config before first output',
-    ],
+    label: 'AI proposes, never decides',
+    cells: [['na', 'No AI'], ['no', 'Proposes and decides'], ['yes', 'Separated from production']],
+  },
+  {
+    label: 'Reusable, re-runnable package',
+    cells: [['no', 'One-off scripts'], ['no', 'Not packaged'], ['yes', 'Versioned & re-runnable']],
+  },
+  {
+    label: 'Auditable trail you own',
+    cells: [['no', 'Vendor-locked'], ['no', 'Opaque'], ['yes', 'Every step logged']],
   },
 ]
 
-const MINE_BULLETS = [
-  'Autonomous multi-agent migration engine',
-  'AI-led schema understanding and field mapping',
-  'AI-generated transformations and cleansing rules',
-  'Validation engine that catches issues before production',
-  'Full AI decision log per mapping and transformation',
-  'First mapping proposals generated within the hour',
-]
+function Mark({ type }: { type: Mk }) {
+  if (type === 'na') {
+    return (
+      <span className="inline-flex h-[17px] w-[17px] shrink-0 items-center justify-center text-[15px] font-semibold text-[color:var(--ink-3)]">
+        —
+      </span>
+    )
+  }
+  const yes = type === 'yes'
+  return (
+    <span
+      className="inline-flex h-[17px] w-[17px] shrink-0 items-center justify-center"
+      style={{ color: yes ? 'var(--green)' : 'var(--ink-3)' }}
+    >
+      <svg viewBox="0 0 14 14" fill="none" className="h-full w-full">
+        {yes ? (
+          <path d="M2.6 7.3l2.8 2.8 6-6.4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        ) : (
+          <path d="M3.5 3.5l7 7M10.5 3.5l-7 7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        )}
+      </svg>
+    </span>
+  )
+}
+
+const LINE = '1px solid var(--line)'
+const WIN_LINE = '1px solid rgba(29,158,117,.16)'
 
 export default function Differentiation() {
   return (
-    <section id="why" className="bg-[#F8FAFC] pt-24 pb-12 px-6 lg:px-12">
-      <div className="max-w-7xl mx-auto">
-
-        {/* Header */}
-        <ScrollReveal>
-          <h2 className="text-4xl font-bold text-[#0F172A] tracking-tight text-center mb-3">
-            Why Settle is different
-          </h2>
-          <p className="text-[#64748B] text-[17px] text-center mb-14">
-            Not another ETL tool. Not another consulting project.
+    <section id="why" className="section">
+      <div className="wrap">
+        <div className="sec-head mx-auto max-w-[720px] text-center">
+          <div className="kicker">Why teams choose Settle</div>
+          <h2 className="h2 mt-[14px]">Purpose-built for migrations where one bad row is unacceptable.</h2>
+          <p className="mt-4 text-[18px] leading-[1.55] text-[color:var(--ink-2)]">
+            Settle isn&apos;t a general-purpose data tool pointed at a migration. It&apos;s built for the
+            complex, high-stakes moves — millions of rows, tangled legacy schemas, production systems people
+            rely on — where &quot;mostly correct&quot; isn&apos;t an option.
           </p>
-        </ScrollReveal>
-
-        {/* Cards */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-          {MUTED_CARDS.map((card, i) => (
-            <ScrollReveal key={card.title} delay={i * 0.1}>
-              <div className="bg-white rounded-2xl p-8 border border-[#E2E8F0] h-full opacity-50 hover:-translate-y-1 hover:shadow-lg transition-all duration-300">
-                <h3 className="text-lg font-bold text-[#475569] mb-5">{card.title}</h3>
-                <ul className="space-y-3">
-                  {card.bullets.map((bullet) => (
-                    <li key={bullet} className="flex gap-3">
-                      <span className="text-[#94A3B8] shrink-0 mt-0.5">×</span>
-                      <span className="text-sm text-[#64748B] leading-relaxed">{bullet}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </ScrollReveal>
-          ))}
-
-          {/* Settle card */}
-          <ScrollReveal delay={0.2}>
-            <div className="bg-blue-50 rounded-2xl p-8 border border-[#2358D4] border-t-[4px] h-full hover:-translate-y-1 hover:shadow-lg transition-all duration-300">
-              <span className="text-xs font-semibold uppercase tracking-wider text-[#2358D4] mb-2 block">
-                Recommended
-              </span>
-              <h3 className="text-lg font-bold text-[#0F172A] mb-5">Settle</h3>
-              <ul className="space-y-3">
-                {MINE_BULLETS.map((bullet) => (
-                  <li key={bullet} className="flex gap-3">
-                    <span className="text-[#2358D4] font-bold shrink-0 mt-0.5">✓</span>
-                    <span className="text-sm text-[#334155] leading-relaxed">{bullet}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          </ScrollReveal>
         </div>
 
-        {/* Footer quote */}
-        <ScrollReveal delay={0.2}>
-          <p className="text-[17px] text-[#64748B] italic text-center mt-10">
-            Built to make migrations as routine as deploying a modern web service.
-          </p>
-        </ScrollReveal>
+        {/* horizontally scrollable on narrow screens (reference: overflow-x auto + 720px min-width) */}
+        <div className="mx-auto mt-12 max-w-[1000px] overflow-x-auto" style={{ padding: '14px 2px 4px' }}>
+          <div
+            className="relative grid"
+            style={{ gridTemplateColumns: 'minmax(228px, 1.4fr) repeat(3, minmax(140px, 1fr))', minWidth: 720 }}
+          >
+            {/* raised green-tinted card over the Settle column */}
+            <div
+              aria-hidden="true"
+              style={{
+                gridColumn: 4,
+                gridRow: '1 / -1',
+                zIndex: 0,
+                background: 'rgba(29,158,117,.06)',
+                border: '1px solid rgba(29,158,117,.30)',
+                borderRadius: 14,
+                boxShadow: '0 18px 44px -22px rgba(29,158,117,.5)',
+              }}
+            />
 
+            {/* header row */}
+            <div className="relative z-[1]" style={{ borderBottom: LINE }} />
+            {COLS.map((col, ci) => {
+              const win = ci === 2
+              return (
+                <div
+                  key={col}
+                  className={`relative z-[1] flex px-5 ${
+                    win
+                      ? 'min-h-0 items-center pt-[18px] text-[16px] font-bold text-[color:var(--ink)]'
+                      : 'min-h-[58px] items-end pb-[14px] text-[14px] font-semibold tracking-[-0.01em] text-[color:var(--ink-2)]'
+                  }`}
+                  style={{ borderBottom: win ? 'none' : LINE }}
+                >
+                  {col}
+                </div>
+              )
+            })}
+
+            {/* data rows */}
+            {ROWS.map((row, ri) => {
+              const last = ri === ROWS.length - 1
+              return (
+                <Fragment key={row.label}>
+                  <div
+                    className="relative z-[1] flex min-h-[64px] items-center px-5 py-3 text-[14px] font-medium leading-[1.35] text-[color:var(--ink-2)]"
+                    style={{ borderBottom: last ? 'none' : LINE }}
+                  >
+                    {row.label}
+                  </div>
+                  {row.cells.map(([mark, text], ci) => {
+                    const win = ci === 2
+                    return (
+                      <div
+                        key={ci}
+                        className={`relative z-[1] flex min-h-[64px] items-center gap-[10px] py-3 text-[14px] ${
+                          win
+                            ? 'pl-[22px] pr-5 font-[550] text-[color:var(--ink)]'
+                            : 'px-5 text-[color:var(--ink-3)]'
+                        }`}
+                        style={{
+                          borderBottom: last ? 'none' : win ? WIN_LINE : LINE,
+                          ...(win && last ? { paddingBottom: 18 } : {}),
+                        }}
+                      >
+                        <Mark type={mark} />
+                        {text}
+                      </div>
+                    )
+                  })}
+                </Fragment>
+              )
+            })}
+          </div>
+        </div>
       </div>
     </section>
   )
