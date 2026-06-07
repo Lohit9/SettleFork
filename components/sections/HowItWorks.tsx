@@ -97,66 +97,94 @@ export default function HowItWorks() {
       {/* Scroll track — ~one viewport per stage */}
       <div ref={trackRef} className="relative h-[400vh]">
         {/* Pinned panel, vertically centered in the viewport */}
-        <div className="sticky top-0 flex h-screen items-center overflow-hidden px-6">
-          <div className="mx-auto w-full max-w-3xl">
+        <div className="sticky top-0 flex h-screen items-center overflow-hidden">
+          <div className="wrap w-full">
 
             {/* Per-stage eyebrow + heading + sub */}
-            <div className="text-center min-h-[120px]">
+            <div className="text-center min-h-[136px]">
               <AnimatePresence mode="wait">
                 <motion.div key={`head-${active}`} {...STAGE_TRANSITION}>
-                  <p className="mono text-xs font-semibold tracking-[0.15em] text-[color:var(--blue)] mb-2">
+                  <p className="mono uppercase text-[13px] font-semibold tracking-[0.18em] text-[color:var(--ink-3)] mb-3">
                     STEP {String(active + 1).padStart(2, '0')} / 04
                   </p>
-                  <h3 className="text-2xl sm:text-[28px] font-semibold tracking-tight text-[color:var(--ink)] mb-2">
-                    {stage.heading}
-                  </h3>
-                  <p className="lede mx-auto max-w-xl">{stage.sub}</p>
+                  <h3 className="h2 mb-3">{stage.heading}</h3>
+                  <p className="lede mx-auto max-w-[60ch]">{stage.sub}</p>
                 </motion.div>
               </AnimatePresence>
             </div>
 
-            {/* Browser-chrome mockup */}
-            <div className="card overflow-hidden mt-3">
-              {/* Window chrome + URL bar */}
-              <div className="flex items-center gap-3 border-b border-[color:var(--line)] px-4 py-2.5">
+            {/* Browser-chrome mockup — full wrap width */}
+            <div className="card overflow-hidden mt-[clamp(20px,3.5vh,44px)]">
+              {/* Window chrome: neutral dots at left, centered URL pill */}
+              <div className="relative flex items-center border-b border-[color:var(--line)] px-4 py-2.5">
                 <div className="flex gap-1.5 shrink-0">
                   <span className="h-2.5 w-2.5 rounded-full bg-[color:var(--line-3)]" />
                   <span className="h-2.5 w-2.5 rounded-full bg-[color:var(--line-3)]" />
                   <span className="h-2.5 w-2.5 rounded-full bg-[color:var(--line-3)]" />
                 </div>
-                <div className="flex-1 rounded-md bg-[color:var(--surface-2)] px-3 py-1.5">
-                  <span className="mono text-[11px] text-[color:var(--ink-3)]">
+                <div className="absolute left-1/2 flex max-w-[60%] -translate-x-1/2 items-center gap-1.5 rounded-full border border-[color:var(--line)] bg-[color:var(--surface-2)] px-3 py-1">
+                  <svg
+                    viewBox="0 0 24 24"
+                    width="11"
+                    height="11"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="shrink-0 text-[color:var(--ink-3)]"
+                    aria-hidden="true"
+                  >
+                    <rect x="5" y="11" width="14" height="10" rx="2" />
+                    <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+                  </svg>
+                  <span className="mono truncate text-[11px] text-[color:var(--ink-2)]">
                     settledata.ai/app/migrations/erp-to-erp
                   </span>
                 </div>
               </div>
 
-              {/* Stepper */}
-              <div className="flex items-center gap-2 sm:gap-3 overflow-x-auto border-b border-[color:var(--line)] px-4 py-2.5">
+              {/* Stepper → full-width four-column tab bar */}
+              <div className="grid grid-cols-4 border-b border-[color:var(--line)]">
                 {STAGES.map((s, i) => {
                   const done = i < active
                   const isActive = i === active
                   return (
-                    <div key={s.label} className="flex items-center gap-2 sm:gap-3 shrink-0">
-                      {i > 0 && (
-                        <span className="text-[color:var(--line-3)]" aria-hidden="true">·</span>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => goToStage(i)}
-                        aria-current={isActive ? 'step' : undefined}
-                        className={`flex items-center gap-1.5 whitespace-nowrap text-xs sm:text-[13px] font-medium transition-colors ${
-                          done
-                            ? 'text-[color:var(--green)]'
-                            : isActive
-                              ? 'text-[color:var(--blue)]'
-                              : 'text-[color:var(--ink-3)] hover:text-[color:var(--ink-2)]'
+                    <button
+                      key={s.label}
+                      type="button"
+                      onClick={() => goToStage(i)}
+                      aria-current={isActive ? 'step' : undefined}
+                      className={`relative flex flex-col items-center gap-1.5 px-1.5 py-2.5 text-center transition-colors sm:flex-row sm:items-center sm:gap-2.5 sm:px-4 sm:py-3 sm:text-left ${
+                        i > 0 ? 'border-l border-[color:var(--line)]' : ''
+                      }`}
+                    >
+                      <span
+                        className={`mono flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full text-[11px] ${
+                          isActive
+                            ? 'bg-[color:var(--blue)] text-white'
+                            : done
+                              ? 'bg-[color:var(--green-tint)] text-[color:var(--green)]'
+                              : 'border border-[color:var(--line-2)] bg-[color:var(--surface-2)] text-[color:var(--ink-3)]'
                         }`}
                       >
-                        <span className="mono">{done ? '✓' : String(i + 1).padStart(2, '0')}</span>
-                        <span>{s.label}</span>
-                      </button>
-                    </div>
+                        {done ? '✓' : String(i + 1).padStart(2, '0')}
+                      </span>
+                      <span
+                        className={`text-xs leading-tight sm:text-sm ${
+                          isActive
+                            ? 'font-medium text-[color:var(--ink)]'
+                            : done
+                              ? 'text-[color:var(--ink-2)]'
+                              : 'text-[color:var(--ink-3)]'
+                        }`}
+                      >
+                        {s.label}
+                      </span>
+                      {isActive && (
+                        <span className="absolute inset-x-0 bottom-0 h-[2px] bg-[color:var(--blue)]" />
+                      )}
+                    </button>
                   )
                 })}
               </div>
@@ -164,7 +192,7 @@ export default function HowItWorks() {
               {/* Active stage body — capped height; internal overflow clips */}
               <div
                 className="overflow-hidden p-4 sm:p-5"
-                style={{ height: 'clamp(340px, calc(100vh - 340px), 460px)' }}
+                style={{ height: 'clamp(320px, calc(100vh - 360px), 470px)' }}
               >
                 <AnimatePresence mode="wait">
                   <motion.div key={`body-${active}`} {...STAGE_TRANSITION}>
@@ -174,8 +202,8 @@ export default function HowItWorks() {
               </div>
             </div>
 
-            {/* Pagination dots */}
-            <div className="mt-5 flex items-center justify-center gap-2.5">
+            {/* Pagination — short bar segments */}
+            <div className="mt-[clamp(20px,3.5vh,44px)] flex items-center justify-center gap-2">
               {STAGES.map((s, i) => (
                 <button
                   key={s.label}
@@ -183,16 +211,16 @@ export default function HowItWorks() {
                   onClick={() => goToStage(i)}
                   aria-label={`Go to ${s.label} step`}
                   aria-current={i === active ? 'step' : undefined}
-                  className={`h-2 rounded-full transition-all ${
+                  className={`h-[3px] w-8 rounded-full transition-colors ${
                     i === active
-                      ? 'w-6 bg-[color:var(--blue)]'
-                      : 'w-2 bg-[color:var(--line-3)] hover:bg-[color:var(--ink-3)]'
+                      ? 'bg-[color:var(--blue)]'
+                      : 'bg-[color:var(--line-3)] hover:bg-[color:var(--ink-3)]'
                   }`}
                 />
               ))}
             </div>
 
-            <p className="mt-3 text-center text-sm text-[color:var(--ink-3)]">
+            <p className="mt-4 text-center text-sm text-[color:var(--ink-3)]">
               From profiling to a production-ready package in days, not months.
             </p>
           </div>
