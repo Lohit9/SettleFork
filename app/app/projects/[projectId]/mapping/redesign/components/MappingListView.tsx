@@ -27,7 +27,12 @@ import { ActionIconButton } from './FlatRowActions'
 import { InlineSourcePicker } from './InlineSourcePicker'
 import { RejectConfirmPopover } from './RejectConfirmPopover'
 import { TargetFieldCellPicker } from './TargetFieldCellPicker'
+import { MockSpecTable } from './MockSpecTable'
 import type { MappingListMutations } from '../hooks/useMappingListMutations'
+
+// UI reskin flag — render the Settle MVP design's mocked spec table instead of
+// the live data-wired list. Flip to false to restore the real table.
+const MOCK_SPEC_TABLE: boolean = true
 
 // Per-row rationale source. The TFM-level prose is the headline for the
 // new RATIONALE column; the drawer continues to render the full text.
@@ -166,6 +171,44 @@ function statusTooltipFor(row: FlatRow): string {
     return `${label} · ${row.acknowledgmentReason}`
   }
   return label
+}
+
+// Review glyph — green ringed check (#16A34A) when the row is approved;
+// quiet dashed hollow ring (#C4C9D0) when it still needs review.
+// Replaces the status dot as the leftmost per-row glyph to match the
+// design's "review vocabulary" (distinct from confidence dot + issue triangle).
+function ReviewGlyph({ approved, title }: { approved: boolean; title?: string }) {
+  if (approved) {
+    return (
+      <svg
+        width={14}
+        height={14}
+        viewBox="0 0 20 20"
+        aria-label={title ?? 'Reviewed'}
+        data-testid="flat-review-glyph"
+        data-reviewed="true"
+        role="img"
+      >
+        <title>{title ?? 'Reviewed'}</title>
+        <circle cx="10" cy="10" r="8.25" fill="none" stroke="#16A34A" strokeWidth="1.5" />
+        <path d="M6.2 10.4 L8.7 12.9 L13.9 7.3" fill="none" stroke="#16A34A" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    )
+  }
+  return (
+    <svg
+      width={14}
+      height={14}
+      viewBox="0 0 20 20"
+      aria-label={title ?? 'Needs review'}
+      data-testid="flat-review-glyph"
+      data-reviewed="false"
+      role="img"
+    >
+      <title>{title ?? 'Needs review'}</title>
+      <circle cx="10" cy="10" r="8.25" fill="none" stroke="#C4C9D0" strokeWidth="1.5" strokeDasharray="2.4 2.4" />
+    </svg>
+  )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -664,6 +707,14 @@ export function MappingListView({
     [mutations, openPicker],
   )
 
+  // UI reskin: render the Settle MVP design's mocked spec table (3 collapsible
+  // sections, design rows, footer). The real data-wired table below is kept
+  // intact for when MOCK_SPEC_TABLE is flipped off and the stub is replaced
+  // with live data.
+  if (MOCK_SPEC_TABLE) {
+    return <MockSpecTable />
+  }
+
   return (
     <div
       data-testid="mapping-list-view"
@@ -671,56 +722,50 @@ export function MappingListView({
     >
       <table className="w-full table-fixed border-collapse text-sm">
         <colgroup>
-          {/* feat/mapping-table-redesign column structure (Banking Core
-              mockup, refinement pass 1):
-                [●] SOURCE | → | TARGET | RATIONALE | CONFIDENCE | actions
-              The status dot lives in its own narrow cell flush against
-              source so the dot reads as a prefix to the source, not its
-              own column. Source / target each render
-              `TABLE_NAME [field_chip]`. Arrow is a muted glyph between.
-              The right-side actions cluster carries approve + reject
-              (always visible) + edit pencil (hover-only via `group`
-              class on each <tr>) — 3×24px buttons with gap-1 plus side
-              padding. */}
-          <col style={{ width: '24px' }} />
-          <col />
+          {/* Design-aligned column structure (Configure Map & Transform):
+                [review] SOURCE | TARGET | TRANSFORMATION | RATIONALE | actions
+              Review glyph (green check = approved, dashed ring = needs review)
+              lives in its own narrow leftmost cell. Source/target each render
+              `TABLE_NAME [field_chip]`. Transformation shows transform state
+              (No transform / Draft · desc / Applied · desc). Rationale carries
+              the AI match method + confidence number inline. Action icons
+              (approve, reject, edit) cluster on the right edge, hover-only. */}
           <col style={{ width: '24px' }} />
           <col />
           <col />
-          <col style={{ width: '80px' }} />
+          <col />
+          <col />
           <col style={{ width: '104px' }} />
         </colgroup>
         <thead className="bg-gray-50">
           <tr>
             <th
               scope="col"
-              data-testid="flat-header-status"
-              aria-label="Status"
+              data-testid="flat-header-review"
+              aria-label="Review status"
               className="border-b border-gray-200 px-1 py-2.5 align-top"
             />
             <TableHeader column="source" label="Source" />
-            <th
-              scope="col"
-              data-testid="flat-header-arrow"
-              aria-hidden="true"
-              className="border-b border-gray-200 px-0 py-2.5 align-top"
-            />
             <TableHeader column="target" label="Target" />
+            <TableHeader column="transformation" label="Transformation" />
             <TableHeader column="rationale" label="Rationale" />
-            <TableHeader column="confidence" label="Confidence" align="right" />
+            {/* Design column: "Issues" (Settle MVP). Row-level issue
+                indicators are a STUB pending data wiring — cells read as
+                negative space (and still host hover row-actions) for now. */}
             <th
               scope="col"
               data-testid="flat-header-actions"
-              aria-label="Actions"
-              className="border-b border-gray-200 px-1 py-2.5 align-top"
-            />
+              className="border-b border-gray-200 px-3 py-2.5 align-top text-left text-xs font-medium uppercase tracking-wide text-gray-500"
+            >
+              Issues
+            </th>
           </tr>
         </thead>
         <tbody>
           {sortedRows.length === 0 ? (
             <tr>
               <td
-                colSpan={7}
+                colSpan={6}
                 className="px-3 py-12 text-center text-sm italic text-gray-400"
               >
                 No rows match the current filters.
@@ -784,8 +829,7 @@ function TableHeader({
     | 'source'
     | 'target'
     | 'rationale'
-    | 'confidence'
-    | 'status'
+    | 'transformation'
   label: string
   align?: 'right' | 'center'
 }) {
@@ -1054,16 +1098,18 @@ function FlatRowView({
         'group cursor-pointer bg-white transition-colors hover:bg-gray-50',
       )}
     >
-      {/* Status dot — narrow leftmost cell, sits flush against SOURCE.
-          No own column header text; tooltip carries the status label +
-          ack reason. The dot is the only inhabitant of this cell —
-          action icons live in the right-side cluster. */}
+      {/* Review glyph — narrow leftmost cell. Green ringed check when
+          approved; dashed hollow ring when needs review. Tooltip carries
+          the status label + ack reason for unmapped-source rows. */}
       <td
-        data-testid="flat-cell-status"
+        data-testid="flat-cell-review"
         title={statusTooltip}
         className="pl-3 pr-0 py-2.5 align-middle"
       >
-        <StatusDot status={displayStatus} />
+        <ReviewGlyph
+          approved={displayStatus === 'approved'}
+          title={statusTooltip}
+        />
       </td>
       {/* Merged SOURCE — `TABLE_NAME [primary_chip] [+N source]?` in one
           cell. Sits flush against the status dot on the left (pl-2). */}
@@ -1184,13 +1230,6 @@ function FlatRowView({
           ) : null}
         </div>
       </td>
-      {/* Arrow glyph between source and target. Muted, decorative. */}
-      <td
-        aria-hidden="true"
-        className="px-0 py-2.5 align-middle text-center text-base leading-tight text-slate-300"
-      >
-        →
-      </td>
       {/* Merged TARGET — `table_name [field_chip]` in one cell. */}
       <td
         data-testid="flat-cell-target"
@@ -1254,6 +1293,41 @@ function FlatRowView({
           </span>
         </div>
       </td>
+      {/* Transformation — current transform state for mapped / value-assignment
+          rows. Reads `parentRow.hasTransformation`, `transformationStatus`,
+          and `transformationDescription`. Unmapped rows show an em-dash. */}
+      <td
+        data-testid="flat-cell-transformation"
+        className="px-3 py-2.5 align-top text-sm"
+      >
+        {(() => {
+          if (row.kind !== 'mapped' && row.kind !== 'value-assignment') {
+            return <span className="text-gray-300">—</span>
+          }
+          const pr = row.parentRow
+          if (!pr.hasTransformation) {
+            if (pr.transformationNeeded) {
+              return <span className="text-amber-700">Needs transform</span>
+            }
+            return <span className="text-slate-400">No transform</span>
+          }
+          const status = pr.transformationStatus
+          const desc = pr.transformationDescription ?? null
+          const descNode = desc ? (
+            <>
+              <span className="text-slate-300"> · </span>
+              <span className="truncate text-slate-700">{desc}</span>
+            </>
+          ) : null
+          if (status === 'stale') {
+            return <span className="inline-flex min-w-0 max-w-full items-baseline gap-0"><span className="shrink-0 text-amber-700">Stale</span>{descNode}</span>
+          }
+          if (status === 'draft') {
+            return <span className="inline-flex min-w-0 max-w-full items-baseline gap-0"><span className="shrink-0 text-slate-500">Draft</span>{descNode}</span>
+          }
+          return <span className="inline-flex min-w-0 max-w-full items-baseline gap-0"><span className="shrink-0 text-slate-500">Applied</span>{descNode}</span>
+        })()}
+      </td>
       {/* Rationale — one-line summary of the row's AI reasoning or
           (for source-side acks) the ack reason. Full text on hover via
           `title`. PR Ω.3.7.5: unmapped-target rows (empty slots — no
@@ -1295,40 +1369,26 @@ function FlatRowView({
           }
           return <span className="text-gray-300">—</span>
         })()}
-      </td>
-      <td
-        data-testid="flat-cell-confidence"
-        className="px-3 py-2.5 align-top text-right text-sm tabular-nums"
-      >
-        {/* Scale-tolerant render via `formatConfidencePercent` — the
-            helper handles both 0-1 fractional and 0-100 percent
-            scales gracefully. Legacy data and re-run data may coexist
-            on different scales during the transition window
-            (per A's notes/flat-view-confidence-bug.md).
-            feat/mapping-list-toggle-and-columns refinement pass:
-            color simplified to a binary slate / amber-700 split at
-            50% — see the helper-block comment at the top of this file. */}
-        {confidence === null ? (
-          <span className="text-gray-300">—</span>
-        ) : (
+        {/* Confidence folded into rationale as an inline muted number —
+            the design fuses match-method + confidence into one cell. */}
+        {confidence !== null ? (
           <span
             data-testid="flat-cell-confidence-value"
             data-confidence-low={isRowConfidenceLow(confidence) ? 'true' : 'false'}
-            className={
-              isRowConfidenceLow(confidence)
-                ? 'text-amber-700'
-                : 'text-slate-700'
-            }
+            className={cn(
+              'ml-2 inline-block shrink-0 tabular-nums text-xs',
+              isRowConfidenceLow(confidence) ? 'text-amber-600' : 'text-slate-400',
+            )}
           >
             {formatConfidencePercent(confidence)}
           </span>
-        )}
+        ) : null}
       </td>
       {/* Right-side action cluster — order left-to-right:
           approve (✓) → reject (✗) → edit (✎). All three icons are
           hover-only (opacity-0 at rest, faded in via `group-hover` on
           the <tr>); `group-focus-within` keeps them keyboard-reachable.
-          Status dot on the left edge is the only always-visible
+          Review glyph on the left edge is the only always-visible
           per-row affordance. Action button clicks stopPropagation so
           they don't bubble to the row body's drawer-open handler. */}
       <td className="px-2 py-2.5 align-top">
@@ -1445,7 +1505,7 @@ function FlatRowView({
                 </span>
               </div>
             </td>
-            <td aria-hidden="true" className="px-0 py-1.5" />
+            <td className="px-3 py-1.5 align-middle" />
             <td className="px-3 py-1.5 align-middle" />
             <td
               data-testid="flat-subrow-caption"
@@ -1453,7 +1513,6 @@ function FlatRowView({
             >
               Also contributes to {row.targetField.name}
             </td>
-            <td className="px-3 py-1.5 align-middle" />
             <td className="px-2 py-1.5 align-middle" />
           </tr>
         ))

@@ -34,19 +34,21 @@ export function PageHeader({ projectName, title, projectId, children }: PageHead
   // consistency across the page.
   return (
     <div className="bg-white border-b border-gray-100 pl-2 pr-6 min-h-[60px] flex items-center justify-between gap-4 flex-shrink-0">
-      <div className="flex items-center gap-0 min-w-0">
+      <div className="flex items-center gap-3 min-w-0">
         <h1
           data-testid="page-header-title"
-          className="text-base font-bold text-slate-900 whitespace-nowrap"
+          className="text-[15px] font-semibold tracking-[-0.005em] text-[#111827] whitespace-nowrap"
         >
           {title}
         </h1>
         {projectName && (
           <>
-            <div className="w-px h-4 bg-gray-200 mx-3 flex-shrink-0" />
+            <span aria-hidden="true" className="text-[#D1D5DB] flex-shrink-0">
+              |
+            </span>
             <span
               data-testid="page-header-subtitle"
-              className="text-sm font-normal text-slate-500 truncate"
+              className="text-[13.5px] font-normal text-[#6B7280] truncate"
             >
               {projectName}
             </span>

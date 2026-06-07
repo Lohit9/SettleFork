@@ -42,6 +42,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { PageHeader } from '@/components/app/PageHeader'
+import { ProjectMenu } from '@/components/app/ProjectMenu'
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuPortal,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from '@/components/ui/dropdown-menu'
+import { RefreshCw, ShieldCheck, ChevronDown, AlertTriangle, BookOpen, X, Search, ChevronRight as ChevronRightIcon } from 'lucide-react'
 import type {
   MappingRow,
   MappingsForRedesignResult,
@@ -65,7 +74,8 @@ import { PartitionDeleteConfirmDialog } from './components/PartitionDeleteConfir
 import { PartitionRulesModal } from './components/PartitionRulesModal'
 import { TargetTableGroup } from './components/TargetTableGroup'
 import { MappingDrawer, type DrawerRow, type SourceFieldDrawerRow } from './components/MappingDrawer'
-import { MappingSummaryStrip } from './components/MappingSummaryStrip'
+// MappingSummaryStrip retired from this screen — the design status strip
+// (StatusStrip, below) replaces it as the page-level toolbar row.
 // SourceSchemaSidebar removed at the
 // feat/mapping-list-toggle-and-columns refinement pass — the
 // collapsed-state vertical label was retired (Linear-style polish);
@@ -73,8 +83,8 @@ import { MappingSummaryStrip } from './components/MappingSummaryStrip'
 import { RejectConfirmPopover } from './components/RejectConfirmPopover'
 import { MergeTargetDialog } from './components/MergeTargetDialog'
 import { SourceDisambiguationDialog } from './components/SourceDisambiguationDialog'
-import { ViewModeToggle } from './components/ViewModeToggle'
 import { MappingListView } from './components/MappingListView'
+import { MockDataPreview } from './components/MockDataPreview'
 import { useMappingListMutations } from './hooks/useMappingListMutations'
 import {
   applyViewModeToParams,
@@ -135,6 +145,10 @@ const HIGH_CONFIDENCE_THRESHOLD = CONFIDENCE_THRESHOLD_ROW_HIGH
 
 const SEARCH_DEBOUNCE_MS = 200
 
+// Mirror of MappingListView.MOCK_SPEC_TABLE — when true the filter bar
+// shows stub counts so the "Review fields →" button never shows "Resume".
+const MOCK_SPEC_TABLE: boolean = true
+
 interface Props {
   projectId: string
   projectName: string
@@ -153,6 +167,9 @@ interface Props {
    * the row falls back to `awaiting_data` styling when null (Q5).
    */
   projectStats?: ProjectStats | null
+  /** Source/target system names for the header breadcrumb. */
+  sourceSystemName?: string | null
+  targetSystemName?: string | null
 }
 
 export default function MappingRedesignContent({
@@ -160,7 +177,13 @@ export default function MappingRedesignContent({
   projectName,
   initialRedesignData,
   projectStats = null,
+  sourceSystemName = null,
+  targetSystemName = null,
 }: Props) {
+  const headerBreadcrumb =
+    sourceSystemName && targetSystemName
+      ? `${projectName} — ${sourceSystemName} → ${targetSystemName}`
+      : projectName
   // Derive drawer-open status from the URL. `useSearchParams` is
   // reactive in the app router; the value re-flows here on every
   // `router.replace` from the body. Used by the auto-collapse effect
@@ -173,6 +196,7 @@ export default function MappingRedesignContent({
   // logic still depends on it.
   const searchParams = useSearchParams()
   const isDrawerOpen = !!(searchParams?.get('drawer') ?? '')
+  const router = useRouter()
 
   // Source schema sidebar — Gap 11a. Persistence (collapsed/expanded
   // + filter selection) lives in `useSidebarState`; auto-collapse on
@@ -372,11 +396,51 @@ export default function MappingRedesignContent({
   return (
     <ToastProvider>
       <div className="flex h-full flex-col bg-gray-50">
-        <PageHeader
-          projectName={projectName}
-          title="Mapping"
-          projectId={projectId}
-        />
+        <PageHeader projectName={headerBreadcrumb} title="Configure">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                title="Re-derive the data from the current mappings and transforms."
+                className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[12px] font-medium text-[#3B82F6] hover:bg-[#EFF6FF] hover:text-[#2563EB] transition-colors data-[state=open]:bg-[#EFF6FF] data-[state=open]:text-[#2563EB]"
+              >
+                <RefreshCw className="w-[13px] h-[13px]" />
+                Regenerate
+                <ChevronDown className="w-3 h-3 text-[#93C5FD]" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuPortal>
+              <DropdownMenuContent align="end" className="w-[200px]">
+                <DropdownMenuItem
+                  onClick={() => router.push(`/app/projects/${projectId}/generating`)}
+                >
+                  <RefreshCw className="w-[13px] h-[13px] mr-2 text-[#9CA3AF]" />
+                  Regenerate all data
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenuPortal>
+          </DropdownMenu>
+
+          {/* Rescan is a visual stub — no rescan endpoint wired yet. */}
+          <button
+            type="button"
+            title="Re-check the current data against your rules — doesn't change values. (Coming soon)"
+            className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[12px] font-medium text-[#3B82F6] hover:bg-[#EFF6FF] hover:text-[#2563EB] transition-colors"
+          >
+            <ShieldCheck className="w-[13px] h-[13px]" />
+            Rescan
+          </button>
+
+          <ProjectMenu
+            project={{
+              id: projectId,
+              name: projectName,
+              source_label: '',
+              target_label: '',
+              status: 'active',
+            }}
+            onUpdate={() => router.refresh()}
+          />
+        </PageHeader>
         {initialRedesignData === null ? (
           // Empty / error path — the body shows a single inline
           // error card. The SourceSchemaSidebar was removed at the
@@ -455,7 +519,6 @@ function buildSourceFieldToRowIds(
 function MappingContentLoaded({
   projectId,
   data,
-  projectStats,
   sidebarState,
   sidebarFilter,
   onSidebarStateChange,
@@ -555,9 +618,18 @@ function MappingContentLoaded({
   // body-row `highlightedSourceFieldId` (driven by the sidebar) — that
   // one highlights rows in the mapping body; this one highlights a
   // SourceCard inside the drawer. Reset when the drawer closes.
-  const [viewMode, setViewMode] = useState<MappingViewMode>(() =>
+  // View mode (flat vs target-led) is read from the URL and drives the list
+  // rendering below. The on-screen toggle was retired with the design reskin;
+  // the value still flows from `?view=` params for deep links.
+  const [viewMode] = useState<MappingViewMode>(() =>
     parseViewModeFromParams(searchParams ?? new URLSearchParams()),
   )
+
+  // Design reskin: the "Mapping & Transformation Spec" section toggles between
+  // the Map & Transform spec (default) and the Data Preview surface. Local-only
+  // mock state — Data Preview is a self-contained mock (`<MockDataPreview>`) and
+  // is only reachable when `MOCK_SPEC_TABLE` is true.
+  const [specTab, setSpecTab] = useState<'map' | 'data'>('map')
   const [drawerHighlightedSourceFieldId, setDrawerHighlightedSourceFieldId] =
     useState<string | null>(null)
 
@@ -768,14 +840,6 @@ function MappingContentLoaded({
       selectedPartitionByTable,
       flatPartitionSelection,
     ],
-  )
-
-  const handleViewModeChange = useCallback(
-    (next: MappingViewMode) => {
-      setViewMode(next)
-      writeUrl(filters, drawerRowId, next)
-    },
-    [filters, drawerRowId, writeUrl],
   )
 
   // PR Ω.3.x.1 — pre-build cross-table intercept lookups for the hook.
@@ -2471,6 +2535,17 @@ function MappingContentLoaded({
     }
   }, [data, effectiveRows])
 
+  // Opens the drawer on the first needs-review flat row — used by the
+  // FilterRow's "Review fields →" / "Resume · N left →" CTA.
+  const handleReviewFieldsClick = useCallback(() => {
+    const flatRows = flattenRowsForListView({ ...data, rows: effectiveRows })
+    const firstNeedsReview = flatRows.find((r) => r.status !== 'approved')
+    if (firstNeedsReview) {
+      setDrawerRowId(firstNeedsReview.id)
+      writeUrl(filters, firstNeedsReview.id)
+    }
+  }, [data, effectiveRows, filters, writeUrl])
+
   // Phase 4-polish-1 sidebar architecture refactor (2026-04-26): the
   // returned Fragment expands as direct children of the outer flex
   // column rendered by `MappingRedesignContent`. The sibling order
@@ -2501,37 +2576,31 @@ function MappingContentLoaded({
           present. */}
       {!isEmptyMappingState && (
         <>
-          {/* PR-6 (feat/ui-consolidation) consolidated the strip;
-              PR-7 (feat/mapping-approvals) source-first the axis order +
-              switched chips to read from `projectStats` (single source of
-              truth) + dropped the `counts` prop entirely. Status chips
-              `Approved` / `Needs Review` now reconcile with the
-              project-wide axis denominators on the same strip.
-              feat/mapping-list-toggle-and-columns: the view-mode toggle
-              now rides on the strip's `trailing` slot so summary + toggle
-              read as one toolbar row (no separate tab strip above). */}
-          <MappingSummaryStrip
-            projectStats={projectStats}
-            counts={effectiveCounts}
-            trailing={
-              <ViewModeToggle
-                value={viewMode}
-                onChange={handleViewModeChange}
-              />
-            }
-          />
-          <FilterRow
-            filters={filters}
-            onFiltersChange={handleFiltersChange}
-            targetTables={data.targetTables}
-            sourceTables={data.sourceTables}
-            highConfidenceCount={highConfidenceCount}
-            onApproveHighConfidenceClick={handleApproveHighConfidenceClick}
-            partitionsByTargetTable={data.partitionsByTargetTable}
-            partitionsEnabled={data.partitionsEnabled}
-            selectedFlatPartitionIds={flatPartitionSelection}
-            onFlatPartitionIdsChange={handleFlatPartitionSelectionChange}
-          />
+          {/* Design reskin: the page-level toolbar is now the design's status
+              strip + the "Mapping & Transformation Spec" section header (with
+              the Map & Transform / Data Preview toggle), matching the Settle
+              MVP Configure screen. */}
+          <StatusStrip />
+          <SpecHeaderRow value={specTab} onChange={setSpecTab} />
+          {/* Data Preview carries its own toolbar (`<MockDataPreview>`), so the
+              Map & Transform filter row is suppressed on that tab. */}
+          {specTab === 'map' && (
+            <FilterRow
+              filters={filters}
+              onFiltersChange={handleFiltersChange}
+              targetTables={data.targetTables}
+              sourceTables={data.sourceTables}
+              highConfidenceCount={highConfidenceCount}
+              onApproveHighConfidenceClick={handleApproveHighConfidenceClick}
+              partitionsByTargetTable={data.partitionsByTargetTable}
+              partitionsEnabled={data.partitionsEnabled}
+              selectedFlatPartitionIds={flatPartitionSelection}
+              onFlatPartitionIdsChange={handleFlatPartitionSelectionChange}
+              reviewedCount={MOCK_SPEC_TABLE ? 0 : effectiveCounts.approved}
+              totalReviewable={MOCK_SPEC_TABLE ? 50 : effectiveCounts.total}
+              onReviewFieldsClick={handleReviewFieldsClick}
+            />
+          )}
         </>
       )}
 
@@ -2567,6 +2636,8 @@ function MappingContentLoaded({
           <div className="w-full px-6 py-6">
             {isEmptyMappingState ? (
               <EmptyMappingState projectId={projectId} data={data} />
+            ) : MOCK_SPEC_TABLE && specTab === 'data' ? (
+              <MockDataPreview />
             ) : viewMode === 'flat' ? (
               <MappingListView
                 filteredResult={effectiveResult}
@@ -2814,6 +2885,285 @@ function MappingContentLoaded({
 // restored legacy density. The §9 Q6 Rejected gating and the Phase 3
 // Gap 13 Unmapped gating are preserved verbatim there.)
 //
+
+// Design status strip (Settle MVP Configure screen). STUB: the metric values
+// are placeholders pending real wiring (mapping completeness, review progress,
+// issue/rule/glossary counts span several subsystems). Page-level toolbar row,
+// aligned to FilterRow's `px-5` gutter; items are non-navigating for now.
+interface GlossaryEntry {
+  name: string
+  side: 'target' | 'source'
+  ctx: string
+  def: string
+  samples: string[]
+}
+
+interface GlossaryGroup {
+  table: string
+  entries: GlossaryEntry[]
+}
+
+const GLOSSARY: GlossaryGroup[] = [
+  { table: 'Commodity Codes', entries: [
+    { name: 'commodity_code', side: 'target', ctx: 'Commodity Codes', def: 'Primary key for a commodity in Rootstock; the natural commodity code.', samples: ['RCB-PRINT-SLEEVE', 'RCB-PRINT-CUP', 'RCB-CONSUMABLE-INK'] },
+    { name: 'COMM_CD', side: 'source', ctx: 'COMMODITY_MASTER', def: 'Prosys commodity code; carried forward unchanged as commodity_code.', samples: ['RCB-PRINT-SLEEVE', 'RCB-PRINT-CUP', 'RCB-CONSUMABLE-INK'] },
+    { name: 'description', side: 'target', ctx: 'Commodity Codes', def: 'Human-readable commodity description, trimmed of trailing whitespace.', samples: ['Printed Sleeves', 'Printed Cups', 'Inks & Consumables'] },
+    { name: 'commodity_class', side: 'target', ctx: 'Commodity Codes', def: 'Full class name resolved from the legacy class code via lookup.', samples: ['Finished Goods', 'Raw Materials', 'Finished Goods'] },
+    { name: 'default_gl_account', side: 'target', ctx: 'Commodity Codes', def: 'Default general-ledger account for the commodity, resolved via gl_map.', samples: ['4000-COGS', '5100-MAT', '4000-COGS'] },
+    { name: 'is_active', side: 'target', ctx: 'Commodity Codes', def: 'Whether the commodity is active; cast from the Y/N source flag.', samples: ['true', 'true', 'false'] },
+  ] },
+  { table: 'Engineering Item Master', entries: [
+    { name: 'item_number', side: 'target', ctx: 'Engineering Item Master', def: 'Primary key for an engineering item; from the assembly item or part number.', samples: ['P-DWS', 'P-WHC08', 'WHC08'] },
+    { name: 'ASSY_ITEM', side: 'source', ctx: 'BOM_MASTERS', def: 'Assembly item number from Engineering BOM Masters (Partition A).', samples: ['P-DWS', 'P-WHC08', 'WHC08'] },
+    { name: 'item_description', side: 'target', ctx: 'Engineering Item Master', def: 'Item description; COALESCE(ProductName, Assy Desc).', samples: ['Full Wrap Custom Printed White Sleeves', '8oz Custom Printed White Paper Hot Cups', 'Blank 8oz White Paper Hot Cups'] },
+    { name: 'commodity_code', side: 'target', ctx: 'Engineering Item Master', def: 'Derived commodity classification; resolved against Commodity Codes.', samples: ['RCB-PRINT-SLEEVE', 'RCB-PRINT-CUP', 'RCB-BLANK-CUP'] },
+    { name: 'inventory_source', side: 'target', ctx: 'Engineering Item Master', def: 'How the item is sourced — Manufactured or Purchased.', samples: ['Manufactured', 'Purchased', 'Manufactured'] },
+    { name: 'item_type', side: 'target', ctx: 'Engineering Item Master', def: 'Rootstock item type; constant Direct Material for these partitions.', samples: ['Direct Material', 'Direct Material', 'Direct Material'] },
+    { name: 'revision', side: 'target', ctx: 'Engineering Item Master', def: 'Engineering revision letter for the item.', samples: ['A', 'B', 'C'] },
+  ] },
+  { table: 'Product', entries: [
+    { name: 'product_id', side: 'target', ctx: 'Product', def: 'Primary key for a finished-goods product.', samples: ['FG-1001', 'FG-1002', 'FG-1003'] },
+    { name: 'PROD_NO', side: 'source', ctx: 'PRODUCT_MASTER', def: 'Prosys product number; carried forward as product_id.', samples: ['FG-1001', 'FG-1002', 'FG-1003'] },
+    { name: 'product_name', side: 'target', ctx: 'Product', def: 'Marketing/display name of the product.', samples: ['Printed Sleeve 12oz', 'Printed Cup 8oz', 'Printed Cup 16oz'] },
+    { name: 'uom', side: 'target', ctx: 'Product', def: 'Selling unit of measure, normalized to the Rootstock picklist.', samples: ['EA', 'EA', 'CS'] },
+    { name: 'status', side: 'target', ctx: 'Product', def: 'Lifecycle status — Active, Hold, or Obsolete.', samples: ['Active', 'Hold', 'Obsolete'] },
+  ] },
+  { table: 'Work Center', entries: [
+    { name: 'work_center_id', side: 'target', ctx: 'Work Center', def: 'Primary key for a production work center.', samples: ['WC-PRESS-01', 'WC-DIE-02', 'WC-LAM-03'] },
+    { name: 'WC_NO', side: 'source', ctx: 'WORKCENTER', def: 'Prosys work-center number; carried forward as work_center_id.', samples: ['WC-PRESS-01', 'WC-DIE-02', 'WC-LAM-03'] },
+    { name: 'name', side: 'target', ctx: 'Work Center', def: 'Display name of the work center.', samples: ['Flexo Press 1', 'Die Cutter 2', 'Laminator 3'] },
+    { name: 'department', side: 'target', ctx: 'Work Center', def: 'Department the work center belongs to.', samples: ['Printing', 'Converting', 'Finishing'] },
+    { name: 'burden_rate', side: 'target', ctx: 'Work Center', def: 'Hourly burden rate, rounded to two decimals.', samples: ['85.00', '72.50', '64.00'] },
+  ] },
+  { table: 'Routing', entries: [
+    { name: 'routing_id', side: 'target', ctx: 'Routing', def: 'Primary key for a routing header.', samples: ['RT-DWS-01', 'RT-WHC08-01', 'RT-LID-01'] },
+    { name: 'item_number', side: 'target', ctx: 'Routing', def: 'Item the routing produces; foreign key into Engineering Item Master.', samples: ['P-DWS', 'P-WHC08', 'P-LID-08'] },
+    { name: 'operation_seq', side: 'target', ctx: 'Routing', def: 'Operation sequence number within the routing.', samples: ['10', '20', '30'] },
+    { name: 'work_center_id', side: 'target', ctx: 'Routing', def: 'Work center the operation runs at.', samples: ['WC-PRESS-01', 'WC-DIE-02', 'WC-LAM-03'] },
+    { name: 'run_time_min', side: 'target', ctx: 'Routing', def: 'Run time per piece in minutes.', samples: ['12.50', '8.00', '5.25'] },
+  ] },
+  { table: 'Customer', entries: [
+    { name: 'customer_id', side: 'target', ctx: 'Customer', def: 'Primary key for a customer account.', samples: ['C-100432', 'C-100488', 'C-100512'] },
+    { name: 'CUST_NO', side: 'source', ctx: 'CUST_MASTER', def: 'Prosys customer number; carried forward as customer_id.', samples: ['C-100432', 'C-100488', 'C-100512'] },
+    { name: 'customer_name', side: 'target', ctx: 'Customer', def: 'Legal/display name of the customer.', samples: ['Atlantic Foods Co', 'Greenville Packaging', 'Summit Beverages'] },
+    { name: 'address_line1', side: 'target', ctx: 'Customer', def: 'Street portion of the address, split from the composite source field.', samples: ['1247 Industrial Pkwy', '88 Foundry Rd', '440 Commerce St'] },
+    { name: 'tax_id', side: 'target', ctx: 'Customer', def: 'Federal tax ID, normalized to 9 contiguous digits.', samples: ['123456789', '987654321', '554433221'] },
+    { name: 'payment_terms', side: 'target', ctx: 'Customer', def: 'Payment terms code for the customer.', samples: ['Net 30', 'Net 45', '2/10 Net 30'] },
+  ] },
+  { table: 'Bill of Materials', entries: [
+    { name: 'bom_id', side: 'target', ctx: 'Bill of Materials', def: 'Primary key for a bill-of-materials header.', samples: ['BOM-P-DWS', 'BOM-P-WHC08', 'BOM-P-LID-08'] },
+    { name: 'parent_item', side: 'target', ctx: 'Bill of Materials', def: 'Assembly item the BOM produces.', samples: ['P-DWS', 'P-WHC08', 'P-LID-08'] },
+    { name: 'component_item', side: 'target', ctx: 'Bill of Materials', def: 'Component consumed by the parent item.', samples: ['PR-SBS-DWSP', 'A0001', 'D0001'] },
+    { name: 'quantity_per', side: 'target', ctx: 'Bill of Materials', def: 'Quantity of the component per parent assembly.', samples: ['1.0000', '0.0025', '0.0100'] },
+    { name: 'uom', side: 'target', ctx: 'Bill of Materials', def: 'Unit of measure for the component quantity.', samples: ['EA', 'LB', 'GAL'] },
+  ] },
+]
+
+function GlossaryListPanel({ onClose }: { onClose: () => void }) {
+  const [q, setQ] = useState('')
+  const qq = q.trim().toLowerCase()
+  const groups = GLOSSARY.map((g) => ({
+    table: g.table,
+    entries: g.entries.filter(
+      (e) =>
+        !qq ||
+        e.name.toLowerCase().includes(qq) ||
+        e.ctx.toLowerCase().includes(qq) ||
+        e.def.toLowerCase().includes(qq) ||
+        g.table.toLowerCase().includes(qq),
+    ),
+  })).filter((g) => g.entries.length > 0)
+  const totalFields = GLOSSARY.reduce((n, g) => n + g.entries.length, 0)
+
+  return (
+    <aside
+      aria-label="Glossary list"
+      className="fixed bottom-0 right-0 top-[100px] z-[60] flex w-[440px] flex-col overflow-hidden border-l border-[#E5E7EB] bg-white shadow-[-8px_0_24px_-12px_rgba(17,24,39,0.08)]"
+    >
+      <div className="shrink-0 border-b border-[#E5E7EB] px-5 pb-3 pt-4">
+        <div className="flex items-start justify-between">
+          <div>
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-[#9CA3AF]">Glossary</div>
+            <div className="mt-2 text-[13.5px] text-[#6B7280]">
+              <span className="font-medium tabular-nums text-[#111827]">{totalFields}</span> field definitions
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="-mr-0.5 -mt-0.5 inline-flex h-7 w-7 items-center justify-center rounded text-[#9CA3AF] hover:bg-[#F9FAFB] hover:text-[#6B7280]"
+            aria-label="Close"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="relative mt-3">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#9CA3AF]" />
+          <input
+            autoFocus
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search fields..."
+            className="w-full rounded-md border border-[#E5E7EB] bg-white py-1.5 pl-8 pr-3 text-[13px] text-[#111827] placeholder:text-[#9CA3AF] focus:border-[#3B82F6] focus:outline-none focus:ring-1 focus:ring-[#3B82F6]"
+          />
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto">
+        {groups.length === 0 ? (
+          <div className="px-5 py-10 text-center text-[12.5px] text-[#9CA3AF]">No fields match &ldquo;{q}&rdquo;.</div>
+        ) : (
+          groups.map((g) => (
+            <div key={g.table} className="border-b border-[#E5E7EB] last:border-b-0">
+              <div className="px-5 pb-1.5 pt-3 font-mono text-[10.5px] uppercase tracking-wider text-[#9CA3AF]">{g.table}</div>
+              <div className="pb-2">
+                {g.entries.map((e) => (
+                  <button
+                    key={`${e.ctx}.${e.name}`}
+                    type="button"
+                    className="group flex w-full items-start gap-2 px-5 py-2.5 text-left hover:bg-[#F9FAFB]"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={`inline-flex items-center rounded border border-[#E5E7EB] bg-[#F9FAFB] px-1.5 py-[3px] font-mono text-[12px] ${e.side === 'source' ? 'text-[#6B7280]' : 'text-[#111827]'}`}>
+                          {e.name}
+                        </span>
+                        <span className="whitespace-nowrap text-[11px] text-[#9CA3AF]">{e.ctx} · {e.side}</span>
+                      </div>
+                      <div className="mt-1 text-[12.5px] leading-snug text-[#6B7280]">{e.def}</div>
+                      {e.samples && e.samples.length > 0 ? (
+                        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                          {e.samples.slice(0, 3).map((v, i) => (
+                            <span key={i} className="max-w-[130px] truncate rounded border border-[#E5E7EB] bg-[#F9FAFB] px-1.5 py-0.5 font-mono text-[11px] text-[#6B7280]">
+                              {v}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                    <ChevronRightIcon className="mt-1 h-3.5 w-3.5 shrink-0 text-[#D1D5DB] group-hover:text-[#9CA3AF]" />
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </aside>
+  )
+}
+
+function StatusStrip() {
+  const [glossaryListOpen, setGlossaryListOpen] = useState(false)
+  const chev = (
+    <span className="text-[#9CA3AF] text-[14.5px] font-semibold leading-none" aria-hidden="true">
+      ›
+    </span>
+  )
+  const dot = <span className="text-[#D1D5DB] shrink-0">·</span>
+  return (
+    <>
+    {glossaryListOpen ? <GlossaryListPanel onClose={() => setGlossaryListOpen(false)} /> : null}
+    <div
+      title="Sample values — not yet wired to live data"
+      className="h-10 shrink-0 border-b border-gray-100 bg-white px-5 flex items-center gap-x-5 text-[12.5px] text-[#6B7280]"
+    >
+      <span className="inline-flex items-center gap-1.5 shrink-0">
+        <span className="text-[#9CA3AF] leading-none">Reviewed</span>
+        <span className="text-[#111827] tabular-nums leading-none">0/50</span>
+      </span>
+      {dot}
+      <span className="group inline-flex items-center gap-1.5 shrink-0 rounded-md px-1.5 -mx-1.5 hover:bg-[#F3F4F6] transition-colors">
+        <span className="text-[#9CA3AF] leading-none">Source</span>
+        <span className="text-[#111827] tabular-nums leading-none">118/140</span>
+        <span className="text-[#9CA3AF] leading-none">mapped</span>
+        {chev}
+      </span>
+      {dot}
+      <span className="inline-flex items-center gap-1.5 shrink-0">
+        <span className="text-[#9CA3AF] leading-none">Target</span>
+        <span className="text-[#111827] tabular-nums leading-none">155/162</span>
+        <span className="text-[#9CA3AF] leading-none">set</span>
+      </span>
+      {dot}
+      <span className="group inline-flex items-center gap-1.5 shrink-0 rounded-md px-1.5 -mx-1.5 hover:bg-[#F3F4F6] transition-colors">
+        <AlertTriangle className="w-[13px] h-[13px] text-[#71717A]" />
+        <span className="text-[#9CA3AF] leading-none">Issues</span>
+        <span className="inline-flex items-center gap-2 leading-none">
+          <span className="text-[#D97706] tabular-nums leading-none">15</span>
+          <span aria-hidden="true" className="w-px h-3 bg-[#D4D4D8]" />
+          <span className="text-[#DC2626] tabular-nums leading-none">41</span>
+        </span>
+        {chev}
+      </span>
+
+      <div className="flex-1" />
+
+      <span className="group inline-flex items-center gap-1.5 shrink-0 rounded-md px-1.5 -mx-1.5 hover:bg-[#F3F4F6] transition-colors">
+        <span className="text-[#9CA3AF] leading-none">Rules</span>
+        <span className="text-[#111827] tabular-nums leading-none">30</span>
+        {chev}
+      </span>
+      {dot}
+      <button
+        type="button"
+        onClick={() => setGlossaryListOpen(true)}
+        className="group inline-flex items-center gap-1.5 shrink-0 rounded-md px-1.5 -mx-1.5 hover:bg-[#F3F4F6] transition-colors"
+      >
+        <BookOpen className="w-[13px] h-[13px] text-[#9CA3AF]" />
+        <span className="text-[#9CA3AF] leading-none">Glossary</span>
+        {chev}
+      </button>
+    </div>
+    </>
+  )
+}
+
+// "Mapping & Transformation Spec" heading + the Map & Transform / Data Preview
+// segmented toggle. Controlled by the parent's `specTab`; both views are live
+// (Data Preview renders the self-contained `<MockDataPreview>` mock surface).
+function SpecHeaderRow({
+  value,
+  onChange,
+}: {
+  value: 'map' | 'data'
+  onChange: (v: 'map' | 'data') => void
+}) {
+  return (
+    <div className="bg-white px-5 pt-4 pb-3 shrink-0 flex items-center gap-3 flex-nowrap">
+      <h2 className="text-[18px] font-semibold tracking-[-0.01em] text-[#111827] whitespace-nowrap shrink-0">
+        {value === 'data' ? 'Ready-to-load' : 'Mapping & Transformation Spec'}
+      </h2>
+      <div className="flex-1 min-w-0" />
+      <div className="inline-flex rounded-full border border-[#E5E7EB] bg-white p-0.5 shrink-0">
+        <button
+          type="button"
+          onClick={() => onChange('map')}
+          className="px-4 py-1.5 text-[13px] font-medium rounded-full transition-colors hover:text-[#111827]"
+          style={
+            value === 'map'
+              ? { background: '#111827', color: '#FFFFFF' }
+              : { background: 'transparent', color: '#6B7280' }
+          }
+        >
+          Map &amp; Transform
+        </button>
+        <button
+          type="button"
+          onClick={() => onChange('data')}
+          className="px-4 py-1.5 text-[13px] font-medium rounded-full transition-colors hover:text-[#111827]"
+          style={
+            value === 'data'
+              ? { background: '#111827', color: '#FFFFFF' }
+              : { background: 'transparent', color: '#6B7280' }
+          }
+        >
+          Data Preview
+        </button>
+      </div>
+    </div>
+  )
+}
 
 function NoDataState() {
   return (

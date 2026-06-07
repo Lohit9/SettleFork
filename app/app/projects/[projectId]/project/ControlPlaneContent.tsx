@@ -1,12 +1,43 @@
 'use client'
 
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
-import { FileText, Upload, CheckCircle2, X, AlertCircle, ChevronRight } from '@/components/icons'
-import { FileSpreadsheet } from 'lucide-react'
+import {
+  FileText,
+  Upload,
+  CheckCircle2,
+  X,
+  AlertCircle,
+  ChevronRight,
+  Search,
+  Sparkles,
+  Database,
+  ArrowRight,
+  Pencil,
+} from '@/components/icons'
+import {
+  FileSpreadsheet,
+  Table2,
+  MinusCircle,
+  TrendingUp,
+  Paperclip,
+  RefreshCw,
+  ShieldCheck,
+  ChevronDown,
+  AlertTriangle,
+  BookOpen,
+} from 'lucide-react'
 import { IngestionCard } from './IngestionCard'
 import { PageHeader } from '@/components/app/PageHeader'
+import { ProjectMenu } from '@/components/app/ProjectMenu'
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuPortal,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from '@/components/ui/dropdown-menu'
 import { useProjectRole } from '@/lib/hooks/useProjectRole'
 import { RoleTooltip } from '@/components/app/RoleTooltip'
 import {
@@ -14,8 +45,11 @@ import {
   deleteSchemaDocument,
   uploadBusinessContextDoc,
 } from '@/lib/actions/schema-documents'
-import type { DatasetWithTableStats } from '@/lib/actions/datasets'
+import { getTableFields, type SchemaField } from '@/lib/actions/schemabrowser'
+import type { DatasetWithTableStats, TableStats } from '@/lib/actions/datasets'
 import type { DBConnectionInfo, SchemaDocument } from '@/lib/types/database'
+
+// ── Types ──────────────────────────────────────────────────────────────────────
 
 interface DocUploadState {
   uploading: boolean
@@ -36,7 +70,12 @@ interface ControlPlaneContentProps {
   primaryTargetDatasetId: string | null
   initialConnections?: Record<string, DBConnectionInfo>
   isArchived?: boolean
+  // Backend integration point: called when user clicks "Generate ready-to-load data".
+  // If not provided, navigates to /generating route automatically.
+  onGenerateClick?: () => void
 }
+
+// ── File utilities ─────────────────────────────────────────────────────────────
 
 function humanFileSize(bytes: number | null): string {
   if (!bytes) return ''
@@ -61,7 +100,20 @@ function fileIcon(filename: string): React.ReactNode {
   return <FileText className={`w-4 h-4 ${color} flex-shrink-0`} />
 }
 
-// ── Reusable doc list ─────────────────────────────────────────────────────────
+// Source/target ingestion method shown in the row meta, derived from real signals:
+// a live DB connection → "Database"; uploaded CSV tables → "CSV"; otherwise a
+// parsed schema file (DDL on the target side, generic schema on the source side).
+function deriveMethod(
+  tables: Pick<TableStats, 'csv_storage_path'>[],
+  hasConnection: boolean,
+  role: 'source' | 'target'
+): string {
+  if (hasConnection) return 'Database'
+  if (tables.some((t) => t.csv_storage_path)) return 'CSV'
+  return role === 'target' ? 'DDL' : 'Schema'
+}
+
+// ── Shared sub-components ──────────────────────────────────────────────────────
 
 function DocList({
   docs,
@@ -78,24 +130,24 @@ function DocList({
       {docs.map((doc) => (
         <div
           key={doc.id}
-          className="flex items-center justify-between p-2 bg-gray-50 rounded border border-gray-100"
+          className="flex items-center justify-between px-3 py-2 bg-[#F9FAFB] rounded-md border border-[#E5E7EB]"
         >
           <div className="flex items-center gap-2 min-w-0">
             {fileIcon(doc.filename)}
-            <span className="text-sm text-gray-900 truncate">{doc.filename}</span>
+            <span className="text-[13px] text-[#111827] truncate">{doc.filename}</span>
             {doc.file_size && (
-              <span className="text-xs text-gray-400 flex-shrink-0">
+              <span className="text-[12px] text-[#9CA3AF] flex-shrink-0">
                 {humanFileSize(doc.file_size)}
               </span>
             )}
           </div>
           <div className="flex items-center gap-2 flex-shrink-0 ml-2">
-            <CheckCircle2 className="w-4 h-4 text-green-500" />
+            <CheckCircle2 className="w-4 h-4 text-[#10B981]" />
             <RoleTooltip allowed={canEdit} requiredRole="Editor">
               <button
                 onClick={canEdit ? () => onDelete(doc.id) : undefined}
                 disabled={!canEdit}
-                className="text-gray-400 hover:text-red-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                className="text-[#9CA3AF] hover:text-red-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                 title="Delete"
               >
                 <X className="w-4 h-4" />
@@ -108,17 +160,81 @@ function DocList({
   )
 }
 
-// ── Schema doc upload zone (source or target) ─────────────────────────────────
+function UploadZone({
+  onFile,
+  uploading,
+  filename,
+  isDragOver,
+  onDragOver,
+  onDragLeave,
+  onDrop,
+  accept,
+  hint,
+  canEdit,
+}: {
+  onFile: (file: File) => void
+  uploading: boolean
+  filename?: string
+  isDragOver: boolean
+  onDragOver: () => void
+  onDragLeave: () => void
+  onDrop: (file: File) => void
+  accept: string
+  hint: string
+  canEdit: boolean
+}) {
+  const inputRef = useRef<HTMLInputElement>(null)
+  return (
+    <div
+      onDrop={(e) => { e.preventDefault(); onDragLeave(); const f = e.dataTransfer.files[0]; if (f) onDrop(f) }}
+      onDragOver={(e) => { e.preventDefault(); onDragOver() }}
+      onDragLeave={onDragLeave}
+      className={`border-[1.5px] border-dashed rounded-lg p-4 text-center transition-colors ${isDragOver ? 'border-[#2358D4] bg-[#EEF2FD]' : 'border-[#E5E7EB] hover:border-[#D1D5DB]'}`}
+    >
+      {uploading ? (
+        <div className="flex flex-col items-center justify-center py-4">
+          <div className="flex items-center gap-2.5">
+            <div className="w-4 h-4 border-2 border-[#2358D4]/30 border-t-[#2358D4] rounded-full animate-spin flex-shrink-0" />
+            <span className="text-[13px] text-[#111827]">Uploading {filename ?? 'file'}…</span>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-2 py-2">
+          <Upload className="w-5 h-5 text-[#9CA3AF] mx-auto" />
+          <p className="text-[12.5px] text-[#6B7280]">{hint}</p>
+          <input
+            ref={inputRef}
+            type="file"
+            accept={accept}
+            className="hidden"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); e.target.value = '' }}
+          />
+          <RoleTooltip allowed={canEdit} requiredRole="Editor">
+            <Button
+              variant="outline"
+              size="sm"
+              type="button"
+              onClick={() => inputRef.current?.click()}
+              disabled={!canEdit}
+            >
+              Upload file
+            </Button>
+          </RoleTooltip>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Schema doc upload (per system) — prompt → adding → skipped ─────────────────
 
 function SchemaDocSection({
-  label,
   docs,
   datasetId,
   projectId,
   onDocsChange,
   canEdit = true,
 }: {
-  label: string
   docs: SchemaDocument[]
   datasetId: string | null
   projectId: string
@@ -126,7 +242,7 @@ function SchemaDocSection({
   canEdit?: boolean
 }) {
   const [state, setState] = useState<DocUploadState>({ uploading: false, error: null, isDragOver: false })
-  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [mode, setMode] = useState<'prompt' | 'adding' | 'skipped'>(docs.length > 0 ? 'adding' : 'prompt')
   const ACCEPTED = '.pdf,.ddl,.sql,.txt,.doc,.docx,.png,.jpg,.jpeg'
 
   const doUpload = async (file: File) => {
@@ -166,72 +282,315 @@ function SchemaDocSection({
   }
 
   return (
-    <div className="space-y-3">
-      <h3 className="text-xs font-medium text-gray-500">{label}</h3>
-
-      <div
-        onDrop={(e) => { e.preventDefault(); setState((s) => ({ ...s, isDragOver: false })); const f = e.dataTransfer.files[0]; if (f) doUpload(f) }}
-        onDragOver={(e) => { e.preventDefault(); setState((s) => ({ ...s, isDragOver: true })) }}
-        onDragLeave={() => setState((s) => ({ ...s, isDragOver: false }))}
-        className={`border-[1.5px] border-dashed rounded-lg p-4 text-center transition-colors ${state.isDragOver ? 'border-blue-500 bg-blue-50' : 'border-settle-slate-300 hover:border-settle-slate-400'}`}
-      >
-        {state.uploading ? (
-          <div className="flex flex-col items-center justify-center py-6">
-            <div className="flex items-center gap-2.5">
-              <div className="w-4 h-4 border-2 border-primary/30 border-t-primary rounded-full animate-spin flex-shrink-0" />
-              <span className="text-sm text-gray-700">Uploading {state.filename ?? 'file'}...</span>
-            </div>
-            <p className="text-xs text-gray-400 mt-1.5 ml-[26px]">
-              Processing document · this may take a moment
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-1.5">
-            <Upload className="w-5 h-5 text-settle-slate-400 mx-auto" />
-            <p className="text-xs font-medium text-settle-slate-600">Upload DDL, ERD, or data dictionary files</p>
-            <p className="text-[10px] text-settle-slate-400">PDF, SQL, DDL, TXT, PNG, JPG · Max 20MB</p>
-            <input ref={fileInputRef} type="file" accept={ACCEPTED} className="hidden"
-              onChange={(e) => { const f = e.target.files?.[0]; if (f) doUpload(f); e.target.value = '' }} />
-            <RoleTooltip allowed={canEdit} requiredRole="Editor">
-              <Button variant="outline" size="sm" type="button"
-                onClick={() => fileInputRef.current?.click()} disabled={!datasetId || !canEdit}>
-                Upload Files
-              </Button>
-            </RoleTooltip>
-          </div>
+    <div className="mt-5 pt-5 border-t border-[#E5E7EB]">
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-[11px] font-semibold uppercase tracking-wider text-[#9CA3AF]">
+          Supplemental documentation <span className="font-normal">· optional</span>
+        </div>
+        {mode !== 'skipped' && (
+          <button
+            type="button"
+            onClick={() => setMode('skipped')}
+            className="text-[12.5px] text-[#6B7280] hover:text-[#111827]"
+          >
+            Skip
+          </button>
         )}
       </div>
 
-      {state.error && (
-        <div className="flex items-center gap-2 text-red-600 text-xs">
-          <AlertCircle className="w-3 h-3" />{state.error}
+      {mode === 'prompt' && (
+        <div className="mt-2">
+          <p className="text-[12.5px] text-[#6B7280] leading-relaxed">
+            ERDs, data dictionaries, schema specs — improves AI accuracy on ambiguous fields.
+          </p>
+          <div className="mt-3">
+            <RoleTooltip allowed={canEdit} requiredRole="Editor">
+              <Button
+                variant="outline"
+                size="sm"
+                type="button"
+                disabled={!canEdit}
+                onClick={() => setMode('adding')}
+              >
+                <Paperclip className="w-[13px] h-[13px] mr-1.5" />
+                Add documentation
+              </Button>
+            </RoleTooltip>
+          </div>
         </div>
       )}
 
-      <DocList docs={docs} onDelete={handleDelete} canEdit={canEdit} />
+      {mode === 'adding' && (
+        <div className="mt-3">
+          <UploadZone
+            onFile={doUpload}
+            uploading={state.uploading}
+            filename={state.filename}
+            isDragOver={state.isDragOver}
+            onDragOver={() => setState((s) => ({ ...s, isDragOver: true }))}
+            onDragLeave={() => setState((s) => ({ ...s, isDragOver: false }))}
+            onDrop={doUpload}
+            accept={ACCEPTED}
+            hint="PDF, SQL, DDL, TXT, PNG — up to 20 MB"
+            canEdit={canEdit && !!datasetId}
+          />
+          {state.error && (
+            <div className="flex items-center gap-2 text-red-600 text-xs mt-2">
+              <AlertCircle className="w-3 h-3" />{state.error}
+            </div>
+          )}
+          <DocList docs={docs} onDelete={handleDelete} canEdit={canEdit} />
+          {docs.length === 0 && (
+            <div className="mt-2">
+              <button
+                type="button"
+                onClick={() => setMode('skipped')}
+                className="text-[12.5px] text-[#6B7280] hover:text-[#111827]"
+              >
+                Remove &amp; skip
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {mode === 'skipped' && (
+        <div className="mt-2 flex items-center justify-between gap-3">
+          <span className="text-[12.5px] text-[#9CA3AF] inline-flex items-center gap-1.5">
+            <MinusCircle className="w-[13px] h-[13px] text-[#D1D5DB]" />
+            Documentation skipped — add later
+          </span>
+          <button
+            type="button"
+            onClick={() => setMode('prompt')}
+            className="text-[12.5px] text-[#2358D4] hover:underline"
+          >
+            Add
+          </button>
+        </div>
+      )}
     </div>
   )
 }
 
-// ── Business context upload zone (project-scoped, single zone) ────────────────
+// ── Schema browser column (lazy field-name chips) ──────────────────────────────
 
-function BusinessContextSection({
+function SchemaColumn({
+  projectId,
+  label,
+  side,
+  tables,
+}: {
+  projectId: string
+  label: string
+  side: 'source' | 'target'
+  tables: TableStats[]
+}) {
+  const [q, setQ] = useState('')
+  const [open, setOpen] = useState<Set<string>>(new Set())
+  const [fieldsCache, setFieldsCache] = useState<Record<string, SchemaField[] | 'loading' | undefined>>({})
+
+  const toggle = async (id: string) => {
+    setOpen((prev) => {
+      const n = new Set(prev)
+      if (n.has(id)) n.delete(id)
+      else n.add(id)
+      return n
+    })
+    if (fieldsCache[id] === undefined) {
+      setFieldsCache((c) => ({ ...c, [id]: 'loading' }))
+      try {
+        const fields = await getTableFields(projectId, id)
+        setFieldsCache((c) => ({ ...c, [id]: fields }))
+      } catch {
+        setFieldsCache((c) => ({ ...c, [id]: [] }))
+      }
+    }
+  }
+
+  const qq = q.trim().toLowerCase()
+  const rows = tables.filter((t) => !qq || t.name.toLowerCase().includes(qq))
+
+  return (
+    <div className="rounded-lg border border-[#E5E7EB] bg-white overflow-hidden flex flex-col">
+      <div className="flex items-center justify-between gap-2 px-4 py-2.5 border-b border-[#E5E7EB]">
+        <span className="text-[13px] font-medium text-[#111827] truncate">{label}</span>
+        <span className="text-[11.5px] text-[#9CA3AF] font-mono">{side}</span>
+      </div>
+
+      <div className="px-3 py-2.5 border-b border-[#E5E7EB]">
+        <div className="relative">
+          <Search className="w-[14px] h-[14px] text-[#9CA3AF] absolute left-2.5 top-1/2 -translate-y-1/2" />
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search tables…"
+            className="w-full pl-8 pr-3 py-1.5 text-[13px] border border-[#E5E7EB] rounded-md bg-white text-[#111827] placeholder:text-[#9CA3AF] focus:outline-none focus:ring-1 focus:ring-[#3B82F6]"
+          />
+        </div>
+      </div>
+
+      <div className="max-h-[440px] overflow-y-auto">
+        {rows.length === 0 && (
+          <div className="px-4 py-6 text-center text-[12px] text-[#9CA3AF]">No tables match “{q}”.</div>
+        )}
+        {rows.map((t) => {
+          const isOpen = open.has(t.id)
+          const cached = fieldsCache[t.id]
+          return (
+            <div key={t.id} className="border-b border-[#F3F4F6] last:border-b-0">
+              <button
+                type="button"
+                onClick={() => toggle(t.id)}
+                className="w-full flex items-center justify-between gap-2 px-4 py-2.5 hover:bg-[#F9FAFB] text-left"
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <ChevronRight
+                    className={`w-[13px] h-[13px] text-[#9CA3AF] shrink-0 transition-transform ${isOpen ? 'rotate-90' : ''}`}
+                  />
+                  <span className="font-mono text-[12.5px] text-[#111827] truncate">{t.name}</span>
+                </div>
+                <span className="text-[11.5px] text-[#9CA3AF] tabular-nums shrink-0">{t.field_count} fields</span>
+              </button>
+              {isOpen && (
+                <div className="pb-2 pl-9 pr-4">
+                  {cached === 'loading' || cached === undefined ? (
+                    <div className="py-2 text-[11px] text-[#9CA3AF]">Loading fields…</div>
+                  ) : cached.length === 0 ? (
+                    <div className="py-2 text-[11px] text-[#9CA3AF]">No fields.</div>
+                  ) : (
+                    <div className="space-y-0.5">
+                      {cached.map((f) => (
+                        <div
+                          key={f.id}
+                          className="flex items-center gap-3 py-1 text-[12px]"
+                        >
+                          <span className="font-mono text-[12px] text-[#111827] truncate min-w-0 flex-1">
+                            {f.name}
+                          </span>
+                          {f.data_type ? (
+                            <span className="font-mono text-[11.5px] uppercase tracking-wider text-[#9CA3AF] shrink-0">
+                              {f.data_type}
+                            </span>
+                          ) : null}
+                          {!f.is_nullable ? (
+                            <span className="font-mono text-[10.5px] uppercase tracking-wider text-[#9CA3AF] shrink-0">
+                              NOT NULL
+                            </span>
+                          ) : null}
+                          {f.is_primary_key ? (
+                            <span className="inline-flex items-center rounded border border-[#E5E7EB] bg-[#F9FAFB] px-1.5 py-[1px] font-mono text-[10.5px] font-medium uppercase tracking-wider text-[#6B7280] shrink-0">
+                              PK
+                            </span>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ── Business Context Q&A ───────────────────────────────────────────────────────
+
+const CONTEXT_QUESTIONS = [
+  {
+    q: 'What does your company sell or deliver, and to whom?',
+    helper: 'One or two sentences. Example: "We manufacture custom-printed foodservice packaging — cups, sleeves, lids — and sell wholesale to coffee chains and restaurants."',
+    placeholder: 'Describe what you sell and who buys it…',
+    glossary: false,
+  },
+  {
+    q: "What does the source system you're migrating from track, and how do you use it day-to-day?",
+    helper: 'Example: "Legacy ERP we\'ve used since 2008 — inventory, orders, purchasing. Accounting lives separately. A few fields are repurposed."',
+    placeholder: 'Describe the source system and how your team uses it…',
+    glossary: false,
+  },
+  {
+    q: 'What will the migrated data be used for in the new system, and is anything intentionally out of scope?',
+    helper: 'Example: "Moving inventory and engineering items now; sales orders and historical financials stay in the old system. New system is the source of truth for production from Q3."',
+    placeholder: 'Describe the intended use and anything out of scope…',
+    glossary: false,
+  },
+  {
+    q: 'Are there any codes, abbreviations, status flags, or placeholder values that mean something specific to your team?',
+    helper: 'Example: "OUTSOURCED in the vendor field = drop-ship; ProductActive 0 = discontinued but searchable; WHC = hot cups, CHC = cold cups."',
+    placeholder: 'List any codes, flags, or values with special meaning…',
+    glossary: true,
+  },
+  {
+    q: "Are there records you'd want to exclude, consolidate, or treat specially during the migration?",
+    helper: 'Example: "Exclude items inactive 3+ years; consolidate variants by parent SKU; treat drop-ship items as a separate category."',
+    placeholder: 'Describe any records to exclude, consolidate, or treat specially…',
+    glossary: false,
+  },
+] as const
+
+const CONTEXT_SHORT_LABELS = [
+  'What you sell',
+  "Source system & how it's used",
+  'Scope & target use',
+  'Codes & conventions',
+  'Exclude / consolidate',
+]
+
+const TOTAL_QUESTIONS = CONTEXT_QUESTIONS.length
+const TOTAL_QA_STEPS = TOTAL_QUESTIONS + 1
+
+function QAProgress({ step }: { step: number }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <div className="flex items-center gap-1.5">
+        {Array.from({ length: TOTAL_QA_STEPS }).map((_, i) => (
+          <span
+            key={i}
+            className="rounded-full"
+            style={{ width: 6, height: 6, background: i === step ? '#2358D4' : '#E5E7EB', display: 'inline-block' }}
+          />
+        ))}
+      </div>
+      <span className="text-[12px] text-[#9CA3AF] tabular-nums">
+        Question {step + 1} of {TOTAL_QA_STEPS}
+      </span>
+    </div>
+  )
+}
+
+function BusinessContextQA({
   docs,
   projectId,
   onDocsChange,
-  canEdit = true,
+  canEdit,
 }: {
   docs: SchemaDocument[]
   projectId: string
   onDocsChange: (docs: SchemaDocument[]) => void
-  canEdit?: boolean
+  canEdit: boolean
 }) {
-  const [state, setState] = useState<DocUploadState>({ uploading: false, error: null, isDragOver: false })
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  const ACCEPTED = '.pdf,.txt,.md,.doc,.docx,.xlsx,.csv,.png,.jpg,.jpeg'
+  // step: -1 = not started, 0..4 = question, 5 = documents, 6+ = done
+  const [step, setStep] = useState(-1)
+  const [answers, setAnswers] = useState<string[]>(Array(TOTAL_QUESTIONS).fill(''))
+  const [additionalContext, setAdditionalContext] = useState('')
+  const [docUploadState, setDocUploadState] = useState<DocUploadState>({
+    uploading: false,
+    error: null,
+    isDragOver: false,
+  })
+
+  const setAnswer = (i: number, v: string) =>
+    setAnswers((a) => { const n = [...a]; n[i] = v; return n })
+
+  const docsStepCompleted = additionalContext.trim().length > 0 || docs.length > 0
+  const answeredCount = answers.filter((a) => a.trim()).length + (docsStepCompleted ? 1 : 0)
 
   const doUpload = async (file: File) => {
-    setState((s) => ({ ...s, uploading: true, error: null, filename: file.name }))
+    setDocUploadState((s) => ({ ...s, uploading: true, error: null, filename: file.name }))
     const fd = new FormData()
     fd.append('file', file)
     fd.append('projectId', projectId)
@@ -250,12 +609,12 @@ function BusinessContextSection({
       }
       onDocsChange([...docs, newDoc])
     } else {
-      setState((s) => ({ ...s, error: result.error ?? 'Upload failed' }))
+      setDocUploadState((s) => ({ ...s, error: result.error ?? 'Upload failed' }))
     }
-    setState((s) => ({ ...s, uploading: false }))
+    setDocUploadState((s) => ({ ...s, uploading: false }))
   }
 
-  const handleDelete = async (docId: string) => {
+  const handleDeleteDoc = async (docId: string) => {
     const result = await deleteSchemaDocument(docId)
     if (!result.success) {
       console.error('[deleteSchemaDocument]', result.error)
@@ -264,102 +623,430 @@ function BusinessContextSection({
     onDocsChange(docs.filter((d) => d.id !== docId))
   }
 
-  return (
-    <div
-      onDrop={(e) => { e.preventDefault(); setState((s) => ({ ...s, isDragOver: false })); const f = e.dataTransfer.files[0]; if (f) doUpload(f) }}
-      onDragOver={(e) => { e.preventDefault(); setState((s) => ({ ...s, isDragOver: true })) }}
-      onDragLeave={() => setState((s) => ({ ...s, isDragOver: false }))}
-      className={`border-[1.5px] border-dashed rounded-lg p-4 text-center transition-colors ${state.isDragOver ? 'border-blue-500 bg-blue-50' : 'border-settle-slate-300 hover:border-settle-slate-400'}`}
-    >
-      {state.uploading ? (
-        <div className="flex flex-col items-center justify-center py-6">
-          <div className="flex items-center gap-2.5">
-            <div className="w-4 h-4 border-2 border-primary/30 border-t-primary rounded-full animate-spin flex-shrink-0" />
-            <span className="text-sm text-gray-700">Uploading {state.filename ?? 'file'}...</span>
-          </div>
-          <p className="text-xs text-gray-400 mt-1.5 ml-[26px]">
-            Indexing for AI context · this may take a moment
-          </p>
-        </div>
-      ) : (
-        <div className="space-y-1.5">
-          <FileText className="w-5 h-5 text-settle-slate-400 mx-auto" />
-          <p className="text-xs font-medium text-settle-slate-600">Upload business rules, migration requirements, or other context documents</p>
-          <p className="text-[10px] text-settle-slate-400">PDF, DOCX, TXT, MD, XLSX, CSV · Max 20MB</p>
-          <input ref={fileInputRef} type="file" accept={ACCEPTED} className="hidden"
-            onChange={(e) => { const f = e.target.files?.[0]; if (f) doUpload(f); e.target.value = '' }} />
-          <RoleTooltip allowed={canEdit} requiredRole="Editor">
-            <Button variant="outline" size="sm" type="button" onClick={() => fileInputRef.current?.click()} disabled={!canEdit}>
-              Upload Files
-            </Button>
-          </RoleTooltip>
-        </div>
-      )}
+  const ACCURACY_PILL = (
+    <span className="inline-flex items-center gap-1.5 text-[11.5px] text-[#2358D4] bg-[#EFF6FF] border border-[#DBEAFE] rounded-full px-2 py-0.5 whitespace-nowrap">
+      <TrendingUp className="w-3 h-3" />
+      Improves mapping accuracy ~28%
+    </span>
+  )
 
-      {state.error && (
-        <div className="flex items-center justify-center gap-2 text-red-600 text-xs mt-2">
-          <AlertCircle className="w-3 h-3" />{state.error}
+  // Not started — action row style (no expand chrome)
+  if (step === -1) {
+    return (
+      <div className="w-full flex items-center gap-3 px-6 py-4">
+        <span className="inline-flex items-center justify-center w-5 h-5 text-[#9CA3AF] shrink-0">
+          <Sparkles className="w-[15px] h-[15px]" />
+        </span>
+        <div className="flex items-baseline gap-2 min-w-0">
+          <span className="text-[14px] font-semibold text-[#111827] whitespace-nowrap">
+            Business context
+          </span>
+          <span className="text-[12.5px] text-[#9CA3AF]">· optional</span>
         </div>
-      )}
+        <div className="flex-1" />
+        <div className="flex items-center gap-3 shrink-0">
+          {ACCURACY_PILL}
+          <button
+            type="button"
+            onClick={() => setStep(0)}
+            className="inline-flex items-center gap-1.5 text-[13px] font-medium text-white bg-[#2358D4] hover:bg-[#1E47B3] rounded-md px-3 py-1.5 transition-colors"
+          >
+            Start
+            <ArrowRight className="w-[14px] h-[14px]" />
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  // Done — expandable summary
+  if (step > TOTAL_QUESTIONS) {
+    return (
+      <CollapsibleRow
+        icon={<Sparkles className="w-[15px] h-[15px]" />}
+        title="Business context & migration rules"
+        meta={`· ${answeredCount} of ${TOTAL_QA_STEPS} answered`}
+        right={ACCURACY_PILL}
+        defaultOpen
+      >
+        <div className="divide-y divide-[#F3F4F6]">
+          {CONTEXT_QUESTIONS.map((cq, i) =>
+            answers[i].trim() ? (
+              <div key={i} className="py-3 first:pt-0 flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="text-[11px] font-semibold uppercase tracking-wider text-[#9CA3AF] mb-1">
+                    {CONTEXT_SHORT_LABELS[i]}
+                  </div>
+                  <p className="text-[13px] text-[#111827] leading-relaxed">{answers[i]}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setStep(i)}
+                  className="text-[#9CA3AF] hover:text-[#2358D4] shrink-0 mt-0.5"
+                  aria-label="Edit answer"
+                >
+                  <Pencil className="w-[13px] h-[13px]" />
+                </button>
+              </div>
+            ) : (
+              <div key={i} className="py-3 first:pt-0 flex items-center justify-between gap-4">
+                <span className="text-[12.5px] text-[#9CA3AF] inline-flex items-center gap-1.5">
+                  <MinusCircle className="w-[13px] h-[13px] text-[#D1D5DB]" />
+                  {CONTEXT_SHORT_LABELS[i]} — skipped
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setStep(i)}
+                  className="text-[12.5px] text-[#2358D4] hover:underline shrink-0"
+                >
+                  Answer
+                </button>
+              </div>
+            )
+          )}
+        </div>
+
+        {docs.length > 0 && (
+          <div className="mt-4 pt-4 border-t border-[#E5E7EB]">
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-[#9CA3AF] mb-2">
+              Documents
+            </div>
+            <DocList docs={docs} onDelete={handleDeleteDoc} canEdit={canEdit} />
+          </div>
+        )}
+
+        <div className="mt-4 pt-4 border-t border-[#E5E7EB]">
+          <button
+            type="button"
+            onClick={() => setStep(0)}
+            className="inline-flex items-center gap-1.5 text-[12.5px] text-[#6B7280] hover:text-[#111827]"
+          >
+            <Pencil className="w-[13px] h-[13px]" />
+            Edit answers
+          </button>
+        </div>
+      </CollapsibleRow>
+    )
+  }
+
+  // In progress — expanded body
+  const isDocs = step === TOTAL_QUESTIONS
+  const cur = isDocs ? null : CONTEXT_QUESTIONS[step]
+  const isLast = step === TOTAL_QUESTIONS - 1
+
+  return (
+    <div>
+      <div className="w-full flex items-center gap-3 px-6 py-4 border-b border-[#E5E7EB]">
+        <span className="inline-flex items-center justify-center w-5 h-5 text-[#9CA3AF] shrink-0">
+          <Sparkles className="w-[15px] h-[15px]" />
+        </span>
+        <div className="flex items-baseline gap-2 min-w-0">
+          <span className="text-[14px] font-semibold text-[#111827] whitespace-nowrap">
+            Business context & migration rules
+          </span>
+          <span className="text-[12.5px] text-[#9CA3AF]">
+            · {answeredCount} of {TOTAL_QA_STEPS} answered
+          </span>
+        </div>
+        <div className="flex-1" />
+        {ACCURACY_PILL}
+      </div>
+
+      <div className="px-6 pb-6 pt-4">
+        {isDocs ? (
+          <div key="docs">
+            <QAProgress step={TOTAL_QUESTIONS} />
+            <div className="text-[16px] font-medium text-[#111827] mt-4">Add any additional context</div>
+            <p className="text-[12.5px] text-[#6B7280] mt-1.5 leading-relaxed">
+              Write any extra notes below, or attach an ERD, data dictionary, or migration spec.
+            </p>
+            <div className="mt-3">
+              <textarea
+                value={additionalContext}
+                onChange={(e) => setAdditionalContext(e.target.value)}
+                rows={3}
+                placeholder="Add any additional context that might help — assumptions, edge cases, exceptions…"
+                className="w-full px-3 py-2 text-[13px] leading-relaxed border border-[#E5E7EB] rounded-md bg-white text-[#111827] placeholder:text-[#9CA3AF] focus:outline-none focus:ring-1 focus:ring-[#3B82F6] resize-y"
+              />
+            </div>
+            <div className="mt-3">
+              <UploadZone
+                onFile={doUpload}
+                uploading={docUploadState.uploading}
+                filename={docUploadState.filename}
+                isDragOver={docUploadState.isDragOver}
+                onDragOver={() => setDocUploadState((s) => ({ ...s, isDragOver: true }))}
+                onDragLeave={() => setDocUploadState((s) => ({ ...s, isDragOver: false }))}
+                onDrop={doUpload}
+                accept=".pdf,.txt,.md,.doc,.docx,.xlsx,.csv,.png,.jpg,.jpeg"
+                hint="PDF, DOCX, XLSX, TXT — up to 20 MB"
+                canEdit={canEdit}
+              />
+              {docUploadState.error && (
+                <div className="flex items-center gap-2 text-red-600 text-xs mt-2">
+                  <AlertCircle className="w-3 h-3" />{docUploadState.error}
+                </div>
+              )}
+            </div>
+            <DocList docs={docs} onDelete={handleDeleteDoc} canEdit={canEdit} />
+            <div className="mt-5 pt-4 border-t border-[#F3F4F6] flex items-center justify-between gap-3">
+              <div className="flex items-center gap-4">
+                <button
+                  type="button"
+                  onClick={() => setStep(TOTAL_QUESTIONS - 1)}
+                  className="text-[12.5px] text-[#6B7280] hover:text-[#111827]"
+                >
+                  Back
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStep(TOTAL_QUESTIONS + 1)}
+                  className="text-[12.5px] text-[#6B7280] hover:text-[#111827] underline"
+                >
+                  Skip
+                </button>
+              </div>
+              <button
+                type="button"
+                onClick={() => setStep(TOTAL_QUESTIONS + 1)}
+                className="inline-flex items-center gap-1.5 text-[13px] font-medium text-white bg-[#2358D4] hover:bg-[#1E47B3] rounded-md px-3 py-1.5 transition-colors"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div key={step}>
+            <QAProgress step={step} />
+            <div className="text-[16px] font-medium text-[#111827] mt-4 leading-snug">{cur!.q}</div>
+            <p className="text-[12.5px] text-[#9CA3AF] mt-1.5 leading-relaxed">{cur!.helper}</p>
+            <div className="mt-3">
+              <textarea
+                value={answers[step]}
+                onChange={(e) => setAnswer(step, e.target.value)}
+                rows={3}
+                placeholder={cur!.placeholder}
+                className="w-full px-3 py-2 text-[13px] leading-relaxed border border-[#E5E7EB] rounded-md bg-white text-[#111827] placeholder:text-[#9CA3AF] focus:outline-none focus:ring-1 focus:ring-[#3B82F6] resize-y"
+              />
+            </div>
+            {cur!.glossary && (
+              <div className="mt-2.5">
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1.5 text-[12.5px] text-[#2358D4] hover:underline"
+                >
+                  <Paperclip className="w-[13px] h-[13px]" />
+                  Attach a glossary or legend
+                </button>
+              </div>
+            )}
+            <div className="mt-5 pt-4 border-t border-[#F3F4F6] flex items-center justify-between gap-3">
+              <div className="flex items-center gap-4">
+                {step >= 1 && (
+                  <button
+                    type="button"
+                    onClick={() => setStep(step - 1)}
+                    className="text-[12.5px] text-[#6B7280] hover:text-[#111827]"
+                  >
+                    Back
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setStep(step + 1)}
+                  className="text-[12.5px] text-[#6B7280] hover:text-[#111827] underline"
+                >
+                  Skip
+                </button>
+              </div>
+              <button
+                type="button"
+                onClick={() => setStep(step + 1)}
+                className="inline-flex items-center gap-1.5 text-[13px] font-medium text-white bg-[#2358D4] hover:bg-[#1E47B3] rounded-md px-3 py-1.5 transition-colors"
+              >
+                {isLast ? 'Continue' : 'Next'}
+                <ArrowRight className="w-[14px] h-[14px]" />
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }
 
-// ── CollapsibleSection ────────────────────────────────────────────────────────
+// ── Action row (incomplete step, button on the right, no expand) ───────────────
 
-function CollapsibleSection({
-  id,
+function ActionRow({
+  icon,
   title,
-  badge,
-  description,
-  isOpen,
-  onToggle,
-  children,
+  meta,
+  right,
 }: {
-  id: string
+  icon: React.ReactNode
   title: string
-  badge?: string
-  description?: string
-  isOpen: boolean
-  onToggle: () => void
-  children: React.ReactNode
+  meta?: string
+  right?: React.ReactNode
 }) {
   return (
-    <div className="bg-white border border-gray-100 rounded-lg overflow-hidden shadow-sm">
+    <div className="w-full flex items-center gap-3 px-6 py-4">
+      <span className="inline-flex items-center justify-center w-5 h-5 text-[#9CA3AF] shrink-0">{icon}</span>
+      <div className="flex items-baseline gap-2 min-w-0">
+        <span className="text-[14px] font-semibold text-[#111827] whitespace-nowrap">{title}</span>
+        {meta && <span className="text-[12.5px] text-[#9CA3AF] truncate">{meta}</span>}
+      </div>
+      <div className="flex-1" />
+      <div className="flex items-center gap-3 shrink-0">{right}</div>
+    </div>
+  )
+}
+
+// ── Collapsible grouped-list row ───────────────────────────────────────────────
+
+function CollapsibleRow({
+  icon,
+  title,
+  meta,
+  right,
+  locked = false,
+  defaultOpen = false,
+  children,
+}: {
+  icon: React.ReactNode
+  title: string
+  meta?: string
+  right?: React.ReactNode
+  locked?: boolean
+  defaultOpen?: boolean
+  children?: React.ReactNode
+}) {
+  const [open, setOpen] = useState(defaultOpen)
+  const clickable = !locked
+
+  return (
+    <div>
       <button
         type="button"
-        onClick={onToggle}
-        aria-expanded={isOpen}
-        aria-controls={`${id}-panel`}
-        className="w-full flex items-center gap-2.5 px-4 py-3 text-left hover:bg-settle-slate-50 transition-colors"
+        disabled={!clickable}
+        onClick={() => clickable && setOpen((v) => !v)}
+        className={`w-full flex items-center gap-3 px-6 py-4 text-left transition-colors ${
+          clickable ? 'hover:bg-[#F9FAFB]' : 'cursor-default'
+        }`}
+        aria-expanded={open}
       >
-        <ChevronRight
-          className={`w-3.5 h-3.5 text-settle-slate-400 flex-shrink-0 transition-transform ${
-            isOpen ? 'rotate-90' : ''
+        <span
+          className={`inline-flex items-center justify-center w-5 h-5 shrink-0 ${
+            locked ? 'text-[#D1D5DB]' : 'text-[#9CA3AF]'
           }`}
-        />
-        <span className="text-sm font-semibold text-settle-slate-900">{title}</span>
-        {badge && (
-          <span className="text-[10px] font-medium text-settle-slate-500 bg-settle-slate-100 px-2 py-0.5 rounded-full">
-            {badge}
+        >
+          {icon}
+        </span>
+        <div className="flex items-baseline gap-2 min-w-0">
+          <span
+            className={`text-[14px] font-semibold whitespace-nowrap ${
+              locked ? 'text-[#9CA3AF]' : 'text-[#111827]'
+            }`}
+          >
+            {title}
           </span>
-        )}
-        {description && (
-          <span className="text-[11px] text-settle-slate-400 ml-auto truncate max-w-[50%]">
-            {description}
-          </span>
-        )}
-      </button>
-      {isOpen && (
-        <div id={`${id}-panel`} className="border-t border-gray-100 px-5 pb-5">
-          {children}
+          {meta && (
+            <span className="text-[12.5px] text-[#9CA3AF] truncate">{meta}</span>
+          )}
         </div>
+        <div className="flex-1" />
+        <div className="flex items-center gap-3 shrink-0">
+          {right}
+          {locked ? (
+            <span className="inline-flex items-center justify-center w-5 h-5 text-[#D1D5DB]">
+              <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+              </svg>
+            </span>
+          ) : (
+            <span
+              className={`inline-flex items-center justify-center w-5 h-5 text-[#6B7280] transition-transform ${
+                open ? 'rotate-90' : ''
+              }`}
+            >
+              <ChevronRight className="w-[15px] h-[15px]" />
+            </span>
+          )}
+        </div>
+      </button>
+      {open && !locked && (
+        <div className="px-6 pb-6 pt-4 border-t border-[#E5E7EB]">{children}</div>
       )}
     </div>
   )
 }
 
-// ── Main component ────────────────────────────────────────────────────────────
+// ── Status strip ────────────────────────────────────────────────────────────
+// Mirrors the Settle MVP design's StateStrip (src/app.jsx). STUB: the metric
+// values are placeholders — real figures (mapping completeness, review progress,
+// issue/rule/glossary counts) span the mapping, validation, and rules subsystems
+// and are not wired yet. Rendered for visual parity; items are non-navigating
+// until the data and click-through targets are connected.
+function StatusStrip() {
+  const chev = (
+    <span className="text-[#9CA3AF] text-[14.5px] font-semibold leading-none" aria-hidden="true">
+      ›
+    </span>
+  )
+  const dot = <span className="text-[#D1D5DB] shrink-0">·</span>
+
+  return (
+    <div
+      title="Sample values — not yet wired to live data"
+      className="h-10 shrink-0 border-b border-[#E5E7EB] bg-white px-6 flex items-center gap-x-5 text-[12.5px] text-[#6B7280]"
+    >
+      <span className="inline-flex items-center gap-1.5 shrink-0">
+        <span className="text-[#9CA3AF] leading-none">Reviewed</span>
+        <span className="text-[#111827] tabular-nums leading-none">0/50</span>
+      </span>
+      {dot}
+      <span className="group inline-flex items-center gap-1.5 shrink-0 rounded-md px-1.5 -mx-1.5 hover:bg-[#F3F4F6] transition-colors">
+        <span className="text-[#9CA3AF] leading-none">Source</span>
+        <span className="text-[#111827] tabular-nums leading-none">118/140</span>
+        <span className="text-[#9CA3AF] leading-none">mapped</span>
+        {chev}
+      </span>
+      {dot}
+      <span className="inline-flex items-center gap-1.5 shrink-0">
+        <span className="text-[#9CA3AF] leading-none">Target</span>
+        <span className="text-[#111827] tabular-nums leading-none">155/162</span>
+        <span className="text-[#9CA3AF] leading-none">set</span>
+      </span>
+      {dot}
+      <span className="group inline-flex items-center gap-1.5 shrink-0 rounded-md px-1.5 -mx-1.5 hover:bg-[#F3F4F6] transition-colors">
+        <AlertTriangle className="w-[13px] h-[13px] text-[#71717A]" />
+        <span className="text-[#9CA3AF] leading-none">Issues</span>
+        <span className="inline-flex items-center gap-2 leading-none">
+          <span className="text-[#D97706] tabular-nums leading-none">15</span>
+          <span aria-hidden="true" className="w-px h-3 bg-[#D4D4D8]" />
+          <span className="text-[#DC2626] tabular-nums leading-none">41</span>
+        </span>
+        {chev}
+      </span>
+
+      <div className="flex-1" />
+
+      <span className="group inline-flex items-center gap-1.5 shrink-0 rounded-md px-1.5 -mx-1.5 hover:bg-[#F3F4F6] transition-colors">
+        <span className="text-[#9CA3AF] leading-none">Rules</span>
+        <span className="text-[#111827] tabular-nums leading-none">30</span>
+        {chev}
+      </span>
+      {dot}
+      <span className="group inline-flex items-center gap-1.5 shrink-0 rounded-md px-1.5 -mx-1.5 hover:bg-[#F3F4F6] transition-colors">
+        <BookOpen className="w-[13px] h-[13px] text-[#9CA3AF]" />
+        <span className="text-[#9CA3AF] leading-none">Glossary</span>
+        {chev}
+      </span>
+    </div>
+  )
+}
+
+// ── Main component ─────────────────────────────────────────────────────────────
 
 export function ControlPlaneContent({
   projectId,
@@ -373,6 +1060,7 @@ export function ControlPlaneContent({
   primaryTargetDatasetId,
   initialConnections = {},
   isArchived = false,
+  onGenerateClick,
 }: ControlPlaneContentProps) {
   const { can } = useProjectRole(projectId)
   const canEdit = can('edit')
@@ -380,157 +1068,327 @@ export function ControlPlaneContent({
   const [sourceDocs, setSourceDocs] = useState<SchemaDocument[]>(initialSourceDocs)
   const [targetDocs, setTargetDocs] = useState<SchemaDocument[]>(initialTargetDocs)
   const [contextDocs, setContextDocs] = useState<SchemaDocument[]>(initialContextDocs)
+  const [reviewed, setReviewed] = useState(false)
+
+  // Empty-state "Start" reveals the ingestion form before a dataset exists.
+  const [sourceStarted, setSourceStarted] = useState(false)
+  const [targetStarted, setTargetStarted] = useState(false)
 
   const router = useRouter()
 
-  const [openSections, setOpenSections] = useState<Set<string>>(
-    new Set(['source', 'target', 'schema-docs', 'business-context'])
-  )
+  const sourceAdded = sourceDatasets.length > 0
+  const targetAdded = targetDatasets.length > 0
+  const bothAdded = sourceAdded && targetAdded
 
-  const toggleSection = useCallback((id: string) => {
-    setOpenSections((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) {
-        next.delete(id)
-      } else {
-        next.add(id)
-      }
-      return next
-    })
-  }, [])
+  const canReview = bothAdded
+  const canGenerate = bothAdded && reviewed
 
-  const handleDeleteContextDoc = async (docId: string) => {
-    const result = await deleteSchemaDocument(docId)
-    if (!result.success) {
-      console.error('[deleteSchemaDocument]', result.error)
-      return
+  // Reset review if a system is removed (e.g., dataset deleted later)
+  useEffect(() => {
+    if (!bothAdded && reviewed) setReviewed(false)
+  }, [bothAdded, reviewed])
+
+  const gateGuidance = !bothAdded
+    ? 'Add source and target to continue'
+    : !reviewed
+    ? 'Review the schema and confirm to generate'
+    : 'Everything looks ready.'
+
+  const handleGenerate = useCallback(() => {
+    if (!canGenerate) return
+    if (onGenerateClick) {
+      onGenerateClick()
+    } else {
+      // Backend integration point: replace with actual generation trigger.
+      // Currently navigates to the generation UI page for demo purposes.
+      router.push(`/app/projects/${projectId}/generating`)
     }
-    setContextDocs((prev) => prev.filter((d) => d.id !== docId))
-  }
+  }, [canGenerate, onGenerateClick, projectId, router])
 
-  const sourceTableCount = sourceDatasets.reduce((sum, ds) => sum + ds.tables.length, 0)
-  const sourceFieldCount = sourceDatasets.reduce(
-    (sum, ds) => sum + ds.tables.reduce((s, t) => s + (t.field_count ?? 0), 0),
-    0
+  const sourceTables = sourceDatasets.flatMap((ds) => ds.tables)
+  const targetTables = targetDatasets.flatMap((ds) => ds.tables)
+  const sourceTableCount = sourceTables.length
+  const sourceFieldCount = sourceTables.reduce((s, t) => s + (t.field_count ?? 0), 0)
+  const targetTableCount = targetTables.length
+  const targetFieldCount = targetTables.reduce((s, t) => s + (t.field_count ?? 0), 0)
+
+  const sourceConnection = primarySourceDatasetId ? (initialConnections?.[primarySourceDatasetId] ?? null) : null
+  const targetConnection = primaryTargetDatasetId ? (initialConnections?.[primaryTargetDatasetId] ?? null) : null
+  const sourceMethod = deriveMethod(sourceTables, !!sourceConnection, 'source')
+  const targetMethod = deriveMethod(targetTables, !!targetConnection, 'target')
+
+  const startButton = (onClick: () => void) => (
+    <RoleTooltip allowed={canEdit} requiredRole="Editor">
+      <button
+        type="button"
+        disabled={!canEdit}
+        onClick={onClick}
+        className="inline-flex items-center gap-1.5 text-[13px] font-medium text-white bg-[#2358D4] hover:bg-[#1E47B3] rounded-md px-3 py-1.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        Start
+        <ArrowRight className="w-[14px] h-[14px]" />
+      </button>
+    </RoleTooltip>
   )
-  const targetTableCount = targetDatasets.reduce((sum, ds) => sum + ds.tables.length, 0)
-  const targetFieldCount = targetDatasets.reduce(
-    (sum, ds) => sum + ds.tables.reduce((s, t) => s + (t.field_count ?? 0), 0),
-    0
+
+  const connectedBadge = (label: string) => (
+    <span className="inline-flex items-center gap-1.5 text-[12px] text-[#6B7280] whitespace-nowrap">
+      <CheckCircle2 className="w-[13px] h-[13px] text-[#10B981]" />
+      {label}
+    </span>
   )
-  const sourceBadge = sourceTableCount > 0
-    ? `${sourceTableCount} tables · ${sourceFieldCount} fields`
-    : undefined
-  const targetBadge = targetTableCount > 0
-    ? `${targetTableCount} tables · ${targetFieldCount} fields`
-    : undefined
 
   return (
-    <div className="flex-1 bg-gray-50 flex flex-col min-h-0">
+    <div className="flex-1 bg-[#FAFAFA] flex flex-col min-h-0">
       <PageHeader
-        projectName={projectName}
-        title="Project Setup"
-        subtitle="Configure source and target system connections"
-        projectId={projectId}
-      />
+        projectName={
+          sourceDatasets[0]?.name && targetDatasets[0]?.name
+            ? `${projectName} — ${sourceDatasets[0].name} → ${targetDatasets[0].name}`
+            : projectName
+        }
+        title="Setup"
+      >
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              title="Re-derive the data from the current mappings and transforms."
+              className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[12px] font-medium text-[#3B82F6] hover:bg-[#EFF6FF] hover:text-[#2563EB] transition-colors data-[state=open]:bg-[#EFF6FF] data-[state=open]:text-[#2563EB]"
+            >
+              <RefreshCw className="w-[13px] h-[13px]" />
+              Regenerate
+              <ChevronDown className="w-3 h-3 text-[#93C5FD]" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuPortal>
+            <DropdownMenuContent align="end" className="w-[200px]">
+              <DropdownMenuItem
+                disabled={!canEdit}
+                onClick={() => router.push(`/app/projects/${projectId}/generating`)}
+              >
+                <RefreshCw className="w-[13px] h-[13px] mr-2 text-[#9CA3AF]" />
+                Regenerate all data
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenuPortal>
+        </DropdownMenu>
+
+        {/* Rescan is a visual stub — no rescan endpoint wired yet. */}
+        <button
+          type="button"
+          title="Re-check the current data against your rules — doesn't change values. (Coming soon)"
+          className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[12px] font-medium text-[#3B82F6] hover:bg-[#EFF6FF] hover:text-[#2563EB] transition-colors"
+        >
+          <ShieldCheck className="w-[13px] h-[13px]" />
+          Rescan
+        </button>
+
+        <ProjectMenu
+          project={{
+            id: projectId,
+            name: projectName,
+            source_label: sourceDatasets[0]?.name ?? '',
+            target_label: targetDatasets[0]?.name ?? '',
+            status: isArchived ? 'archived' : 'active',
+          }}
+          onUpdate={() => router.refresh()}
+        />
+      </PageHeader>
+
+      <StatusStrip />
+
       <div className="flex-1 overflow-auto">
-      <div className="px-5 py-4 space-y-3">
-        {/* Source / Target systems */}
-        <div className={`grid md:grid-cols-2 gap-3 ${
-          openSections.has('source') && openSections.has('target')
-            ? 'items-stretch'
-            : 'items-start'
-        }`}>
-          <CollapsibleSection
-            id="source"
-            title="Source system"
-            badge={sourceBadge}
-            description="Read-only access"
-            isOpen={openSections.has('source')}
-            onToggle={() => toggleSection('source')}
-          >
-            <div className="pt-3">
-              <IngestionCard
-                type="source"
-                title="Source System"
-                projectId={projectId}
-                initialDatasets={sourceDatasets}
-                initialConnection={primarySourceDatasetId ? (initialConnections?.[primarySourceDatasetId] ?? null) : null}
-                isArchived={isArchived}
-              />
-            </div>
-          </CollapsibleSection>
+        <div className="max-w-[1080px] mx-auto px-10 py-8 space-y-9">
 
-          <CollapsibleSection
-            id="target"
-            title="Target system"
-            badge={targetBadge}
-            isOpen={openSections.has('target')}
-            onToggle={() => toggleSection('target')}
-          >
-            <div className="pt-3">
-              <IngestionCard
-                type="target"
-                title="Target System"
-                projectId={projectId}
-                initialDatasets={targetDatasets}
-                initialConnection={primaryTargetDatasetId ? (initialConnections?.[primaryTargetDatasetId] ?? null) : null}
-                isArchived={isArchived}
-              />
+          {/* Intro */}
+          <div>
+            <div className="text-[20px] font-semibold tracking-[-0.01em] text-[#111827]">
+              Set up your migration
             </div>
-          </CollapsibleSection>
-        </div>
-
-        {/* Schema Documentation */}
-        <CollapsibleSection
-          id="schema-docs"
-          title="Schema documentation"
-          badge={`${sourceDocs.length + targetDocs.length} files`}
-          description="DDL scripts, ERDs, data dictionaries, schema specifications"
-          isOpen={openSections.has('schema-docs')}
-          onToggle={() => toggleSection('schema-docs')}
-        >
-          <div className="grid md:grid-cols-2 gap-4 pt-3">
-            <SchemaDocSection
-              label="Source schema files"
-              docs={sourceDocs}
-              datasetId={primarySourceDatasetId}
-              projectId={projectId}
-              onDocsChange={setSourceDocs}
-              canEdit={canEdit}
-            />
-            <SchemaDocSection
-              label="Target schema files"
-              docs={targetDocs}
-              datasetId={primaryTargetDatasetId}
-              projectId={projectId}
-              onDocsChange={setTargetDocs}
-              canEdit={canEdit}
-            />
+            <p className="text-[13.5px] text-[#6B7280] mt-1.5 leading-relaxed">
+              Connect your source data and target schema, add any context, and review the schema.
+              Then generate ready-to-load data.
+            </p>
           </div>
-        </CollapsibleSection>
 
-        {/* Business Context */}
-        <CollapsibleSection
-          id="business-context"
-          title="Business context & migration rules"
-          badge={`${contextDocs.length} files`}
-          description="Informs AI reasoning — does not override structural metadata"
-          isOpen={openSections.has('business-context')}
-          onToggle={() => toggleSection('business-context')}
-        >
-          <div className="space-y-4 pt-3">
-            <BusinessContextSection
+          {/* Grouped list */}
+          <div className="rounded-lg border border-[#E5E7EB] bg-white overflow-hidden divide-y divide-[#F3F4F6]">
+
+            {/* Source system */}
+            {!sourceAdded && !sourceStarted ? (
+              <ActionRow
+                icon={<Database className="w-[15px] h-[15px]" />}
+                title="Add source data"
+                meta="· CSV, database, or API"
+                right={startButton(() => setSourceStarted(true))}
+              />
+            ) : (
+              <CollapsibleRow
+                icon={<Database className="w-[15px] h-[15px]" />}
+                title={sourceAdded ? (sourceDatasets[0]?.name ?? 'Source system') : 'Add source data'}
+                meta={
+                  sourceAdded
+                    ? `· Source · ${sourceMethod} · ${sourceTableCount} tables · ${sourceFieldCount} fields`
+                    : '· CSV, database, or API'
+                }
+                right={sourceAdded ? connectedBadge('Connected') : undefined}
+                defaultOpen={!sourceAdded}
+              >
+                <div className="pt-2">
+                  <IngestionCard
+                    type="source"
+                    title="Source System"
+                    projectId={projectId}
+                    initialDatasets={sourceDatasets}
+                    initialConnection={sourceConnection}
+                    isArchived={isArchived}
+                  />
+                </div>
+                {sourceAdded && (
+                  <SchemaDocSection
+                    docs={sourceDocs}
+                    datasetId={primarySourceDatasetId}
+                    projectId={projectId}
+                    onDocsChange={setSourceDocs}
+                    canEdit={canEdit}
+                  />
+                )}
+              </CollapsibleRow>
+            )}
+
+            {/* Target system */}
+            {!targetAdded && !targetStarted ? (
+              <ActionRow
+                icon={<Database className="w-[15px] h-[15px]" />}
+                title="Add target schema"
+                meta="· DDL / schema file, or system connection"
+                right={startButton(() => setTargetStarted(true))}
+              />
+            ) : (
+              <CollapsibleRow
+                icon={<Database className="w-[15px] h-[15px]" />}
+                title={targetAdded ? (targetDatasets[0]?.name ?? 'Target system') : 'Add target schema'}
+                meta={
+                  targetAdded
+                    ? `· Target · ${targetMethod} · ${targetTableCount} tables · ${targetFieldCount} fields`
+                    : '· DDL / schema file, or system connection'
+                }
+                right={targetAdded ? connectedBadge('Parsed') : undefined}
+                defaultOpen={!targetAdded}
+              >
+                <div className="pt-2">
+                  <IngestionCard
+                    type="target"
+                    title="Target System"
+                    projectId={projectId}
+                    initialDatasets={targetDatasets}
+                    initialConnection={targetConnection}
+                    isArchived={isArchived}
+                  />
+                </div>
+                {targetAdded && (
+                  <SchemaDocSection
+                    docs={targetDocs}
+                    datasetId={primaryTargetDatasetId}
+                    projectId={projectId}
+                    onDocsChange={setTargetDocs}
+                    canEdit={canEdit}
+                  />
+                )}
+              </CollapsibleRow>
+            )}
+
+            {/* Business context Q&A */}
+            <BusinessContextQA
               docs={contextDocs}
               projectId={projectId}
               onDocsChange={setContextDocs}
               canEdit={canEdit}
             />
-            <DocList docs={contextDocs} onDelete={handleDeleteContextDoc} canEdit={canEdit} />
-          </div>
-        </CollapsibleSection>
 
-      </div>
+            {/* Schema review — locked until both systems added */}
+            {!bothAdded ? (
+              <CollapsibleRow
+                icon={<Table2 className="w-[15px] h-[15px]" />}
+                title="Review schema"
+                meta="· available once both systems are added"
+                locked
+              />
+            ) : (
+              <CollapsibleRow
+                icon={<Table2 className="w-[15px] h-[15px]" />}
+                title="Schema"
+                meta={`· ${sourceTableCount} source tables · ${targetTableCount} target tables`}
+              >
+                <div className="grid grid-cols-2 gap-5">
+                  <SchemaColumn
+                    projectId={projectId}
+                    label={sourceDatasets[0]?.name ?? 'Source'}
+                    side="source"
+                    tables={sourceTables}
+                  />
+                  <SchemaColumn
+                    projectId={projectId}
+                    label={targetDatasets[0]?.name ?? 'Target'}
+                    side="target"
+                    tables={targetTables}
+                  />
+                </div>
+              </CollapsibleRow>
+            )}
+
+          </div>
+
+          {/* Generate footer */}
+          <div className="flex items-center justify-between gap-4 rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] px-5 py-3.5">
+            <div>
+              <label
+                className={`inline-flex items-center gap-2.5 ${
+                  canReview ? 'cursor-pointer' : 'cursor-not-allowed'
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={reviewed}
+                  disabled={!canReview}
+                  onChange={(e) => setReviewed(e.target.checked)}
+                  className="w-4 h-4 rounded border-[#D1D5DB] disabled:opacity-50"
+                  style={{ accentColor: '#2358D4' }}
+                />
+                <span
+                  className={`text-[13px] ${
+                    canReview ? 'text-[#111827]' : 'text-[#9CA3AF]'
+                  }`}
+                >
+                  I&apos;ve reviewed — tables and fields look correct
+                </span>
+              </label>
+              <div
+                className={`text-[12.5px] mt-1.5 pl-[26px] ${
+                  reviewed ? 'text-[#047857]' : 'text-[#9CA3AF]'
+                }`}
+              >
+                {gateGuidance}
+              </div>
+            </div>
+
+            <RoleTooltip allowed={canEdit} requiredRole="Editor">
+              <button
+                type="button"
+                disabled={!canGenerate || !canEdit}
+                onClick={handleGenerate}
+                className={`inline-flex items-center gap-2 rounded-md px-4 py-2 text-[14px] font-medium transition-colors shrink-0 ${
+                  canGenerate && canEdit
+                    ? 'bg-[#2358D4] hover:bg-[#1E47B3] text-white'
+                    : 'bg-[#E5E7EB] text-[#9CA3AF] cursor-not-allowed'
+                }`}
+              >
+                <Sparkles className="w-[15px] h-[15px]" />
+                Generate ready-to-load data
+              </button>
+            </RoleTooltip>
+          </div>
+
+        </div>
       </div>
     </div>
   )
