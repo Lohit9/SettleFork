@@ -63,9 +63,9 @@ export default function SecurityTrust() {
           <h2 className="h2 mt-[14px]">Built for environments that don&apos;t forgive mistakes.</h2>
         </div>
 
-        <div className="mt-[34px] grid gap-x-14 gap-y-10 lg:grid-cols-[1.05fr_1fr] lg:items-stretch">
-          {/* left — four points */}
-          <div className="flex flex-col">
+        <div className="mt-[34px] grid gap-x-14 gap-y-10 lg:grid-cols-[1.05fr_1fr] lg:items-stretch lg:gap-y-3">
+          {/* left — four points, distributed across the panel height */}
+          <div className="flex flex-col justify-between lg:col-start-1 lg:row-start-1">
             {POINTS.map((pt) => (
               <div
                 key={pt.h}
@@ -84,12 +84,11 @@ export default function SecurityTrust() {
             ))}
           </div>
 
-          {/* right — dark spec panel + mono footer */}
-          <div className="flex flex-col gap-3">
-            <div
-              className="relative flex-1 overflow-hidden rounded-[18px] p-[30px]"
-              style={{ background: 'var(--ink)', boxShadow: 'var(--sh-lg)' }}
-            >
+          {/* dark spec panel — fills the panel-height row */}
+          <div
+            className="relative overflow-hidden rounded-[18px] p-[30px] lg:col-start-2 lg:row-start-1"
+            style={{ background: 'var(--ink)', boxShadow: 'var(--sh-lg)' }}
+          >
               <div
                 aria-hidden="true"
                 className="absolute inset-0"
@@ -127,7 +126,7 @@ export default function SecurityTrust() {
               </div>
             </div>
 
-            <div className="mono text-[13px] leading-[1.6] text-[color:var(--ink-3)]">
+            <div className="mono text-[13px] leading-[1.6] text-[color:var(--ink-3)] lg:col-start-2 lg:row-start-2">
               Pen test in progress · SOC 2 kicking off soon. Full security overview &amp; compliance docs
               available under NDA.{' '}
               <a
@@ -137,7 +136,6 @@ export default function SecurityTrust() {
                 Request the security package →
               </a>
             </div>
-          </div>
         </div>
       </div>
     </section>

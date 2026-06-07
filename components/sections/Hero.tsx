@@ -31,8 +31,12 @@ export default function Hero() {
       <div className="relative mx-auto max-w-3xl px-6 text-center">
         <ScrollReveal>
           {/* 1 — Eyebrow chip */}
-          <span className="inline-flex items-center rounded-full border border-[color:var(--blue-line)] bg-[color:var(--blue-tint)] px-3.5 py-1.5 mb-7">
-            <span className="eyebrow">AI-native enterprise data migration</span>
+          <span
+            className="mono mb-7 inline-flex items-center gap-[9px] rounded-full border border-[color:var(--blue-line)] bg-[color:var(--blue-tint)] text-[12.5px] font-medium tracking-[0.01em] text-[color:var(--blue-press)]"
+            style={{ padding: '7px 15px 7px 13px' }}
+          >
+            <span className="h-[6px] w-[6px] shrink-0 rounded-full bg-[color:var(--blue)]" aria-hidden="true" />
+            AI-native enterprise data migration
           </span>
 
           {/* 2 — Headline */}
