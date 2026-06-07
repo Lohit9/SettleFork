@@ -13,7 +13,7 @@ const COLUMNS = [
   { source: 'ACTIVE_FLG', transform: 'bool', target: 'is_active', conf: 98 },
 ]
 
-// Per column: render the data cell in mono (codes) vs regular weight (descriptions).
+// Per column: data cell rendered in mono (codes) vs regular weight (descriptions).
 const MONO_COL = [true, false, false, true, true]
 
 const ROWS = [
@@ -24,72 +24,71 @@ const ROWS = [
   ['SKU-BLANK-CUP', 'Blank Cups', 'Finished Goods', '4000-COGS', 'true'],
 ]
 
-const confColor = (conf: number) => (conf >= 90 ? 'var(--green)' : 'var(--amber)')
+const GRID = 'grid-cols-[1.2fr_1.15fr_1.1fr_1fr_0.7fr]'
 
 export default function GenerateStage({ onAdvance }: GenerateStageProps) {
   return (
-    <div>
-      <h4 className="text-base font-semibold tracking-tight text-[color:var(--ink)] mb-3">
-        Ready-to-load
-      </h4>
+    <div className="flex h-full flex-col">
+      <div className="flex items-center justify-between gap-3 px-5 pt-4 pb-3">
+        <div className="text-[15px] font-[650] tracking-[-0.015em] text-[color:var(--ink)]">Ready-to-load</div>
+      </div>
 
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[620px] text-left">
-          <thead>
-            <tr>
-              {COLUMNS.map((col) => (
-                <th
-                  key={col.source}
-                  className="align-bottom border-b border-[color:var(--line)] px-2.5 py-2"
-                >
-                  <div className="mono text-[11px] font-semibold text-[color:var(--ink)] whitespace-nowrap">
-                    {col.source}
-                    {col.transform && (
-                      <span className="text-[color:var(--blue)]"> → {col.transform}</span>
-                    )}
-                  </div>
-                  <div className="mono text-[11px] text-[color:var(--ink-3)] whitespace-nowrap">
-                    {col.target}
-                  </div>
-                  <div
-                    className="mono text-[11px] flex items-center gap-1 mt-1 whitespace-nowrap"
-                    style={{ color: confColor(col.conf) }}
-                  >
-                    <span
-                      className="inline-block h-1.5 w-1.5 rounded-full"
-                      style={{ background: confColor(col.conf) }}
-                    />
-                    {col.conf}%
-                  </div>
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-5">
+        <div className="flex h-full flex-col justify-center">
+          {/* column headers */}
+          <div className={`grid ${GRID} items-end gap-x-[14px] border-b border-[color:var(--line)] px-[6px] pb-[9px]`}>
+            {COLUMNS.map((col) => (
+              <div key={col.source} className="flex min-w-0 flex-col gap-[2px]">
+                <span className="mono truncate text-[11px] font-[650] text-[color:var(--ink)]">
+                  {col.source}
+                  {col.transform && <em className="not-italic font-medium text-[color:var(--blue-press)]"> → {col.transform}</em>}
+                </span>
+                <span className="mono truncate text-[10.5px] font-medium text-[color:var(--ink-3)]">{col.target}</span>
+                <span className="mono mt-[2px] inline-flex items-center gap-[5px] text-[11px] font-bold tabular-nums text-[color:var(--ink)]">
+                  <span
+                    className="h-[9px] w-[9px] shrink-0 rounded-full"
+                    style={{ background: col.conf >= 90 ? 'var(--green)' : 'var(--amber)' }}
+                  />
+                  {col.conf}%
+                </span>
+              </div>
+            ))}
+          </div>
+
+          {/* data rows */}
+          <div className="flex flex-col">
             {ROWS.map((row) => (
-              <tr key={row[0]}>
+              <div
+                key={row[0]}
+                className={`grid ${GRID} items-center gap-x-[14px] border-b border-[color:var(--line-2)] px-[6px] py-[7px] last:border-b-0`}
+              >
                 {row.map((cell, ci) => (
-                  <td
+                  <span
                     key={ci}
-                    className={`border-b border-[color:var(--line)] px-2.5 py-2 whitespace-nowrap ${
-                      MONO_COL[ci]
-                        ? 'mono text-xs text-[color:var(--ink-2)]'
-                        : 'text-sm text-[color:var(--ink)]'
+                    className={`truncate text-[color:var(--ink)] ${
+                      MONO_COL[ci] ? 'mono text-[11.5px]' : 'text-[12px]'
                     }`}
                   >
                     {cell}
-                  </td>
+                  </span>
                 ))}
-              </tr>
+              </div>
             ))}
-          </tbody>
-        </table>
+          </div>
+        </div>
       </div>
 
-      <div className="flex justify-end mt-4">
-        <button type="button" onClick={onAdvance} className="btn btn-primary">
+      <div className="flex items-center justify-end gap-[14px] border-t border-[color:var(--line)] bg-[color:var(--surface-2)] px-5 py-[13px]">
+        <button
+          type="button"
+          onClick={onAdvance}
+          className="btn btn-primary"
+          style={{ height: 38, padding: '0 17px', fontSize: 13.5, gap: 8 }}
+        >
           Review
-          <span aria-hidden="true">→</span>
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M3 8h9M8.5 4l4 4-4 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
         </button>
       </div>
     </div>
