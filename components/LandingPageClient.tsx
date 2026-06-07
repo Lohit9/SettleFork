@@ -5,6 +5,7 @@ import Header from '@/components/Header'
 import { SignUpModal, ContactModal } from '@/components/Modal'
 import Hero from '@/components/sections/Hero'
 import HowItWorks from '@/components/sections/HowItWorks'
+import Payoff from '@/components/sections/Payoff'
 import Differentiation from '@/components/sections/Differentiation'
 import Credibility from '@/components/sections/Credibility'
 import FAQ from '@/components/sections/FAQ'
@@ -19,6 +20,7 @@ export default function LandingPageClient() {
       <main>
         <Hero />
         <HowItWorks />
+        <Payoff />
         <Credibility />
         <Differentiation />
         <FAQ />
