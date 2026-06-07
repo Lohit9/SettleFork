@@ -51,8 +51,8 @@ export default function IngestStage({ onAdvance }: IngestStageProps) {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between gap-3 px-5 pt-4 pb-3">
-        <div className="text-[15px] font-[650] tracking-[-0.015em] text-[color:var(--ink)]">
+      <div className="flex items-center justify-between gap-3 px-5 pt-4 pb-3 max-md:pt-3 max-md:pb-2">
+        <div className="text-[15px] max-md:text-[13.5px] font-[650] tracking-[-0.015em] text-[color:var(--ink)]">
           Set up your migration
         </div>
       </div>
@@ -62,7 +62,7 @@ export default function IngestStage({ onAdvance }: IngestStageProps) {
           {ROWS.map((row) => (
             <div
               key={row.label}
-              className="flex items-center gap-[13px] px-[18px] py-[13px] border-t border-[color:var(--line-2)] first:border-t-0"
+              className="flex items-center gap-[13px] px-[18px] py-[13px] max-md:px-3 max-md:py-2 border-t border-[color:var(--line-2)] first:border-t-0"
             >
               <span className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[8px] border border-[color:var(--line)] bg-[color:var(--surface-2)] text-[color:var(--ink-2)]">
                 {row.icon}
@@ -73,14 +73,14 @@ export default function IngestStage({ onAdvance }: IngestStageProps) {
               </span>
               {row.status &&
                 (row.status.ok ? (
-                  <span className="ml-auto inline-flex shrink-0 items-center gap-[6px] text-[12.5px] font-semibold text-[color:var(--green-deep)]">
+                  <span className="ml-auto inline-flex shrink-0 items-center gap-[6px] whitespace-nowrap text-[12.5px] max-md:text-xs font-semibold text-[color:var(--green-deep)]">
                     <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
                       <path d="M2.6 7.3l2.8 2.8 6-6.4" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
                     </svg>
                     {row.status.text}
                   </span>
                 ) : (
-                  <span className="ml-auto shrink-0 text-[12.5px] font-medium text-[color:var(--ink-3)]">
+                  <span className="ml-auto shrink-0 whitespace-nowrap text-[12.5px] max-md:text-xs font-medium text-[color:var(--ink-3)]">
                     {row.status.text}
                   </span>
                 ))}
@@ -89,7 +89,7 @@ export default function IngestStage({ onAdvance }: IngestStageProps) {
         </div>
       </div>
 
-      <div className="flex items-center justify-between gap-[14px] border-t border-[color:var(--line)] bg-[color:var(--surface-2)] px-5 py-[13px]">
+      <div className="flex items-center justify-between gap-[14px] max-md:flex-col max-md:items-stretch max-md:gap-3 border-t border-[color:var(--line)] bg-[color:var(--surface-2)] px-5 py-[13px]">
         <button
           type="button"
           onClick={() => setReviewed((v) => !v)}
@@ -108,12 +108,13 @@ export default function IngestStage({ onAdvance }: IngestStageProps) {
               </svg>
             )}
           </span>
-          I&apos;ve reviewed — tables and fields look correct
+          <span className="max-md:hidden">I&apos;ve reviewed — tables and fields look correct</span>
+          <span className="hidden max-md:inline">I&apos;ve reviewed — looks correct</span>
         </button>
         <button
           type="button"
           onClick={onAdvance}
-          className="btn btn-primary shrink-0"
+          className="btn btn-primary shrink-0 max-md:w-full max-md:justify-center"
           style={{ height: 38, padding: '0 17px', fontSize: 13.5, gap: 8 }}
         >
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">

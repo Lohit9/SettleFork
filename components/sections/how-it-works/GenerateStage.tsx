@@ -34,9 +34,9 @@ export default function GenerateStage({ onAdvance }: GenerateStageProps) {
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-5">
-        <div className="flex h-full flex-col justify-center">
+        <div className="flex h-full flex-col justify-center max-md:overflow-x-auto">
           {/* column headers */}
-          <div className={`grid ${GRID} items-end gap-x-[14px] border-b border-[color:var(--line)] px-[6px] pb-[9px]`}>
+          <div className={`grid ${GRID} max-md:min-w-[560px] items-end gap-x-[14px] border-b border-[color:var(--line)] px-[6px] pb-[9px]`}>
             {COLUMNS.map((col) => (
               <div key={col.source} className="flex min-w-0 flex-col gap-[2px]">
                 <span className="mono truncate text-[11px] font-[650] text-[color:var(--ink)]">
@@ -56,11 +56,11 @@ export default function GenerateStage({ onAdvance }: GenerateStageProps) {
           </div>
 
           {/* data rows */}
-          <div className="flex flex-col">
+          <div className="flex flex-col max-md:min-w-[560px]">
             {ROWS.map((row) => (
               <div
                 key={row[0]}
-                className={`grid ${GRID} items-center gap-x-[14px] border-b border-[color:var(--line-2)] px-[6px] py-[7px] last:border-b-0`}
+                className={`grid ${GRID} items-center gap-x-[14px] border-b border-[color:var(--line-2)] px-[6px] py-[7px] max-md:py-[5px] last:border-b-0`}
               >
                 {row.map((cell, ci) => (
                   <span
