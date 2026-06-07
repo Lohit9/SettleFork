@@ -1,35 +1,46 @@
 import Link from 'next/link'
-import ScrollReveal from '@/components/ui/ScrollReveal'
+
+const CALENDLY = 'https://calendly.com/settle-ai/demo'
 
 export default function FinalCTA() {
   return (
-    <section className="bg-[#0F172A] py-24 px-6 lg:px-12">
-      <div className="max-w-xl mx-auto text-center">
-        <ScrollReveal>
-          <h2 className="text-4xl font-bold text-white tracking-tight mb-4">
-            Consider it settled.
-          </h2>
-          <p className="text-[#94A3B8] text-base leading-relaxed mb-9">
-            Tell us about your upcoming migration. We&apos;ll follow up within 48 hours — at no cost.
-          </p>
+    <section className="relative overflow-hidden text-center" style={{ padding: '120px 0' }}>
+      {/* faint grid texture mirroring the hero, fading from the center */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0"
+        style={{
+          backgroundImage:
+            'linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px)',
+          backgroundSize: '64px 64px',
+          opacity: 0.5,
+          maskImage: 'radial-gradient(80% 90% at 50% 50%, #000, transparent 72%)',
+          WebkitMaskImage: 'radial-gradient(80% 90% at 50% 50%, #000, transparent 72%)',
+        }}
+      />
 
-          <div className="flex flex-wrap justify-center gap-3">
-            <a
-              href="https://calendly.com/settle-ai/demo"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="bg-[#2358D4] hover:bg-[#1D4ED8] text-white font-semibold px-8 py-4 rounded-xl text-base shadow-lg shadow-blue-600/25 hover:-translate-y-0.5 transition-all"
-            >
-              Book a Demo
-            </a>
-            <Link
-              href="/pricing"
-              className="border border-[#334155] text-[#CBD5E1] font-medium px-8 py-4 rounded-xl text-base hover:border-[#64748B] hover:text-white transition-all"
-            >
-              Get an Estimate
-            </Link>
-          </div>
-        </ScrollReveal>
+      <div className="wrap relative z-[1]">
+        <h2
+          className="mx-auto max-w-[760px] font-semibold leading-[1.05] tracking-[-0.03em] text-[color:var(--ink)]"
+          style={{ fontSize: 'clamp(32px, 4.6vw, 52px)' }}
+        >
+          De-risk your next migration.
+        </h2>
+        <p className="mx-auto mt-[18px] max-w-[540px] text-[18px] text-[color:var(--ink-2)]">
+          See Settle run on your own schema — or send us the shape of your migration and we&apos;ll come back
+          with an estimate.
+        </p>
+        <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
+          <a href={CALENDLY} target="_blank" rel="noopener noreferrer" className="btn btn-primary">
+            Book a demo
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M3 8h9M8.5 4l4 4-4 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </a>
+          <Link href="/pricing" className="btn btn-ghost">
+            Get an estimate
+          </Link>
+        </div>
       </div>
     </section>
   )
