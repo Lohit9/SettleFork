@@ -9,6 +9,7 @@
     "lint": "next lint",
     "prepare": "husky",
     "seed:migrations": "npx tsx scripts/seed-migration-pages.ts",
+    "smoke:approve": "npx tsx scripts/smoke-approve.ts",
     "sso:test:setup": "npx tsx scripts/sso-test-setup.ts",
     "sso:test:cleanup": "npx tsx scripts/sso-test-cleanup.ts",
     "sso:test:setup:isolation": "npx tsx scripts/sso-test-setup-isolation.ts",

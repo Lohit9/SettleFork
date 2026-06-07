@@ -1,0 +1,28 @@
+name: Approve smoke test
+
+# Daily check that the approve path is not silently blocked (the Jun-5 failure:
+# a project left in maintenance_mode blocks every approve with no visible signal).
+# Runs against prod read-only. Requires repo secrets:
+#   NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+on:
+  schedule:
+    - cron: '0 13 * * *' # 13:00 UTC daily (~6am PT)
+  workflow_dispatch: {}
+
+jobs:
+  smoke-approve:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - name: Approve smoke test
+        run: npx tsx scripts/smoke-approve.ts
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
