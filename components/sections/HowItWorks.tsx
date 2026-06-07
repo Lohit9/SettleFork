@@ -96,25 +96,35 @@ export default function HowItWorks() {
 
       {/* Scroll track — ~one viewport per stage */}
       <div ref={trackRef} className="relative h-[400vh]">
-        {/* Pinned panel, vertically centered in the viewport */}
-        <div className="sticky top-0 flex h-screen items-center overflow-hidden">
+        {/* Pinned panel — offset below the 64px sticky site header, content centered */}
+        <div
+          className="sticky top-16 flex items-center overflow-hidden"
+          style={{ height: 'calc(100vh - 4rem)' }}
+        >
           <div className="wrap w-full">
 
             {/* Per-stage eyebrow + heading + sub */}
-            <div className="text-center min-h-[136px]">
+            <div className="text-center min-h-[104px]">
               <AnimatePresence mode="wait">
                 <motion.div key={`head-${active}`} {...STAGE_TRANSITION}>
-                  <p className="mono uppercase text-[13px] font-semibold tracking-[0.18em] text-[color:var(--ink-3)] mb-3">
+                  <p className="mono uppercase text-[0.8125rem] font-semibold tracking-[0.18em] text-[color:var(--ink-3)] mb-2">
                     STEP {String(active + 1).padStart(2, '0')} / 04
                   </p>
-                  <h3 className="h2 mb-3">{stage.heading}</h3>
-                  <p className="lede mx-auto max-w-[60ch]">{stage.sub}</p>
+                  <h3
+                    className="font-bold leading-[1.1] tracking-tight [text-wrap:balance] text-[color:var(--ink)] mb-3"
+                    style={{ fontSize: 'clamp(2rem, 1.4rem + 1.6vw, 2.625rem)' }}
+                  >
+                    {stage.heading}
+                  </h3>
+                  <p className="mx-auto max-w-[52rem] text-[1.125rem] leading-snug [text-wrap:pretty] text-[color:var(--ink-2)]">
+                    {stage.sub}
+                  </p>
                 </motion.div>
               </AnimatePresence>
             </div>
 
             {/* Browser-chrome mockup — full wrap width */}
-            <div className="card overflow-hidden mt-[clamp(20px,3.5vh,44px)]">
+            <div className="card overflow-hidden mt-7">
               {/* Window chrome: neutral dots at left, centered URL pill */}
               <div className="relative flex items-center border-b border-[color:var(--line)] px-4 py-2.5">
                 <div className="flex gap-1.5 shrink-0">
@@ -164,11 +174,11 @@ export default function HowItWorks() {
                           isActive
                             ? 'bg-[color:var(--blue)] text-white'
                             : done
-                              ? 'bg-[color:var(--green-tint)] text-[color:var(--green)]'
+                              ? 'bg-[color:var(--green)] text-white'
                               : 'border border-[color:var(--line-2)] bg-[color:var(--surface-2)] text-[color:var(--ink-3)]'
                         }`}
                       >
-                        {done ? '✓' : String(i + 1).padStart(2, '0')}
+                        {String(i + 1).padStart(2, '0')}
                       </span>
                       <span
                         className={`text-xs leading-tight sm:text-sm ${
@@ -191,8 +201,8 @@ export default function HowItWorks() {
 
               {/* Active stage body — capped height; internal overflow clips */}
               <div
-                className="overflow-hidden p-4 sm:p-5"
-                style={{ height: 'clamp(320px, calc(100vh - 360px), 470px)' }}
+                className="overflow-hidden p-4"
+                style={{ height: 'clamp(330px, calc(100vh - 376px), 450px)' }}
               >
                 <AnimatePresence mode="wait">
                   <motion.div key={`body-${active}`} {...STAGE_TRANSITION}>
@@ -202,8 +212,8 @@ export default function HowItWorks() {
               </div>
             </div>
 
-            {/* Pagination — short bar segments */}
-            <div className="mt-[clamp(20px,3.5vh,44px)] flex items-center justify-center gap-2">
+            {/* Pagination — progress bar segments (completed + active filled) */}
+            <div className="mt-5 flex items-center justify-center gap-2">
               {STAGES.map((s, i) => (
                 <button
                   key={s.label}
@@ -212,7 +222,7 @@ export default function HowItWorks() {
                   aria-label={`Go to ${s.label} step`}
                   aria-current={i === active ? 'step' : undefined}
                   className={`h-[3px] w-8 rounded-full transition-colors ${
-                    i === active
+                    i <= active
                       ? 'bg-[color:var(--blue)]'
                       : 'bg-[color:var(--line-3)] hover:bg-[color:var(--ink-3)]'
                   }`}
@@ -220,7 +230,7 @@ export default function HowItWorks() {
               ))}
             </div>
 
-            <p className="mt-4 text-center text-sm text-[color:var(--ink-3)]">
+            <p className="mt-3 text-center text-sm text-[color:var(--ink-3)]">
               From profiling to a production-ready package in days, not months.
             </p>
           </div>
